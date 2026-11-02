@@ -1,0 +1,138 @@
+{{/* Copyright (c) 2026 Mesh Intelligence Inc. */}}
+{{/* SPDX-License-Identifier: MIT-0 */}}
+{{- if .Values.exporter.enabled }}
+{{- $fullname := include "chatbot-mesh.fullname" . -}}
+# --- Exporter: the sandboxed brief renderer (srd013). Its own workload with its
+# own Service, NetworkPolicy, and limits (R6.1), on the exporter image whose
+# rendering toolchain is the recorded sanctioned divergence (R6.2). The
+# NetworkPolicy denies all egress and admits ingress only from the chatbot --
+# the SPA's export action arrives through the chatbot's origin -- and the
+# observer's monitor read (R3.2, R3.3). The kind demo's default CNI does not
+# enforce NetworkPolicies; the policyProof lane runs Calico to prove
+# enforcement, and this object is the declared control either way. ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    mesh.cohere-demo/role: "Renders approved brief markdown to PDF in an egress-denied sandbox; the chatbot is its only caller."
+  name: {{ $fullname }}-exporter
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: exporter
+spec:
+  replicas: {{ .Values.exporter.replicas }}
+  selector:
+    matchLabels:
+      {{- include "chatbot-mesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: exporter
+  template:
+    metadata:
+      labels:
+        {{- include "chatbot-mesh.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: exporter
+        monitorPort: {{ .Values.exporter.ports.monitor | quote }}
+      annotations:
+        {{- /* The helper needs root and groups; called bare it hashed nothing
+              and this pod never rolled on a profile change (GH-431). */}}
+        checksum/profiles: {{ include "chatbot-mesh.profilesChecksum" (dict "root" . "groups" (list "exporter")) }}
+    spec:
+      {{- with include "chatbot-mesh.imagePullSecrets" $ }}{{ . | nindent 6 }}{{ end }}
+      containers:
+        - name: exporter
+          image: "{{ .Values.exporter.image.repository }}:{{ .Values.exporter.image.tag }}"
+          imagePullPolicy: {{ .Values.exporter.image.pullPolicy }}
+          args:
+            - "--profile"
+            - "{{ .Values.profiles.mountPath }}/agents/exporter/profile.yaml"
+            - "--directory"
+            - "{{ .Values.profiles.workMountPath }}"
+            {{- with include "chatbot-mesh.otlpEndpoint" . }}
+            - "--otel-otlp-endpoint"
+            - {{ . | quote }}
+            - "--otel-service-name"
+            - "exporter"
+            {{- end }}
+            {{- with include "chatbot-mesh.otlpMetricEndpoint" . }}
+            - "--otel-metric-otlp-endpoint"
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            {{- with include "chatbot-mesh.integrationResourceAttributes" . }}
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: {{ . | quote }}}
+            {{- end }}
+            - {name: EXPORTER_BIND_HOST, value: "0.0.0.0"}
+            - {name: EXPORTER_WORK_DIR, value: {{ .Values.profiles.workMountPath | quote }}}
+            - {name: EXPORTER_PROFILE_DIR, value: {{ .Values.profiles.mountPath | quote }}}
+          ports:
+            - {name: export, containerPort: {{ .Values.exporter.ports.export }}}
+            - {name: control, containerPort: {{ .Values.exporter.ports.control }}}
+            - {name: monitor, containerPort: {{ .Values.exporter.ports.monitor }}}
+          readinessProbe:
+            httpGet: {path: /api/lifecycle/health, port: control}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          # The render bound's resource half (srd013 R5.4): a pathological
+          # document is failed by the machine's time budget and capped here in
+          # memory and CPU, so it costs a bounded failure rather than the node.
+          resources:
+            {{- toYaml .Values.exporter.resources | nindent 12 }}
+          volumeMounts:
+            - {name: profiles, mountPath: {{ .Values.profiles.mountPath }}, readOnly: true}
+            - {name: work, mountPath: {{ .Values.profiles.workMountPath }}}
+      volumes:
+        {{- include "chatbot-mesh.profilesVolume" (dict "root" $ "groups" (list "exporter")) | nindent 8 }}
+        - name: work
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    mesh.cohere-demo/role: "Renders approved brief markdown to PDF in an egress-denied sandbox; the chatbot is its only caller."
+  name: {{ $fullname }}-exporter
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: exporter
+spec:
+  selector:
+    {{- include "chatbot-mesh.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: exporter
+  ports:
+    - {name: export, port: {{ .Values.exporter.ports.export }}, targetPort: export}
+    - {name: monitor, port: {{ .Values.exporter.ports.monitor }}, targetPort: monitor}
+---
+# The isolation boundary (srd013 R3.2, R3.3): egress is denied outright --
+# policyTypes lists Egress with no egress rules, so the rendering toolchain
+# has no outbound path whatever its input contains -- and ingress admits only
+# the chatbot (the export caller, carrying the SPA's export action) to the
+# export port and the observer to the monitor port. The endpoint is no
+# ingress or general cluster surface.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-exporter
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: exporter
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "chatbot-mesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: exporter
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "chatbot-mesh.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: chatbot
+      ports:
+        - {protocol: TCP, port: {{ .Values.exporter.ports.export }}}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "chatbot-mesh.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: observer
+      ports:
+        - {protocol: TCP, port: {{ .Values.exporter.ports.monitor }}}
+{{- end }}

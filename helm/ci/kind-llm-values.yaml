@@ -1,0 +1,71 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Small-footprint values for the in-cluster LLM-tier kind smoke (rel09.5, GH-338).
+# The LLM tier is enabled with CPU-only small models so the preload and readiness
+# gate run on a disposable kind cluster without a GPU. This diverges from GPU
+# production sizing by design (srd015 R6.4, recorded limitation).
+image:
+  pullPolicy: IfNotPresent
+
+chatbot:
+  embeddingModel: all-minilm
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+ragUnits:
+  - name: rag0
+    description: In-cluster LLM smoke-test corpus.
+    collection: corpus
+    embeddingModel: all-minilm
+    replicas: 1
+
+ragServer:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+chroma:
+  storage: 256Mi
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+dolt:
+  storage: 256Mi
+
+ingress:
+  enabled: false
+
+applier:
+  enabled: false
+
+# The in-cluster LLM tier: CPU-only small models (no GPU), tiny storage.
+ollama:
+  enabled: true
+  # The integration host pulls the matching digest and imports this exact tag
+  # into kind after appending the host trust bundle to the pinned base image.
+  # TLS verification remains enabled for model pulls; a node never reaches the
+  # container registry or bypasses the host's trusted CA path.
+  image:
+    repository: declarative-agents/ollama
+    tag: "0.32.5-kind-trusted"
+    pullPolicy: Never
+  models:
+    embedding: all-minilm
+    chat: ["qwen2.5:0.5b"]
+    tier: qwen2.5:0.5b
+  persistence:
+    size: 2Gi
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {cpu: "4", memory: 4Gi}
+  gpu:
+    count: 0
+
+# The brief exporter's image is built only by demo:up (images/exporter.Dockerfile)
+# and is not published, so a scenario that does not build it cannot pull it.
+# These scenarios do not exercise export; integration:exporter proves it against
+# the demo, which re-enables it beside the image it builds (GH-759).
+exporter:
+  enabled: false

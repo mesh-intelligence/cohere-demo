@@ -1,0 +1,71 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: rag-query-critic
+purpose: |-
+  Critiques the rag-server's vector-in query boundary against a mock Chroma and
+  passes when the server answers with chunks and embedding-model metadata.
+
+  The drive runs on the way into Checking so its signal decides the terminal
+  state; routing straight to a terminal would pass regardless of the result.
+configuration:
+  machine: machine.yaml
+  tools: tools.yaml
+initial_state: Idle
+budget:
+  command_timeout: 1m
+  max_iterations: 6
+states:
+  - name: Idle
+    meaning: Before the subject is driven.
+  - name: Checking
+    meaning: The query has run; its signal decides the outcome.
+  - name: Passed
+    run_status: succeeded
+    meaning: Terminal. The rag-server answered the query.
+  - name: Failed
+    run_status: failed
+    meaning: Terminal. The rag-server did not answer as expected.
+terminal_states: [Passed, Failed]
+signals:
+  - name: Seed
+    trigger: Loop initialization.
+  - name: SubjectAnswered
+    trigger: The rag-server returned chunks for the query.
+  - name: SubjectRejected
+    trigger: The rag-server rejected the query embedding.
+  - name: SubjectRefused
+    trigger: The rag-server refused the request's clearance level.
+  - name: SubjectBroke
+    trigger: The rag-server reported a command error.
+  - name: RESTResponded
+    trigger: The invoke succeeded and mapped to the generic response signal.
+  - name: CommandError
+    trigger: The rag-server was unreachable or returned an unmapped status.
+transitions:
+  - state: Idle
+    signal: Seed
+    next: Checking
+    action: drive_rag_query
+  - state: Checking
+    signal: SubjectAnswered
+    next: Passed
+  - state: Checking
+    signal: RESTResponded
+    next: Passed
+  - state: Checking
+    signal: SubjectRejected
+    next: Failed
+  # A refusal fails this scenario: it drives a level the declared set carries,
+  # so a refusal here means the filter turned away a request it should have
+  # served. The refusal path passes in the query-clearance-refused scenario.
+  - state: Checking
+    signal: SubjectRefused
+    next: Failed
+  - state: Checking
+    signal: SubjectBroke
+    next: Failed
+  - state: Checking
+    signal: CommandError
+    next: Failed

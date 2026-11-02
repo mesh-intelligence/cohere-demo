@@ -1,0 +1,231 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd013-exporter-agent
+title: Exporter Agent Functional Block
+
+role_realization_decision:
+  current_actor: exporter
+  implemented_responsibility: Convert an approved, analyst-edited brief markdown document to PDF through md-to-tex and a LaTeX engine, in a sandboxed, network-denied container.
+  canonical_role_sub_role: Executor / Actuation Agent -- a stateless transform actuated on a request, holding no desired state.
+  retained_or_proposed_name: New descriptive actor and Helm workload `exporter`; Exporter is not a canonical role.
+  authority_boundary: Reachable only from the chatbot or the SPA export action. It binds no model, no retrieval client, and no Cohere client; a NetworkPolicy denies its egress; md-to-tex and the LaTeX engine are sandboxed exec words with fixed argv.
+  evidence: [agents/exporter/profile.yaml, agents/exporter/export-machine.yaml, agents/exporter/exec-declarations.yaml, helm/templates/exporter.yaml, srd013 R1-R6]
+  migration_impact: Additive. A new agent alongside the mesh, changing no existing agent, workload, or contract.
+
+context: |
+  The turn ends at markdown. Command composes the brief in the ministry
+  template's structure, the conformance check reports whether it matches, and the
+  analyst reads and edits the result in the SPA (srd012). What DefTech delivers
+  to command staff is a PDF, and that conversion is the last step.
+
+  It is a separate agent for two reasons. The LaTeX toolchain is heavy and
+  carries its own vulnerability surface, and putting it in the chatbot's
+  container would place it on the request hot path and widen the attack surface
+  of the process that serves the browser. And export happens after the human edit
+  the VISION requires, on a document a person approved, which means it does not
+  belong in the generation turn at all -- it runs on the reviewed markdown,
+  minutes or hours later, off that turn's latency budget (ARCHITECTURE design
+  decision 11).
+
+  The mesh already has this pattern. The applier (srd006) is an exec-bound agent
+  whose container carries CLIs the runtime does not, reachable from one caller,
+  with its authority set by declared configuration rather than by anything it
+  receives. The exporter follows it, and is stricter: the applier acts on the
+  cluster, while the exporter only transforms a document and therefore needs no
+  network at all.
+
+  What it does need is care about its input. The markdown it renders was composed
+  by a language model from documents that, once rel12.0 lands, include text
+  retrieved from the open internet (srd011 R7.1). That text becomes a .tex
+  document handed to a LaTeX engine -- and a LaTeX engine is a programmable
+  system that reads files and, if permitted, runs commands. The isolation is not
+  belt-and-braces; it is the boundary that makes rendering untrusted-derived
+  content safe.
+
+problem: |
+  Delivering the brief as a PDF needs a rendering toolchain the agent-core image
+  does not carry and the serving container should not gain. Where that toolchain
+  runs, what may reach it, and what it may reach in turn all need specifying.
+
+  The isolation question is the sharp one. Markdown composed by a model from
+  retrieved documents becomes .tex, and .tex is executable. A LaTeX engine with
+  shell escape enabled will run commands written into its input; one with
+  unrestricted file access will read whatever path its input names. Either turns
+  a document render into an execution primitive reachable by anyone who can
+  influence a retrieved document. The requirements must close both, and must deny
+  egress so that even a successful compromise has nowhere to send anything.
+
+  The trigger question decides whether the export respects the human-in-the-loop
+  the VISION insists on. An export that runs automatically at the end of the turn
+  renders the raw generation, which is the draft nobody has reviewed. The export
+  must be something the analyst asks for, on the document the analyst edited.
+
+  And it must fail cleanly. A LaTeX run that fails partway leaves temporary files
+  and possibly a truncated PDF, and a truncated ministry brief that looks
+  complete is worse than a failed export.
+
+goals:
+  - G1: Model the exporter as a request-scoped agent whose machine converts approved markdown to .tex and then to PDF, reporting a terminal outcome.
+  - G2: Bind md-to-tex and the LaTeX engine as sandboxed exec words with fixed argv, so no part of the document content becomes part of a command.
+  - G3: Isolate the agent completely -- no model, no retrieval, no Cohere client, and a NetworkPolicy denying egress -- because it renders content derived from untrusted sources.
+  - G4: Make export analyst-triggered on the reviewed markdown, after the human edit, and off the generation turn's latency.
+  - G5: Fail cleanly, rolling back temporary files and never emitting a partial PDF, with the approved markdown left available for re-export.
+  - G6: Deploy it as its own Helm workload on an image that adds the rendering binaries, recorded as a sanctioned divergence the way the applier's is.
+
+requirements:
+  R1:
+    title: Export surface and machine shape
+    items:
+      - R1.1: The exporter SHALL expose a machine_request export endpoint (agent-core srd030) binding one inbound request to one request-scoped run of the export machine, and mapping the terminal signal to the HTTP response.
+      - R1.2: The export machine SHALL sequence AwaitingExport, ConvertingTex, RenderingPdf, and Reporting, terminating in Done or Failed.
+      - R1.3: The exporter SHALL run a monitor server exposing the srd033 read-only views and SSE stream, and a control server exposing lifecycle exit and a health check, as every mesh agent does.
+      - R1.4: The exporter SHALL hold no state between requests. Each export SHALL be independent, and the agent SHALL NOT retain, index, or cache a brief after its request completes.
+      - R1.5: A successful export SHALL return the rendered PDF; a failed export SHALL return the terminal failure and its diagnostics rather than a document.
+  R2:
+    title: Exec bindings
+    items:
+      - R2.1: md_to_tex SHALL be a declared exec word converting the approved markdown to a .tex document, and render_pdf SHALL be a declared exec word rendering that .tex to PDF through the LaTeX engine.
+      - R2.2: Both exec words SHALL use fixed argv declared in configuration. No part of the brief content, the request body, or any model output SHALL become an argument, a flag, or a shell string.
+      - R2.3: Document content SHALL reach each binary as a file, never through a shell, so no interpolation path exists between the document and the command line.
+      - R2.4: The LaTeX engine SHALL run with shell escape disabled, so a command written into the .tex document -- by the composing model, or by external text that reached the composition set through srd011 R7.1 -- SHALL NOT execute.
+      - R2.5: The LaTeX engine's file access SHALL be restricted to the request's working directory and the declared template assets, so an input directive naming a path outside them SHALL NOT read it.
+  R3:
+    title: Isolation and authority boundary
+    items:
+      - R3.1: The exporter SHALL bind no LLM client, no retrieval client, and no Cohere client, so no part of the export path can generate, retrieve, or reach a model provider.
+      - R3.2: A NetworkPolicy SHALL deny the exporter's egress, so the rendering toolchain has no outbound path regardless of what its input contains.
+      - R3.3: The export endpoint SHALL be reachable only from the chatbot or the SPA export action, and SHALL NOT be exposed as a general cluster or ingress surface.
+      - R3.4: The exporter SHALL hold no lifecycle, deployment, provisioning, or configuration authority, and SHALL NOT be a caller of the deployment API or any other agent.
+      - R3.5: The exporter SHALL receive no clearance level, analyst identity, or authenticated request context, and SHALL make no access-control decision; it renders the document it is given (srd010 R3.2 keeps clearance on the retrieval path).
+  R4:
+    title: Input contract and the human edit
+    items:
+      - R4.1: The export input SHALL be the approved, analyst-edited brief markdown, and export SHALL be triggered by the analyst rather than by the completion of a generation turn.
+      - R4.2: Export SHALL run outside the generation turn, so its duration SHALL NOT count against the turn's latency and a slow render SHALL NOT delay a brief reaching the analyst.
+      - R4.3: The exporter SHALL render the markdown it is given and SHALL NOT re-derive, re-infer, or repair the brief's section structure (srd012 R1.3, R6.3).
+      - R4.4: The exporter SHALL NOT re-run the conformance check and SHALL NOT gate export on its verdict; the verdict travels to the analyst's approval decision (srd012 R4.4) and the analyst decides.
+      - R4.5: The exporter SHALL NOT alter the brief's content, citations, or wording; the rendered PDF SHALL correspond to the approved markdown.
+      # Measured against the live provider (GH-228): citation start and end are
+      # rune offsets into the answer, not byte offsets. The served interface
+      # already slices by rune; an exporter that slices citation spans in Go
+      # must index by rune as well, or any answer with a non-ASCII character
+      # ahead of a span attributes the wrong text.
+      - R4.6: Where export renders citation spans, span offsets SHALL be interpreted as rune offsets into the answer text, matching the provider's citation contract.
+  R5:
+    title: Failure handling and temporary files
+    items:
+      - R5.1: A failed conversion or render SHALL terminate in Failed and SHALL roll back the request's temporary files, leaving no .tex, no auxiliary files, and no partial output behind.
+      - R5.2: A partial or truncated PDF SHALL NOT be returned, because a ministry brief that appears complete and is not is a worse outcome than a reported failure.
+      - R5.3: A failure SHALL report diagnostics sufficient to identify the failing stage and cause, without embedding the brief's content in an error surface that is retained differently from the brief itself.
+      - R5.4: The render SHALL be bounded by a declared time and resource limit, so a document that sends the LaTeX engine into a long or non-terminating run fails rather than occupying the workload.
+      - R5.5: A failed export SHALL leave the approved markdown available for re-export, so a failure costs a retry rather than the analyst's edited work.
+  R6:
+    title: Deployment and packaging
+    items:
+      - R6.1: The exporter SHALL be deployed as its own Helm workload, separate from the chatbot, with its own Service, NetworkPolicy, and resource limits.
+      - R6.2: The exporter image SHALL add md-to-tex and the LaTeX engine to agent-core, a recorded and sanctioned divergence from the binary-only image contract (srd003 R1.3), the same exemption the applier image carries for helm and kubectl (srd006 G5).
+      - R6.3: The rendering binaries SHALL be image packaging rather than machine YAML, so the profile declares words and the image supplies the tools. The document template MAY be a declared asset projected beside the profiles, so a deployment restyles the rendered form without an image rebuild; pandoc reads the projected template, and the confined engine reads only what pandoc wrote into the working directory (R2.5).
+      - R6.4: The exporter SHALL be deployable independently of the Cohere provider path, so a mesh running the Ollama tier can still export a brief.
+      - R6.5: The exporter image SHALL be published as one linux/amd64 and linux/arm64 index to ghcr.io/mesh-intelligence/cohere-demo/exporter, tagged with the agent-core release it extends and a digest of its recipe, so a cluster pulls the published artifact rather than a workstation build; demo:up keeps building it locally for kind.
+
+non_goals:
+  - Compose, edit, summarize, or correct the brief; the exporter renders what it is given (R4.5).
+  - Validate template conformance; srd012 owns the check and the exporter does not re-run it (R4.4).
+  - Define the LaTeX template's typography, layout, or page geometry; those are template assets a deployment supplies, and DefTech's real template replaces the demonstration's without a specification change.
+  - Single-source the LaTeX template against the markdown structure and the SPA layout; that is the srd012 R6.4 follow-up.
+  - Store, index, version, or serve exported PDFs; the exporter is request-scoped and stateless (R1.4).
+  - Export formats other than PDF.
+  - Define Go package APIs for the agent-core request, monitor, or exec runtime.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: The exporter is a request-scoped agent with a machine_request export endpoint over an AwaitingExport to ConvertingTex to RenderingPdf to Reporting machine terminating in Done or Failed, with monitor and control servers, no retained state between requests, and a PDF returned only on success.
+    traces: [R1.1, R1.2, R1.3, R1.4, R1.5]
+  - id: AC2
+    criterion: md_to_tex and render_pdf are declared exec words with fixed argv, document content reaches each binary as a file rather than through a shell, the LaTeX engine runs with shell escape disabled so a command written into the .tex by the composing model or by external text does not execute, and its file access is restricted to the working directory and declared template assets.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5]
+  - id: AC3
+    criterion: The exporter binds no model, retrieval, or Cohere client, a NetworkPolicy denies its egress, its endpoint is reachable only from the chatbot or the SPA export action, it holds no lifecycle or deployment authority, and it receives no clearance or identity and makes no access-control decision. This mirrors the applier precedent for exec-bound, boundary-secured agents and is stricter, since a document transform needs no network.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5]
+  - id: AC4
+    criterion: Export takes the approved, analyst-edited markdown, is analyst-triggered rather than turn-triggered, runs outside the generation turn's latency, renders without re-deriving structure or re-running the conformance check, and does not alter content, citations, or wording. This is the rel14.0 edit-then-export tracer and the human-in-the-loop the VISION requires, and any citation span it renders is sliced by rune offset per the provider's citation contract.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5, R4.6]
+  - id: AC5
+    criterion: A failure terminates in Failed, rolls back every temporary file, never returns a partial PDF, reports the failing stage and cause without retaining brief content in a separate error surface, is bounded by a declared time and resource limit, and leaves the approved markdown available for re-export.
+    traces: [R5.1, R5.2, R5.3, R5.4, R5.5]
+  - id: AC6
+    criterion: The exporter deploys as its own Helm workload with its own Service, NetworkPolicy, and limits, on an image whose added rendering binaries are a recorded sanctioned divergence matching the applier's exemption, with binaries and template assets as packaging rather than machine YAML, and is deployable independently of the Cohere provider path. This delivers the ministry-conformant PDF a reviewer approves.
+    traces: [R6.1, R6.2, R6.3, R6.4]
+  - id: AC7
+    criterion: The exporter image is published by mage exporter:publish as one index carrying linux/amd64 and linux/arm64 under a tag derived from the agent-core release and the recipe digest, a cloud deploy runs that published tag and refuses before changing the cluster when it is not published, and the kind path still builds the image locally.
+    traces: [R6.5]
+
+depends_on:
+  # R4.3 and R4.5 render the markdown srd012 validates without re-deriving its
+  # structure, and R4.4 defers to the conformance verdict srd012 R4.4 carries to
+  # the analyst's approval decision. The exporter consumes; it does not validate.
+  - srd_id: srd012-brief-markdown-conformance
+    symbols_used: [R1, R4, R6]
+  # R6.2 takes the sanctioned image-divergence exemption srd003 R1.3 records for
+  # an agent whose container must carry CLIs agent-core does not.
+  - srd_id: srd003-chatbot-deployment
+    symbols_used: [R1]
+  # R2.4 renders content that, from rel12.0, may include text retrieved from the
+  # open internet; the untrusted-content boundary srd011 R7 sets is what the
+  # shell-escape and file-access restrictions enforce at the rendering stage.
+  - srd_id: srd011-osint-search-cascade-rerank
+    symbols_used: [R7]
+
+platform_dependencies:
+  # agent-core runtime contracts this agent builds on. External references,
+  # owned by agent-core, not part of this application's corpus.
+  - srd_id: srd030-machine-request-rest-binding
+    provider: agent-core
+    symbols_used: [R1]
+  - srd_id: srd033-monitor-rest-api
+    provider: agent-core
+    symbols_used: [R1]
+  - srd_id: srd038-command-state-store
+    provider: agent-core
+    symbols_used: [R1]
+
+related_agents:
+  - agent: applier
+    role: The precedent this agent follows. The applier (srd006) is the mesh's
+      other exec-bound agent whose container carries CLIs the runtime does not,
+      reachable from one caller, with authority set by declared configuration.
+      The exporter repeats that pattern for rendering and tightens it, because a
+      document transform needs no network and no cluster authority at all.
+
+implementation_status:
+  planned:
+    - >-
+      rel14.0 (Brief export to PDF): the exporter agent profile with the
+      md_to_tex and render_pdf exec words, the export machine and its endpoint,
+      the Helm workload with its NetworkPolicy, and the image packaging that adds
+      md-to-tex and the LaTeX engine (R1 through R6). The tracer has an analyst
+      edit the brief and export it to a ministry-conformant PDF a reviewer
+      approves.
+    - >-
+      The exporter is the last release of the road map and depends on the srd012
+      markdown target rather than on the Cohere provider path, so it is
+      deployable against either model tier (R6.4).
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: Render an approved brief to PDF with a toolchain that must not sit on the request path or reach the network"] --> Goals["Goals: Exporter Agent Functional Block"]
+      Goals --> R1["R1: Export surface and machine shape"]
+      Goals --> R2["R2: Exec bindings"]
+      Goals --> R3["R3: Isolation and authority boundary"]
+      Goals --> R4["R4: Input contract and the human edit"]
+      Goals --> R5["R5: Failure handling and temporary files"]
+      Goals --> R6["R6: Deployment and packaging"]
+      R1 --> AC1["AC1: request-scoped machine, Done or Failed, no retained state"]
+      R2 --> AC2["AC2: fixed argv, files not shells, shell escape disabled"]
+      R3 --> AC3["AC3: no clients, egress denied, one caller (applier precedent)"]
+      R4 --> AC4["AC4: analyst-triggered on the edited markdown (rel14.0)"]
+      R5 --> AC5["AC5: rollback, no partial PDF, bounded render, re-exportable"]
+      R6 --> AC6["AC6: own workload; rendering binaries a sanctioned divergence"]
+    ```

@@ -1,0 +1,243 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of request-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-request-declarations-types
+types:
+  - name: CaptureRequestOutput
+    description: The request fields the embed carry used to hold. facets, reader_clearance_rank, and prior_record_ids render as an empty string when the request omits them, so they carry no type.
+    schema:
+      properties:
+        carried:
+          properties:
+            input:
+              type: string
+            max_clearance:
+              type: string
+            facets:
+              description: The analyst facet overrides, or empty.
+            reader_clearance_rank:
+              description: The reader-release floor rank, or empty.
+            prior_brief:
+              type: string
+            prior_record_ids:
+              description: The record ids the prior brief cited, or empty.
+          required:
+            - input
+          type: object
+      required:
+        - carried
+      type: object
+  - name: ComposeReadResponseOutput
+    schema:
+      properties:
+        clearance_enforced_at:
+          type: string
+        records:
+          type: array
+      type: object
+  - name: DeclareClearanceLevelsOutput
+    schema:
+      properties:
+        items:
+          type: array
+        names:
+          type: array
+      required:
+        - items
+        - names
+      type: object
+  - name: DeclareQueryModelOutput
+    schema:
+      properties:
+        model:
+          type: string
+      type: object
+  - name: DeclareQuestionOutput
+    description: The tasking under a provider-neutral name, published by the turn and by a revision under the chat_message label.
+    schema:
+      properties:
+        question:
+          type: string
+      required:
+        - question
+      type: object
+  - name: DeclareReadRequestOutput
+    schema:
+      properties:
+        document_filter:
+          type: object
+        max_clearance:
+          type: string
+        record_ids:
+          type: array
+      type: object
+  - name: DeclareRequestedClearanceOutput
+    schema:
+      properties:
+        names:
+          type: array
+      required:
+        - names
+      type: object
+  - name: DeclareRequestedReadClearanceOutput
+    schema:
+      properties:
+        names:
+          type: array
+      required:
+        - names
+      type: object
+  - name: EmbedQueryCohereInput
+    schema:
+      properties:
+        input:
+          type: string
+      type: object
+  # embed_query and embed_query_cohere both publish query_vector_call under
+  # these two types. They never share a label table: embed_query runs only in
+  # request-machine-ollama.yaml and embed_query_cohere only in the Cohere
+  # machines, and label types are per machine. Both are REST client words over
+  # query_embedder.embed_query, so the loader types the label from that one
+  # operation's envelope either way.
+  - name: EmbedQueryCohereOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: EmbedQueryInput
+    schema:
+      properties:
+        input:
+          type: string
+      type: object
+  - name: EmbedQueryOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: InvokeCohereCommandOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: ReadDocumentsByFilterInput
+    schema:
+      properties:
+        document_filter:
+          type: object
+        max_clearance:
+          type: string
+      type: object
+  - name: ReadDocumentsByFilterOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: ReadDocumentsInput
+    schema:
+      properties:
+        max_clearance:
+          type: string
+        record_ids:
+          type: array
+      type: object
+  - name: ReadDocumentsOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: AnalystClearance
+    description: The analyst clearance level, published under analyst_clearance by render_analyst_clearance (a resolved clearance) and declare_lowest_clearance (the unclassified floor) in the same machines.
+    schema:
+      properties:
+        level:
+          type: string
+      required:
+        - level
+      type: object
+  - name: ResolveAnalystClearanceOutput
+    schema:
+      properties:
+        matched:
+          type: array
+        selected:
+          type: array
+        unmatched:
+          type: array
+      type: object
+  - name: SelectSourcesViaToolOutput
+    schema:
+      properties:
+        mapped:
+          type: object
+      type: object
+  - name: TranslateSegmentsViaToolOutput
+    schema:
+      properties:
+        mapped:
+          type: object
+      type: object
+  - name: ParseQueryVectorOutput
+    description: The object parse_query_vector parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        embedding:
+          type: array
+          items:
+            type: number
+      required:
+      - embedding
+  - name: ParseSourceSelectionOutput
+    description: The object parse_source_selection parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        names:
+          type: array
+          items:
+            type: string
+        source_types:
+          type: array
+          items:
+            type: string
+            enum:
+            - humint
+            - osint_assessment
+            - osint_news
+            - sigint_event
+            - sigint_series
+        date_from:
+          type: integer
+        date_to:
+          type: integer
+      required:
+      - names
+  - name: ParseTranslationsOutput
+    description: The object parse_translations parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        translations:
+          type: array
+          items:
+            type: string
+      required:
+      - translations

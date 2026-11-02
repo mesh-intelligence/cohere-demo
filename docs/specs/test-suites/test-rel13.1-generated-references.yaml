@@ -1,0 +1,109 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel13.1-generated-references
+title: Test Suite for Release 13.1 Generated References and the /eval Command
+release: "13.1"
+
+traces: [rel13.1-uc001-generated-references]
+
+preconditions:
+  - The committed chunk store the generator samples from, at a recorded version.
+  - A Cohere credential for the one-time generation step; a run without it skips generation rather than emitting a partial corpus.
+  - The rel13.0 harness standing, since the generated corpus is scored by the same recall machinery through a corpus selector.
+  - The deployed demo mesh for the /eval command cases, driven through the ordinary request boundary.
+
+test_cases:
+  - use_case: rel13.1-uc001-generated-references
+    name: References are fixed before the tasking exists
+    integration_target: mage evaluation:generate
+    status: implemented
+    description: The generator samples the reference set first, composes the report from those references alone, and derives the tasking last. The corpus file records all three, so the label's independence from any evaluation run is a property of the pipeline order, not of restraint.
+    expected:
+      references_sampled_before_tasking_derived: true
+      report_grounded_only_in_sampled_references: true
+      tasking_derived_from_report_not_chunks: true
+      corpus_written_before_any_scored_run: true
+    traces:
+      - rel13.1-uc001-generated-references S1
+      - rel13.1-uc001-generated-references S2
+      - srd014-evaluation AC7
+
+  - use_case: rel13.1-uc001-generated-references
+    name: The leakage guard rejects taskings that name their references
+    integration_target: mage evaluation:generate
+    status: implemented
+    description: A tasking containing a chunk id, a metadata literal, or text that names its references directly is rejected and the set regenerated or discarded. A leaked tasking is answered by string match and its recall is evidence about grep.
+    expected:
+      chunk_id_in_tasking_rejected: true
+      metadata_literal_in_tasking_rejected: true
+      rejected_set_regenerated_or_discarded_not_shipped: true
+    traces:
+      - rel13.1-uc001-generated-references S3
+      - srd014-evaluation AC7
+
+  - use_case: rel13.1-uc001-generated-references
+    name: The generated corpus carries version, provenance, and per-set clearance
+    integration_target: mage evaluation:generate
+    status: implemented
+    description: The file records its own version, the generator model identity, the prompt version, the retrieval-corpus version it sampled, and each set's minimum clearance, and it is a separate file from the analyst-labeled corpus.
+    expected:
+      corpus_version_recorded: true
+      generator_provenance_recorded: true
+      per_set_minimum_clearance_recorded: true
+      separate_file_from_analyst_labeled_corpus: true
+    traces:
+      - rel13.1-uc001-generated-references S4
+      - srd014-evaluation AC7
+
+  - use_case: rel13.1-uc001-generated-references
+    name: Recall reports the two corpora separately and never combines denominators
+    integration_target: mage evaluation:recall
+    status: implemented
+    description: The recall target accepts a corpus selector and reports the generated and analyst-labeled corpora as separate figures, each naming its corpus and version and judged against the ninety percent threshold on its own denominator.
+    expected:
+      corpus_selector_accepted: true
+      figures_reported_per_corpus_with_version: true
+      denominators_never_combined: true
+      threshold_applied_per_corpus: true
+    traces:
+      - rel13.1-uc001-generated-references S5
+      - srd014-evaluation AC2
+      - srd014-evaluation AC7
+
+  - use_case: rel13.1-uc001-generated-references
+    name: /eval reports a labeled recall table in the chat window
+    integration_target: mage integration:ui
+    status: implemented
+    description: The command runs its declared demo-sized slice through the shipped turn and reports per-tasking hits and the aggregate in the conversation, naming the corpus, version, slice size, and clearance, with the synthetic-corpus label inside the reported message.
+    expected:
+      per_tasking_and_aggregate_recall_reported_in_chat: true
+      corpus_version_slice_and_clearance_named: true
+      synthetic_corpus_label_in_message: true
+    traces:
+      - rel13.1-uc001-generated-references S6
+      - srd014-evaluation AC8
+      - srd014-evaluation AC6
+
+  - use_case: rel13.1-uc001-generated-references
+    name: /eval adds nothing to the deployed mesh
+    integration_target: mage integration:ui
+    status: implemented
+    description: The command is client code over shipped endpoints. The deployed profiles, machines, and prompts are byte-identical with and without it, and the release Secret projection does not grow.
+    expected:
+      no_agent_profile_machine_or_prompt_added: true
+      shipped_request_boundary_used: true
+    traces:
+      - rel13.1-uc001-generated-references S7
+      - srd014-evaluation AC8
+
+  - use_case: rel13.1-uc001-generated-references
+    name: The command and the harness agree over shared taskings
+    integration_target: mage evaluation:recall
+    status: implemented
+    description: Over the same taskings, clearance, and configuration, the command's per-tasking recall equals the harness's. A disagreement is a defect in one implementation, reported as such rather than presented as an in-demo variant of the metric.
+    expected:
+      per_tasking_agreement_over_shared_taskings: true
+      disagreement_treated_as_defect: true
+    traces:
+      - rel13.1-uc001-generated-references S8
+      - srd014-evaluation AC8

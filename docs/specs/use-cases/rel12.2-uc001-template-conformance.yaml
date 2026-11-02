@@ -1,0 +1,169 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel12.2-uc001-template-conformance
+title: A Conforming Brief Passes the Structural Check While a Malformed One Is Flagged With Its Defects Rather Than Surfaced as Final
+
+summary: |
+  An analyst poses a tasking and the turn composes a brief in the ministry
+  template's markdown structure. A structural check reads that markdown against
+  the declared template schema and returns a verdict before the brief reaches
+  the analyst. A conforming brief passes and is surfaced. A brief missing a
+  required section is surfaced too, carrying the verdict and the list of what is
+  missing, and it is not presented as final.
+
+  The check exists because stating a target does not achieve it. Command is
+  asked for a structure and mostly produces it, which is the difficult failure
+  mode rather than an easy one -- a brief that is almost right looks finished. A
+  small fraction arriving malformed is exactly what a reviewer cannot sample
+  their way to confidence about, so every brief is checked and the conformance
+  rate becomes a computed fraction instead of an impression.
+
+  Determinism is the point of the check, not an implementation preference. A
+  second model asked whether the first model followed the template returns an
+  opinion, and an opinion cannot fail a build, cannot be reproduced across runs,
+  and cannot be summed into a ninety-five percent criterion. The check parses
+  structure against a schema, so the same brief yields the same verdict every
+  time.
+
+  What the check does when it fails is the design decision that matters most.
+  Rewriting the brief to fit would hide the failure and put unreviewed edits
+  into a document a human is accountable for. Refusing to show it would discard
+  work the analyst can finish in a minute. So the brief is surfaced with an
+  accurate statement of what is wrong, and the verdict travels with it to the
+  point of export approval, so approving a flagged brief is a decision someone
+  made rather than one that happened.
+
+  Conformance is a claim about shape and nothing else. A brief with every
+  required section present, ordered, and populated passes while saying something
+  false, and the check does not know the difference. That limit is stated here
+  and stated in the interface, because a verdict labelled "conformant" that a
+  reader hears as "verified" is worse than no verdict.
+
+actor: Intelligence analyst receiving a composed command-staff brief
+trigger: The turn composes a brief and the conformance check runs before the brief is surfaced.
+
+flow:
+  - F1: The turn composes the brief through invoke_cohere_command, whose target structure is the ministry template supplied as declared configuration rather than as prose inside a machine.
+  - F2: Command returns markdown in that structure, and the structured citations travel alongside it as metadata rather than only as text embedded in the document.
+  - F3: That markdown is the turn's output; no later state reconstructs, infers, or imposes the section structure on it.
+  - F4: A CheckingConformance state runs after composition and citation surfacing, and before the brief is surfaced to the analyst.
+  - F5: The check parses the markdown against the declared template schema deterministically, without a model call, and reads the schema as data rather than as compiled application code.
+  - F6: For a conforming brief the verdict passes, names the template version evaluated against, and the brief is surfaced.
+  - F7: For a brief missing a required section the verdict fails and names the specific structural defects rather than reporting only that something is wrong.
+  - F8: The failing brief is surfaced with its verdict and defect list, is not rewritten to conform, does not fail the turn, and remains available for the analyst to edit.
+  - F9: The verdict is reported in response metadata distinguishably from the source outcomes and the citation outcomes already separated there.
+  - F10: The verdict travels with the brief to the point where the analyst approves it for export, so an approval of a flagged brief is informed rather than implicit.
+  - F11: Because every composed brief is checked, the conformance rate is computed from verdicts across the population rather than estimated from a sample.
+
+touchpoints:
+  - id: T1
+    target: srd012-brief-markdown-conformance AC4
+    reason: The release is this acceptance criterion -- a failing brief is surfaced with its verdict and defects, never rewritten, never lost, and its verdict reaches the export-approval decision, which is the pass-or-flag tracer serving the template-conformance criterion.
+  - id: T2
+    target: srd012-brief-markdown-conformance AC3
+    reason: The CheckingConformance state validates deterministically after composition and before surfacing, produces a verdict with template version and specific defects, is reproducible, runs on every brief, and is explicitly not a model call.
+  - id: T3
+    target: srd012-brief-markdown-conformance AC2
+    reason: The check reads a versioned, data-form structural schema distinguishing required from optional sections and describing no rendering concern, which is what makes a verdict nameable to a template version.
+  - id: T4
+    target: srd012-brief-markdown-conformance AC1
+    reason: The check operates on markdown that composition produced against a configuration-supplied template with citations alongside, so the tracer also exercises the composition target that release rel10.0 established and whose suite left uncovered.
+  - id: T5
+    target: srd012-brief-markdown-conformance AC5
+    reason: The verdict asserts structure only, disclaims accuracy and citation resolution, is never rendered as approval or review, and yields the conformance rate as a computed fraction.
+  - id: T6
+    target: srd012-brief-markdown-conformance AC6
+    reason: The markdown schema this check reads is the representation srd012 owns among the template's three, the check is the sole authority for markdown conformance, and the single-sourcing follow-up stays recorded rather than treated as done.
+  - id: T7
+    target: srd002-chatbot-agent AC1
+    reason: The check is an additive post-composition state on the existing turn; how the turn embeds, selects sources, fans out, and composes is unchanged.
+  - id: T8
+    target: srd009-cohere-provider AC3
+    reason: The markdown the check reads is what invoke_cohere_command returned, so the composition contract is constrained in output format without the provider client or its operation changing.
+
+success_criteria:
+  - id: S1
+    criterion: A brief carrying every required section, in order and populated, passes the check, and the verdict names the template version it was evaluated against. A verdict that does not name a version cannot be interpreted once the template changes.
+    traces:
+      - srd012-brief-markdown-conformance AC3
+      - srd012-brief-markdown-conformance AC2
+  - id: S2
+    criterion: A brief missing a required section fails the check, and the verdict names which sections are missing or out of order rather than reporting only that validation failed. A defect list an analyst cannot act on returns them to reading the whole document.
+    traces:
+      - srd012-brief-markdown-conformance AC4
+      - srd012-brief-markdown-conformance AC3
+  - id: S3
+    criterion: The failing brief is surfaced to the analyst with its verdict and defect list, is not presented as final, and is not rewritten, repaired, or reordered by the check. A check that fixes what it finds hides the failure it exists to reveal and puts unreviewed edits into the document.
+    traces:
+      - srd012-brief-markdown-conformance AC4
+  - id: S4
+    criterion: A failed check does not fail the turn and does not discard the composed brief. The analyst keeps the draft to edit, and the verdict travels with the brief to the point of export approval so approving a flagged brief is a recorded decision rather than a default.
+    traces:
+      - srd012-brief-markdown-conformance AC4
+  - id: S5
+    criterion: The verdict appears in response metadata distinguishably from the source outcomes and the citation outcomes already reported there. A single undifferentiated failure field leaves an operator unable to tell a malformed brief from an excluded source.
+    traces:
+      - srd012-brief-markdown-conformance AC4
+  - id: S6
+    criterion: The check is a deterministic structural validation rather than a model call, and the same brief produces the same verdict across runs. A model asked whether another model followed the template yields an opinion, which cannot be reproduced, cannot fail a build, and cannot be summed into a rate.
+    traces:
+      - srd012-brief-markdown-conformance AC3
+  - id: S7
+    criterion: Every composed brief is checked rather than a sample, and the conformance rate is computed as the fraction passing without manual reformatting. The ninety-five percent criterion is a population measurement, and a sampled rate is an estimate of it.
+    traces:
+      - srd012-brief-markdown-conformance AC3
+      - srd012-brief-markdown-conformance AC5
+  - id: S8
+    criterion: The brief the check reads is markdown that composition produced against a template supplied as declared configuration, carrying its structured citations alongside, and no state between composition and the check reconstructs or imposes the section structure.
+    traces:
+      - srd012-brief-markdown-conformance AC1
+  - id: S9
+    criterion: The template schema is versioned data rather than code, distinguishes required from optional sections so an absent optional section still passes, and encodes no font, spacing, or page geometry. Rendering concerns in the schema would make a structural verdict depend on presentation.
+    traces:
+      - srd012-brief-markdown-conformance AC2
+  - id: S10
+    criterion: Nothing in the interface or the response metadata describes a conformant brief as approved, verified, or reviewed, and the conformance claim explicitly disclaims content accuracy, assertion support, and citation resolution. A structural pass read as an accuracy guarantee is the misreading this criterion exists to prevent.
+    traces:
+      - srd012-brief-markdown-conformance AC5
+  - id: S11
+    criterion: The markdown schema is the representation srd012 owns, the check is the sole authority for whether markdown conforms, and neither the interface layout nor the export template is consulted to decide a verdict. Single-sourcing the three representations remains a recorded follow-up with its drift risk visible rather than quietly resolved.
+    traces:
+      - srd012-brief-markdown-conformance AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: The check repairs a brief missing a required section by inserting an empty one, so the analyst receives a conformant document.
+    expected: Rejected; R4.2 forbids repair. The insertion produces a document that passes while saying less than the model produced, and it places an edit no human reviewed into a brief a human is accountable for. The analyst needs the draft and an accurate defect list, which is what S3 asserts.
+  - id: E2
+    scenario: A second model call judges whether the composed brief follows the template, since a model reads structure more flexibly than a parser.
+    expected: Rejected; R3.2 requires deterministic structural validation. Flexibility is the defect here -- the same brief could pass one run and fail the next, no verdict could be reproduced for a reviewer, and a rate summed from opinions is not the ninety-five percent measurement R5.4 defines.
+  - id: E3
+    scenario: A failing check fails the turn, since surfacing a malformed brief wastes the analyst's time.
+    expected: Rejected; R4.3 keeps the turn and the draft. A brief missing one section is usually a minute of editing and always more useful than nothing, and failing the turn converts a formatting defect into an outage. The verdict tells the analyst what to fix.
+  - id: E4
+    scenario: Conformance is checked on a sample of briefs, since running it on every brief costs latency for a check that mostly passes.
+    expected: Rejected; R3.5 requires every brief. The measurement is a population fraction, and the briefs that fail are exactly the ones a sample is likely to miss. The check is a structural parse rather than a provider call, so the latency argument is weak on its own terms.
+  - id: E5
+    scenario: The interface labels a conformant brief as verified, since the check passed.
+    expected: Rejected; R5.3 forbids it. The check confirms the required sections are present and populated, which a brief containing false assertions also satisfies. A reader who hears "verified" stops checking sources, which inverts the traceability the whole system exists to provide.
+  - id: E6
+    scenario: The template schema carries the heading fonts and page margins the ministry uses, so one artifact describes the whole template.
+    expected: Rejected; R2.5 confines the schema to structure. Rendering belongs to the representations that render, and a structural verdict that depends on presentation would fail a correctly-structured brief for a styling difference the markdown cannot express anyway.
+  - id: E7
+    scenario: The exporter re-derives the brief's section structure when rendering, since it needs the structure to lay out the PDF.
+    expected: Rejected; R6.3 has the exporter render the approved markdown. Re-deriving creates a fourth interpretation of the template and a path where an exported PDF differs structurally from the markdown the check passed, which is the drift R6.4 keeps visible rather than multiplying.
+  - id: E8
+    scenario: Conformance is decided by comparing the brief against the interface layout, since the analyst reads it there.
+    expected: Rejected; R6.2 makes the check the sole authority. The layout is a second representation that can drift from the schema, and consulting it for a verdict would make conformance depend on which representation was consulted rather than on the template.
+
+out_of_scope:
+  - The ministry template's actual sections. The schema is application configuration a deployment supplies, and DefTech's real template replaces the demonstration's without a specification change.
+  - Content accuracy, assertion support, and citation resolution; the check asserts structure and says so.
+  - Repairing or reformatting a non-conformant brief, automatically or on request.
+  - Rendering the brief. The interface renders markdown for reading and editing; converting the approved markdown to PDF is srd013 and rel14.0.
+  - The interface layout representation of the template, which is rel11.5.
+  - Single-sourcing the three template representations, which stays a recorded follow-up rather than this release's work.
+  - Defining the composition operation or the citations contract; srd009 owns both and this release constrains only the output format.
+
+test_suite_trace: test-rel12.2-template-conformance
+status: implemented

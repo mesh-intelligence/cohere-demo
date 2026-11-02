@@ -1,0 +1,50 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Layers on ci/kind-values.yaml to stand the control plane up on kind, for the
+# live provisioning tier (mage integration:controlPlaneLive, GH-155).
+#
+# controlPlane.enabled defaults false and kind-values.yaml does not override it,
+# so every other cluster test runs a mesh with no creator and no
+# provisioning-workflow-orchestrator pod. This target needs both, and enables
+# them here rather than editing the values file the smoke, swap, and LLM-tier
+# tests all depend on.
+controlPlane:
+  enabled: true
+  creator:
+    # The ingest writes into rag0's Chroma, which is the collection rag0's
+    # rag-server serves, so documents this target ingests are documents its turn
+    # can retrieve. Naming it rather than leaning on the first-unit default keeps
+    # the target's intent readable next to the assertion it makes.
+    ingestRagUnit: rag0
+    # The corpus-ingest child opens its run with an Ollama readiness probe
+    # whatever provider it then embeds through, so an unreachable Ollama fails
+    # the ingest before the embedding family matters. On kind that is the host's
+    # Ollama, reached the same way the chatbot's LLM tier reaches it.
+    ingestOllamaURL: http://host.docker.internal:11434
+    # The child's file-selection word invokes a chat model. Its own default is
+    # not one this mesh serves, so it takes the tier model the values declare,
+    # which the host Ollama already has for the chatbot.
+    ingestChatModel: qwen2.5:3b
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 256Mi}
+  provisioningWorkflowOrchestrator:
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 256Mi}
+
+# The creator drives the applier's deployment API to realize a rollout, so the
+# applier is part of this scenario the same way it is for integration:applierLive.
+applier:
+  enabled: true
+  # Loaded into the kind node by the target; never pulled.
+  image:
+    pullPolicy: Never
+  # The rig pulls the pinned donor once, retags it under this rig-local name,
+  # and kind-loads it (kindrig.EnsureCLIDonorImage), because a kind-loaded image
+  # does not keep its registry digest.
+  cliDonor:
+    image: {repository: kindrig/cli-donor, tag: "1.31.4", digest: "", pullPolicy: Never}
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}

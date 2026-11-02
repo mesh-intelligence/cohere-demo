@@ -1,0 +1,150 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-search-request
+purpose: |-
+  One request-scoped retrieval, served to the chat window's /search command
+  (GH-447): the query embeds once at the Cohere embeddings operation, fans out
+  over every declared RAG unit under the analyst's clearance window, and the
+  retrieved chunks come back with their provenance -- no rerank, no brief.
+
+  The workflow exists to show the embedding model isolated: the same embed,
+  clearance, and fan-out words the chat turn runs, and nothing after
+  retrieval but rendering. The clearance is established here at the
+  authenticated boundary for the same reason the document reads establish it
+  here (srd010 R3.1), and the fan-out covers every declared unit because a
+  search names no source -- a unit holding nothing relevant returns nothing.
+initial_state: AwaitingRequest
+budget:
+  # The rag client's read authority is 2m10s per operation and the timeout
+  # closure requires the command budget strictly above it, as on the chat
+  # turn. Iterations cover the embed, the clearance chain, the fan-out over
+  # every declared unit, and the render tail.
+  command_timeout: 2m30s
+  max_iterations: 32
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted search endpoint with the query and the requested level.}
+  - {name: CapturingRequest, meaning: The seeded request fields are being captured under the shared query_embedding label (GH-635).}
+  - {name: Embedding, meaning: The query is being embedded once at the Cohere embeddings operation.}
+  - {name: DeclaringRequestedClearance, meaning: The requested level is being put into command state as a candidate.}
+  - {name: DeclaringClearanceLevels, meaning: The declared ordered clearance set is being published.}
+  - {name: ResolvingAnalystClearance, meaning: The requested level is being matched against the declared set.}
+  - {name: DeclaringAnalystClearance, meaning: The level this search runs at is being published under the shared label.}
+  - {name: CapturingQueryVector, meaning: The embedding rows are being captured for the fan-out to bind.}
+  - {name: ParsingQueryVector, meaning: The captured vector is being schema-validated; a malformed vector stops the search.}
+  - {name: DeclaringModel, meaning: The query embedding identity is being declared for the per-unit comparison.}
+  - {name: DeclaringTopology, meaning: The trusted RAG topology is being declared.}
+  - {name: Querying, meaning: One sequential for_each is querying every declared unit under the clearance window.}
+  - {name: PartitioningQueries, meaning: Entered when the fan-out join is collected; successful queries are being split from failures.}
+  - {name: PartitioningClearanceRefusals, meaning: Clearance refusals are being split out of the failed queries.}
+  - {name: PartitioningModels, meaning: Sources whose embedding identity mismatches are being excluded.}
+  - {name: FlatteningChunks, meaning: The successful queries' chunk rows are being flattened with their provenance.}
+  - {name: RenderingResults, meaning: The retrieved chunks are being rendered as the served result shape.}
+  - {name: ComposingResponse, meaning: Entered with the rendered results; the response body is composed on the way out.}
+  - {name: ServingSearch, meaning: The composed response is standing under the search_response label for the HTTP reply.}
+  - {name: SearchServed, meaning: Terminal. The results are ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. The embed or a boundary word failed before results could be served., run_status: failed}
+terminal_states:
+  - SearchServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The search endpoint starts a request-scoped run.}
+  - {name: QueryEmbedded, trigger: The Cohere embeddings operation returned the query vector.}
+  - {name: ProviderUnauthorized, trigger: The embeddings provider refused the credential.}
+  - {name: ProviderThrottled, trigger: The embeddings provider rate-limited the call.}
+  - {name: ProviderUnavailable, trigger: The embeddings provider was unreachable or failing.}
+  - {name: ProviderRefused, trigger: The embeddings provider endpoint fell outside the client allowlist.}
+  - {name: RequestedClearanceDeclared, trigger: The requested level was put into command state as a candidate.}
+  - {name: ClearanceLevelsDeclared, trigger: The declared ordered clearance set was published.}
+  - {name: ClearanceAccepted, trigger: The requested level matched the declared set.}
+  - {name: ClearanceDefaulted, trigger: The request carried no level the declared set recognizes.}
+  - {name: AnalystClearanceRendered, trigger: The level this search runs at was published.}
+  - {name: QueryVectorCaptured, trigger: The embedding rows were captured.}
+  - {name: QueryVectorParsed, trigger: The captured vector validated.}
+  - {name: ParseFailed, trigger: The captured vector was malformed; the search stops rather than querying from noise.}
+  - {name: QueryModelDeclared, trigger: The query embedding identity was declared.}
+  - {name: RagTopologyDeclared, trigger: The trusted topology was declared.}
+  - {name: QueryResponded, trigger: A unit returned its chunks.}
+  - {name: QueryRejected, trigger: A unit rejected the query as malformed.}
+  - {name: ClearanceRefused, trigger: A unit refused the level.}
+  - {name: RagQueriesCollected, trigger: The fan-out join over every declared unit was collected.}
+  - {name: QueryResultsPartitioned, trigger: Successful queries were split from failures.}
+  - {name: ClearanceRefusalsPartitioned, trigger: Clearance refusals were split out of the failures.}
+  - {name: EmbeddingModelsPartitioned, trigger: Model-mismatched sources were excluded.}
+  - {name: ChunksFlattened, trigger: The chunk rows were flattened with provenance.}
+  - {name: SearchResultsRendered, trigger: The retrieved chunks were rendered as the served shape.}
+  - {name: SearchResponseComposed, trigger: The response body was composed.}
+  - {name: RequestCaptured, trigger: The seeded request fields were captured at intake (GH-635).}
+  - {name: CommandError, trigger: A boundary word failed.}
+transitions:
+  # The intake capture precedes the embed (GH-635): the shared embed
+  # operation reads the question from the captured fields, so this machine
+  # seeds them the same way the chat machine does.
+  - {state: AwaitingRequest, signal: Seed, next: CapturingRequest, action: capture_request, label: query_embedding}
+  - {state: CapturingRequest, signal: RequestCaptured, next: Embedding, action: embed_query_cohere, label: query_vector_call}
+  - {state: CapturingRequest, signal: CommandError, next: Failed}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  # A provider refusal ends the search; there is nothing to serve without a
+  # vector, and the outcomes stay separable in a trace (srd009 R1.6).
+  - {state: Embedding, signal: QueryEmbedded, next: DeclaringRequestedClearance, action: declare_requested_clearance}
+  - {state: Embedding, signal: ProviderUnauthorized, next: Failed}
+  - {state: Embedding, signal: ProviderThrottled, next: Failed}
+  - {state: Embedding, signal: ProviderUnavailable, next: Failed}
+  - {state: Embedding, signal: ProviderRefused, next: Failed}
+  - {state: Embedding, signal: CommandError, next: Failed}
+  - {state: DeclaringRequestedClearance, signal: RequestedClearanceDeclared, next: DeclaringClearanceLevels, action: declare_clearance_levels}
+  - {state: DeclaringRequestedClearance, signal: CommandError, next: Failed}
+  - {state: DeclaringClearanceLevels, signal: ClearanceLevelsDeclared, next: ResolvingAnalystClearance, action: resolve_analyst_clearance}
+  - {state: DeclaringClearanceLevels, signal: CommandError, next: Failed}
+  # Both legs publish under one label, exactly as on the chat turn, so a
+  # request carrying no level runs at the lowest declared one (srd010 R4.1).
+  - {state: ResolvingAnalystClearance, signal: ClearanceAccepted, next: DeclaringAnalystClearance, action: render_analyst_clearance, label: analyst_clearance}
+  - {state: ResolvingAnalystClearance, signal: ClearanceDefaulted, next: DeclaringAnalystClearance, action: declare_lowest_clearance, label: analyst_clearance}
+  - {state: ResolvingAnalystClearance, signal: CommandError, next: Failed}
+  - {state: DeclaringAnalystClearance, signal: AnalystClearanceRendered, next: CapturingQueryVector, action: capture_query_vector_cohere, label: query_vector}
+  - {state: DeclaringAnalystClearance, signal: CommandError, next: Failed}
+  - {state: CapturingQueryVector, signal: QueryVectorCaptured, next: ParsingQueryVector, action: parse_query_vector}
+  - {state: CapturingQueryVector, signal: CommandError, next: Failed}
+  - {state: ParsingQueryVector, signal: QueryVectorParsed, next: DeclaringModel, action: declare_query_model}
+  - {state: ParsingQueryVector, signal: ParseFailed, next: Failed}
+  - {state: ParsingQueryVector, signal: CommandError, next: Failed}
+  - {state: DeclaringModel, signal: QueryModelDeclared, next: DeclaringTopology, action: declare_rag_topology}
+  - {state: DeclaringModel, signal: CommandError, next: Failed}
+  # The fan-out covers every declared unit: a search names no source, so
+  # there is nothing for a selector to decide (as on the document reads).
+  - state: DeclaringTopology
+    signal: RagTopologyDeclared
+    next: Querying
+    action: rag_query
+    label: rag_query
+    for_each:
+      items: $from(declare_rag_topology).body.items
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      continue_on: [QueryResponded, QueryRejected, ClearanceRefused, CommandError]
+      join:
+        next: PartitioningQueries
+        label: rag_queries
+        signals:
+          all_success: RagQueriesCollected
+          partial: RagQueriesCollected
+          failed: RagQueriesCollected
+          empty: RagQueriesCollected
+  - {state: DeclaringTopology, signal: CommandError, next: Failed}
+  - {state: Querying, signal: CommandError, next: Failed}
+  - {state: PartitioningQueries, signal: RagQueriesCollected, next: PartitioningClearanceRefusals, action: partition_query_results}
+  - {state: PartitioningQueries, signal: CommandError, next: Failed}
+  - {state: PartitioningClearanceRefusals, signal: QueryResultsPartitioned, next: PartitioningModels, action: partition_clearance_refusals}
+  - {state: PartitioningClearanceRefusals, signal: CommandError, next: Failed}
+  - {state: PartitioningModels, signal: ClearanceRefusalsPartitioned, next: FlatteningChunks, action: partition_embedding_models}
+  - {state: PartitioningModels, signal: CommandError, next: Failed}
+  - {state: FlatteningChunks, signal: EmbeddingModelsPartitioned, next: RenderingResults, action: flatten_chunks}
+  - {state: FlatteningChunks, signal: CommandError, next: Failed}
+  - {state: RenderingResults, signal: ChunksFlattened, next: ComposingResponse, action: render_search_results}
+  - {state: RenderingResults, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: SearchResultsRendered, next: ServingSearch, action: compose_search_response, label: search_response}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}
+  - {state: ServingSearch, signal: SearchResponseComposed, next: SearchServed}
+  - {state: ServingSearch, signal: CommandError, next: Failed}

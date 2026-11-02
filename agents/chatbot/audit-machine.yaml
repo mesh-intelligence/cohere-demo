@@ -1,0 +1,40 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-audit-request
+purpose: |-
+  One request-scoped citation audit for the /audit command (GH-543): the
+  seeded claim and document are composed into a judge prompt and scored by
+  the Cohere classifier tier. The client sends one cited span and the chunk
+  it cites; the machine answers with the model's 1-10 correctness verdict.
+  Nothing here reaches the corpus -- the client already holds both texts.
+initial_state: AwaitingRequest
+budget:
+  command_timeout: 60s
+  max_iterations: 8
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted audit endpoint with the claim and document.}
+  - {name: ComposingPrompt, meaning: The claim and document are being composed into the judge prompt.}
+  - {name: Judging, meaning: The Cohere classifier tier is scoring the claim against the document.}
+  - {name: ComposingResponse, meaning: The verdict is being wrapped for the HTTP reply.}
+  - {name: AuditServed, meaning: Terminal. The verdict is ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. The provider or a boundary word failed., run_status: failed}
+terminal_states:
+  - AuditServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The audit endpoint starts a request-scoped run.}
+  - {name: AuditPromptComposed, trigger: The judge prompt was composed from the seeded texts.}
+  - {name: LLMResponded, trigger: The classifier tier returned the verdict.}
+  - {name: AuditResponseComposed, trigger: The response body was composed.}
+  - {name: CommandError, trigger: The provider call or a boundary word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: ComposingPrompt, action: compose_audit_prompt}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  - {state: ComposingPrompt, signal: AuditPromptComposed, next: Judging, action: judge_with_cohere, label: audit_verdict}
+  - {state: ComposingPrompt, signal: CommandError, next: Failed}
+  - {state: Judging, signal: LLMResponded, next: ComposingResponse, action: compose_audit_response, label: audit_response}
+  - {state: Judging, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: AuditResponseComposed, next: AuditServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

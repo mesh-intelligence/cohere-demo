@@ -1,0 +1,126 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# GKE values for the unmodified chart (eng08), the overlay gcp:deploy layers in
+# place of kind-values.yaml. Everything environment-shaped lives here: registry
+# image paths, pinned tags, and the Cohere-only tier.
+#
+# Every image is pulled through one of the environment's two Artifact Registry
+# remote repositories (infra/gcp/modules/registry): agent-core from ghcr.io
+# through cohere-demo-ghcr, every third-party image from Docker Hub through
+# cohere-demo-dockerhub. Nothing is built or uploaded at deploy time, and the
+# nodes reach neither upstream directly (eng08). The prefix
+# region-docker.pkg.dev/project/ is a placeholder: gcp:deploy replaces each
+# repository below with the environment's real path in its overrides
+# document, so this file never carries a project id. The tags here are the
+# versions pulled.
+image:
+  repository: region-docker.pkg.dev/project/cohere-demo-ghcr/mesh-intelligence/declarative-agents/agent-core
+  # gcp:deploy always overrides this fail-closed sentinel with the release tag
+  # helm/values.yaml pins, so GKE runs the published release image (eng01:
+  # never latest).
+  tag: must-be-overridden-with-release-tag
+  pullPolicy: IfNotPresent
+
+chatbot:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+# Cohere-only: the unit is declared at the Cohere embedding identity it is
+# seeded with, so no turn excludes it (srd002 R3.3).
+ragUnits:
+  - name: rag0
+    description: Ukraine December 2022 intelligence corpus — ISW campaign assessments, strike and loss records, Telegram news reporting, and clearance-marked HUMINT field reports; harvested web material lands here too.
+    collection: corpus
+    embeddingModel: embed-v4.0
+    replicas: 1
+
+ragServer:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+# Persistent disks provision in whole gibibytes on GKE.
+chroma:
+  image: {repository: region-docker.pkg.dev/project/cohere-demo-dockerhub/chromadb/chroma, tag: "1.5.3", pullPolicy: IfNotPresent}
+  storage: 1Gi
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+# The chart default is the moving latest tag; the cloud pins the release the
+# kind path last resolved it to.
+dolt:
+  image: {repository: region-docker.pkg.dev/project/cohere-demo-dockerhub/dolthub/dolt-sql-server, tag: "2.4.1", pullPolicy: IfNotPresent}
+  storage: 1Gi
+
+observer:
+  proxy:
+    image: {repository: region-docker.pkg.dev/project/cohere-demo-dockerhub/rancher/kubectl, tag: v1.31.4, pullPolicy: IfNotPresent}
+
+osint:
+  fixture:
+    image: {repository: region-docker.pkg.dev/project/cohere-demo-dockerhub/library/busybox, tag: "1.36", pullPolicy: IfNotPresent}
+
+# The collector exports to its own bucket, which gcp:deploy names; there is no
+# host ingress to forward to.
+collector:
+  externalOTLPEndpoint: ""
+
+# Only the chatbot is public, and the chart renders none of its edge on GKE:
+# the exposure root gcp:deploy applies after the release (#885) puts a Gateway
+# on the reserved address and Identity-Aware Proxy in front of the chatbot,
+# with the custom OAuth client synced from Secret Manager. The control plane
+# (/provisioning), the observer, and the collector stay internal; the
+# operator reaches them by port-forward.
+#
+# The Google front end and IAP add these headers to every request. The REST
+# server refuses a header a route does not declare, and the load balancer
+# refuses to remove x-goog-* headers, so every public chatbot route declares
+# them (found live in #883). They are accepted, never trusted: an application
+# that wants the IAP identity verifies x-goog-iap-jwt-assertion itself.
+ingress:
+  enabled: true
+  host: must-be-overridden.invalid
+  expose: {provisioning: false, observer: false, collector: false}
+  gke:
+    enabled: true
+    transportHeaders:
+      - via
+      - x-cloud-trace-context
+      - x-goog-iap-jwt-assertion
+      - x-goog-authenticated-user-email
+      - x-goog-authenticated-user-id
+
+# gcp:deploy runs the canonical applier from the workstation, as app:up does.
+# The donor still pulls through the Docker Hub remote repository, so enabling
+# the in-cluster applier never pulls from Docker Hub directly; the digest pins
+# the exact upstream manifest.
+applier:
+  enabled: false
+  cliDonor:
+    image:
+      repository: region-docker.pkg.dev/project/cohere-demo-dockerhub/alpine/k8s
+      tag: "1.31.4"
+      digest: sha256:9c4976d47656d78cf53a92b0203fc54ac45eae18a2b45001ac221c27da4c8036
+      pullPolicy: IfNotPresent
+
+# Cohere-only on GKE: Command, embed, and rerank through the provider API, and
+# no in-cluster model tier. The credential is the Secret gcp:deploy stages.
+ollama:
+  enabled: false
+
+cohere:
+  enabled: true
+  existingSecret: cohere-credential
+
+# The brief exporter runs from its published image (mage exporter:publish),
+# pulled through the ghcr.io remote repository like agent-core. gcp:deploy
+# overrides the sentinel with the tag derived from the agent-core release and
+# the recipe (images/exporter.Dockerfile), and refuses when ghcr.io lacks it.
+exporter:
+  enabled: true
+  image:
+    repository: region-docker.pkg.dev/project/cohere-demo-ghcr/mesh-intelligence/cohere-demo/exporter
+    tag: must-be-overridden-with-exporter-tag
+    pullPolicy: IfNotPresent

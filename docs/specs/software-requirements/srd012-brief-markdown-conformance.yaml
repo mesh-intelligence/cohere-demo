@@ -1,0 +1,201 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd012-brief-markdown-conformance
+title: Brief Markdown Composition and Template Conformance
+
+role_realization_decision:
+  current_actor: chatbot
+  implemented_responsibility: Compose the brief as ministry-template markdown and validate that markdown structurally against the template schema before the brief is surfaced.
+  canonical_role_sub_role: Knowledge Manager / Recommendation Generator; Critic / Output Evaluator.
+  retained_or_proposed_name: No new actor. The composition target and the conformance check are a declared output format and a declared validation word on the existing `chatbot` turn.
+  authority_boundary: The check evaluates structure and reports a verdict. It does not rewrite the brief, does not approve it, and does not decide whether a flagged brief may proceed; the analyst does.
+  evidence: [agents/chatbot/request-machine.yaml, agents/chatbot/ui/, srd012 R1-R6]
+  migration_impact: None. Markdown is the composition target from rel10.0 onward and the check is an additive post-composition state.
+
+context: |
+  A command-staff brief is a document with a shape a reviewer expects. The
+  ministry template fixes which sections appear, in what order, and what each
+  must contain, and a brief that arrives in some other shape costs the analyst
+  the reformatting time the assistant was bought to save. So the template is not
+  presentation applied at the end; it is what Command composes into.
+
+  The turn therefore produces markdown. Command receives the reranked top-N as
+  documents and composes the brief in the template's structure, and that markdown
+  is the turn's output -- what the SPA renders, what the analyst edits, and what
+  the exporter later converts to PDF (srd013). Nothing downstream reconstructs
+  the structure; it either came out of composition or it did not.
+
+  Which is why a check follows. A language model asked for a structure will
+  usually produce it and sometimes will not, and "usually" is not a number a
+  reviewer accepts. A structural conformance check reads the composed markdown
+  against a declared template schema and returns a verdict, so the ninety-five
+  percent conformance criterion is measured rather than assumed. The check is
+  deterministic on purpose: a second model asked whether the first model followed
+  the template produces an opinion, and an opinion cannot fail a build.
+
+  The template exists three times over -- the SPA layout the analyst reads, the
+  markdown structure this check validates, and the LaTeX template md-to-tex
+  renders. The demonstration accepts that duplication and states it plainly
+  rather than discovering the drift later (ARCHITECTURE design decision 12).
+  Within that arrangement this SRD owns one of the three, and says which.
+
+problem: |
+  Two things need specifying that srd009 does not cover, and they pull in
+  opposite directions.
+
+  The first is that composition has a structural target. srd009 says Command
+  composes with documents and returns citations; it says nothing about the shape
+  of what comes back. Without a stated target, the brief is whatever prose the
+  model produced, and template conformance becomes a post-processing problem
+  nobody can solve reliably.
+
+  The second is that stating a target does not achieve it. The model is asked for
+  a structure and mostly complies, so the failure mode is a small fraction of
+  briefs that look finished and are not. Catching those needs a check that is
+  structural rather than semantic, deterministic rather than judged, and honest
+  about what it does not verify -- it can confirm a section exists, not that the
+  section says something true.
+
+  And the check has to fail usefully. Rewriting a non-conformant brief to fit the
+  template would hide the failure and put the assistant in the position of
+  editing content no human reviewed. Refusing to show it would discard work the
+  analyst can salvage. What the analyst needs is the draft plus an accurate
+  statement of what is wrong with it.
+
+goals:
+  - G1: Fix ministry-template markdown as the composition target, so the brief's structure is produced by Command rather than reconstructed afterwards.
+  - G2: Declare the ministry template as a structural schema -- required sections, their order, and their required content -- separate from any rendering of it.
+  - G3: Validate the composed markdown against that schema deterministically, before the brief is surfaced.
+  - G4: Flag a non-conformant brief with the specific structural defects rather than rewriting it, discarding it, or presenting it as final.
+  - G5: Keep the check structural, and state plainly what conformance does not assert.
+  - G6: Name this SRD as the owner of the markdown representation among the template's three, and record the single-source follow-up.
+
+requirements:
+  R1:
+    title: Markdown as the composition target
+    items:
+      - R1.1: invoke_cohere_command (srd009 R3) SHALL compose the brief as markdown in the ministry template's structure, and that markdown SHALL be the turn's output.
+      - R1.2: The template structure SHALL be supplied to composition as declared configuration, so changing the template is a configuration change rather than a prompt edit inside a machine.
+      - R1.3: No downstream state SHALL reconstruct, infer, or impose the brief's section structure after composition; the structure either came from composition or the brief is non-conformant.
+      - R1.4: The markdown SHALL carry the citations srd009 R4 surfaces as structured metadata alongside it, so attribution travels with the document rather than being embedded only as text a later step must parse.
+  R2:
+    title: Ministry template schema
+    items:
+      - R2.1: The ministry template SHALL be declared as a structural schema naming the required sections, their order, and the content each requires.
+      - R2.2: The schema SHALL distinguish required sections from optional ones, so an absent optional section is conformant and an absent required section is not.
+      - R2.3: The schema SHALL be versioned, so a conformance verdict names the template version it was evaluated against.
+      - R2.4: The schema SHALL be data rather than code, readable by the conformance check without an application build.
+      - R2.5: The schema SHALL describe structure only. It SHALL NOT encode fonts, spacing, page geometry, or any other rendering concern, which belong to the representations that render.
+  R3:
+    title: Conformance check
+    items:
+      - R3.1: A CheckingConformance state SHALL validate the composed markdown against the declared template schema after composition and citation surfacing, and before the brief is surfaced to the analyst.
+      - R3.2: The check SHALL be a deterministic structural validation (parse_structured against the schema). It SHALL NOT be a model call, because a model's opinion about whether another model followed the template is not a verdict a reviewer can rely on.
+      - R3.3: The check SHALL produce a verdict, the template version evaluated against, and the list of specific structural defects when it fails.
+      - R3.4: The same input SHALL produce the same verdict, so conformance is reproducible across runs and measurable across a corpus of briefs.
+      - R3.5: The check SHALL run on every composed brief rather than on a sample, so the conformance rate is a population measurement.
+  R4:
+    title: Non-conformant briefs
+    items:
+      - R4.1: A brief failing the check SHALL be surfaced to the analyst together with its verdict and defect list, and SHALL NOT be presented as final.
+      - R4.2: The check SHALL NOT rewrite, repair, reorder, or otherwise edit the brief to make it conform, because that would hide the failure and place unreviewed edits into the document.
+      - R4.3: A failed check SHALL NOT fail the turn or discard the composed brief; the analyst SHALL retain the draft to edit.
+      - R4.4: The conformance verdict SHALL travel with the brief to the point where the analyst approves it for export (srd013), so approval is an informed decision rather than an implicit one.
+      - R4.5: The verdict SHALL be reported in response metadata alongside the srd002 R3.4 source outcomes and the srd009 R4 citation outcomes, distinguishably from them.
+  R5:
+    title: Scope of the conformance claim
+    items:
+      - R5.1: Conformance SHALL assert structure only -- that the required sections are present, ordered, and populated.
+      - R5.2: Conformance SHALL NOT assert that the brief's content is accurate, that its assertions are supported, or that its citations resolve; those are the srd009 R4 attribution outcomes and the analyst's review.
+      - R5.3: A conformant brief SHALL NOT be described as approved, verified, or reviewed anywhere in the interface or the response metadata.
+      - R5.4: The template-conformance measurement SHALL be the fraction of composed briefs passing the check without manual reformatting, so the ninety-five percent criterion is computed from R3.5 verdicts rather than estimated.
+  R6:
+    title: Template representations and drift
+    items:
+      - R6.1: This SRD SHALL own the markdown structural representation of the ministry template; the SPA layout and the LaTeX template are the other two representations (ARCHITECTURE design decision 12).
+      - R6.2: The conformance check SHALL be the authority for whether markdown matches the template; neither the SPA layout nor the LaTeX template SHALL be consulted to decide conformance.
+      - R6.3: The exporter (srd013) SHALL render the approved markdown rather than re-deriving the brief's structure, so the LaTeX representation consumes what this SRD validates.
+      - R6.4: Single-sourcing the three representations from one template definition SHALL be recorded as a follow-up rather than treated as satisfied, and the drift risk SHALL remain stated in the architecture rather than resolved silently.
+
+non_goals:
+  - Define the ministry template's actual sections; the schema is application configuration a deployment supplies, and DefTech's real template replaces the demonstration's without a specification change.
+  - Verify content accuracy, assertion support, or citation resolution; srd012 checks shape and says so (R5.2).
+  - Repair or reformat a non-conformant brief, automatically or on request (R4.2).
+  - Render the brief; the SPA renders markdown for reading and editing, and srd013 renders the approved markdown to PDF.
+  - Single-source the three template representations; that is the recorded follow-up (R6.4), not this release.
+  - Define the composition operation or the citations contract; srd009 owns both and this SRD constrains the output format.
+  - Define Go package APIs for the agent-core parse or command-state runtime.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: Command composes the brief as ministry-template markdown supplied as declared configuration, that markdown is the turn's output, no later state reconstructs the section structure, and the structured citations travel alongside it. This is the rel10.0 markdown target.
+    traces: [R1.1, R1.2, R1.3, R1.4]
+  - id: AC2
+    criterion: The ministry template is a versioned, data-form structural schema naming required and optional sections, their order, and required content, describing structure without encoding any rendering concern.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5]
+  - id: AC3
+    criterion: A CheckingConformance state deterministically validates the composed markdown against the schema after composition and before surfacing, produces a verdict with the template version and specific defects, is reproducible on the same input, and runs on every brief rather than a sample. The check is explicitly not a model call.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5]
+  - id: AC4
+    criterion: A failing brief is surfaced with its verdict and defect list rather than as final, is never rewritten to conform, does not fail the turn or lose the draft, carries its verdict to the analyst's export-approval decision, and is reported distinguishably from source and citation outcomes. This is the rel12.2 pass-or-flag tracer serving the template-conformance criterion.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5]
+  - id: AC5
+    criterion: Conformance asserts structure only, explicitly disclaims accuracy, support, and citation resolution, is never described as approval or review, and yields the conformance rate as a computed fraction of checked briefs rather than an estimate.
+    traces: [R5.1, R5.2, R5.3, R5.4]
+  - id: AC6
+    criterion: srd012 is named as the owner of the markdown representation among the template's three, the check is the sole authority for markdown conformance, the exporter consumes the approved markdown rather than re-deriving structure, and single-sourcing the representations remains a stated follow-up with the drift risk visible.
+    traces: [R6.1, R6.2, R6.3, R6.4]
+
+depends_on:
+  # R1 constrains the output format of the composition operation srd009 R3
+  # declares, and R1.4 carries the srd009 R4 citation metadata alongside the
+  # markdown. The provider client and the citations contract are unchanged.
+  - srd_id: srd009-cohere-provider
+    symbols_used: [R3, R4]
+  # R4.5 extends the response-metadata outcome set srd002 R3.4 defines.
+  - srd_id: srd002-chatbot-agent
+    symbols_used: [R3]
+
+platform_dependencies:
+  # agent-core runtime contracts this check builds on. External references,
+  # owned by agent-core, not part of this application's corpus.
+  - srd_id: srd038-command-state-store
+    provider: agent-core
+    symbols_used: [R1]
+
+implementation_status:
+  planned:
+    - >-
+      rel10.0 (Cohere provider tier live): ministry-template markdown as the
+      composition target, supplied as declared configuration and carrying the
+      structured citations alongside it (R1, and the R2 schema the target
+      references). The markdown is the turn's output that the SPA renders and
+      the analyst edits.
+    - >-
+      rel12.2 (Template conformance): the check_conformance word, the
+      CheckingConformance state, and the ministry template schema as a validated
+      artifact (R2 through R5). The tracer passes a conforming brief and flags a
+      malformed one rather than surfacing it as final.
+    - >-
+      Single-sourcing the SPA layout, the markdown structure, and the LaTeX
+      template from one definition (R6.4) is a post-demonstration follow-up. The
+      demonstration carries three representations and states the drift risk.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: The brief needs a structural target, and stating a target does not achieve it"] --> Goals["Goals: Brief Markdown Composition and Template Conformance"]
+      Goals --> R1["R1: Markdown as the composition target"]
+      Goals --> R2["R2: Ministry template schema"]
+      Goals --> R3["R3: Conformance check"]
+      Goals --> R4["R4: Non-conformant briefs"]
+      Goals --> R5["R5: Scope of the conformance claim"]
+      Goals --> R6["R6: Template representations and drift"]
+      R1 --> AC1["AC1: Command composes into the template (rel10.0)"]
+      R2 --> AC2["AC2: versioned structural schema, no rendering concerns"]
+      R3 --> AC3["AC3: deterministic check, every brief, not a model call"]
+      R4 --> AC4["AC4: flagged with defects, never rewritten (rel12.2)"]
+      R5 --> AC5["AC5: structure only; conformant is not approved"]
+      R6 --> AC6["AC6: owns the markdown representation; drift follow-up recorded"]
+    ```

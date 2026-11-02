@@ -1,0 +1,491 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Chatbot mesh values. The ragUnits list is the single source of truth for the RAG
+# topology: each entry renders a rag-server Deployment/Service and a Chroma
+# StatefulSet/Service, the chatbot's declared runtime topology, REST network
+# allowlist, and monitor upstream. The chatbot program itself is source-count independent.
+
+# The rel06.0 mounted-profile runtime image, one image across every agent role.
+# The published image is private and tagged with the declarative-agents release
+# go.mod pins; mage deps:verify holds the tag to that release. demo:up and the
+# kind integrations build the image locally and override both fields.
+image:
+  repository: ghcr.io/mesh-intelligence/declarative-agents/agent-core
+  tag: v0.20261005.0
+  pullPolicy: IfNotPresent
+
+# Pull secrets every agent-core pod names, for a namespace that pulls the
+# private published image: [{name: <secret>}], a docker-registry Secret built
+# from a token holding read:packages.
+imagePullSecrets: []
+
+# Pod security context for the agent services the agent-services library
+# renders (the collector, the applier). Empty here and in the GKE overlay: the
+# library gives a collector with a persistent WAL the image's agent group
+# itself, so a root-owned cloud disk mounts writable (declarative-agents
+# GH-492). Set it only to override that.
+podSecurityContext: {}
+
+# Telemetry content capture (GH-658): "full" records every invoke_llm word's
+# input and output messages on its span, so the trace drawer can show the
+# prompts. This is a demo posture — a production enclave runs "off", which is
+# agent-core's own default.
+telemetry:
+  capture: full
+
+# Profiles are supplied to each agent from a ConfigMap mounted at /profiles; the
+# agent runs agent-entrypoint --profile /profiles/agents/<name>/profile.yaml.
+profiles:
+  mountPath: /profiles
+  workMountPath: /work
+  # Verbatim profiles provisioned outside Helm release storage (GH-785), one
+  # entry per ConfigMap group: {configMap, checksum, keys}. When a group is
+  # named here the release carries only that group's co-generated keys and the
+  # workloads project the rest from the named ConfigMap. Empty keeps everything
+  # in the release, which is what a plain `helm install` of the packaged chart
+  # does.
+  external: {}
+
+chatbot:
+  replicas: 1
+  # Optional immutable UI archive provisioned outside Helm release storage.
+  # When set, the chatbot verifies and unpacks assets.tgz from this ConfigMap
+  # instead of rendering the built SPA bundle into the release.
+  uiArchiveConfigMap: ""
+  uiArchiveChecksum: ""
+  # The model the chatbot embeds a query with; it must share the embedding space
+  # of the RAG corpora (srd014 R3.3). Co-generated into the chatbot rest.yaml
+  # embedding client.
+  embeddingModel: qwen3-embedding:8b
+  # Per-source retrieval breadth (n_results). Above the rerank composition
+  # budget (top_n 8) so the trim bites. The recall pair compares the rerank
+  # order and the cosine order at the same N (GH-576); the untrimmed figure is
+  # reported separately as the retrieval boundary, because a superset always
+  # out-recalls its own cut and that difference measures the trim, not the
+  # ordering (srd014 R1.3, R2.7).
+  retrievalBreadth: 20
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  ports:
+    chat: 18080
+    control: 18081
+    monitor: 18082
+
+# The OSINT search branch (srd011, rel12.0). enabled gates the second
+# retrieval branch end to end; false is the air-gapped deployment, which
+# renders no search states and no search host in any network policy.
+# searchBaseURL is the engine the branch queries -- values-driven, so a
+# deployment differs from a hosted engine by this value alone. Empty means
+# the in-cluster fixture, which the chart deploys when fixture.enabled is
+# also true: the default demo exercises the whole external boundary with no
+# real egress, and the trust-boundary tracer cases have the controllable
+# result content no live engine serves on demand.
+osint:
+  enabled: true
+  # The engine behind the search branch (GH-457): fixture is the in-cluster
+  # deterministic default; serpapi points the declared client at the live
+  # engine with the query_token credential below. Searches there are metered,
+  # so serpapi is a per-deploy opt-in, never the default.
+  engine: fixture
+  serpapi:
+    existingSecret: ""
+    secretKey: api-key
+    # Fixed result budget per search -- the declared num constant.
+    num: "5"
+  searchBaseURL: ""
+  # The approved-domain allowlist (srd011 R1.2): the hosts the search client's
+  # network policy permits, fixed declared configuration the client enforces.
+  # Empty means the search endpoint's own host, which keeps the address dialed
+  # and the host approved derived from one value. A non-empty list is the
+  # security lead's control surface -- an endpoint outside it is dropped by
+  # the client and reported as the dropped branch outcome (R1.3).
+  allowedHosts: []
+  # The cascade mode (srd011 R6.4): three_pass runs the per-branch reranks
+  # and the fusion -- the default, because trimming each branch's tail before
+  # the union is the ordering quality the demonstration exists to show --
+  # while single_fusion is the recorded latency tunable: both per-branch
+  # passes are skipped and one fusion re-scores the raw union, still on one
+  # relevance scale. Under the collapse a turn with only one branch composes
+  # that branch in retrieval order, which is part of the latency trade.
+  cascade: three_pass
+  port: 8090
+  fixture:
+    enabled: true
+    image: {repository: busybox, tag: "1.36", pullPolicy: IfNotPresent}
+
+# Each RAG unit is one rag-server agent paired with its own Chroma database.
+# name is a DNS label; description is the required human-readable classifier
+# catalog entry; collection is the Chroma collection it serves; embeddingModel is
+# the embedding-space identity the chatbot uses for mismatch handling (srd013
+# R2.3, srd014 R3.3).
+ragUnits:
+  - name: rag0
+    description: Primary declarative-agent and scenario critic rig behavior.
+    collection: corpus
+    embeddingModel: qwen3-embedding:8b
+    replicas: 1
+  - name: rag1
+    description: Secondary mock-dependency and Solar Ridge integration fixtures.
+    collection: corpus2
+    embeddingModel: qwen3-embedding:8b
+    replicas: 1
+
+ragServer:
+  ports:
+    query: 18085
+    control: 18086
+    monitor: 18087
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+chroma:
+  image: {repository: chromadb/chroma, tag: "1.5.3", pullPolicy: IfNotPresent}
+  port: 8000
+  storage: 1Gi
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+# The chat and embedding LLM endpoint for the external path. When the in-cluster
+# LLM tier is disabled (ollama.enabled=false), embedding/chat client entries point
+# at externalURL; port is the Ollama API port either way.
+llm:
+  externalURL: http://ollama.default.svc.cluster.local:11434
+  port: 11434
+
+# The in-cluster LLM tier (srd015 R6, GH-337): a chart-owned Ollama workload with
+# PVC model storage, a model-preload Job, agent readiness gating on model presence,
+# and GPU scheduling values. Enabled by default so a fresh-cluster install is
+# self-contained. Set enabled=false with an llm.externalURL override to point at an
+# operator-supplied Ollama (the render is byte-identical to the pre-tier chart).
+#
+# Realized as chart-owned templates rather than a nested Helm subchart so the Ollama
+# Service keeps the <release>-<chart>-ollama name the co-generated llmURL depends on
+# (a nested subchart names its Service by the subchart's own fullname).
+# The additive Cohere provider (srd009). Disabled by default, so the shipped
+# chart renders exactly the pre-provider mesh and enabling it is a values
+# decision rather than a fork. baseURL, host, scheme, and port move together:
+# they are the one configuration point that makes the hosted endpoint and a
+# private in-boundary deployment differ by values alone (srd009 R1.2, R1.4).
+cohere:
+  enabled: false
+  baseURL: https://api.cohere.com
+  host: api.cohere.com
+  scheme: https
+  port: 443
+  # The composition model. Reasoning models work too -- the turn selects text
+  # blocks by type before joining the brief, so a model that returns thinking
+  # blocks composes correctly and the thinking never reaches the response
+  # (GH-230). The default stays non-reasoning for output stability.
+  model: command-a-03-2025
+  # The query and corpus embedding identity. srd002 R3.3 compares this against
+  # the identity each collection was seeded with and excludes any source that
+  # differs, so changing it without reseeding empties every turn rather than
+  # degrading it. The name is asymmetric with `model` above, which is the chat
+  # model: renaming that to chatModel reads better and breaks committed values
+  # files, so the pair stays model / embedModel.
+  embedModel: embed-v4.0
+  # The rerank pass scores the retrieved candidates against the tasking before
+  # composition (srd009 R5). rerankTopN is the deployment's composition budget:
+  # the provider is asked for this many results and the reordered set is what
+  # Command composes from, so it is declared here rather than taken from however
+  # many the provider chose to return (R5.3). A value larger than the fan-out
+  # retrieved is accepted and returns everything, verified against the live API.
+  rerankModel: rerank-v3.5
+  # The light model the source and tier classifiers run on (GH-425). Kept
+  # apart from `model`, the composition model: classification wants the small
+  # fast model, and the probe showed the flagship mishandling the classifier
+  # contract that command-r7b returns exactly.
+  classifierModel: command-r7b-12-2024
+  rerankTopN: 8
+  # The credential is referenced, never carried. The chart renders a
+  # secretKeyRef; it accepts no credential value, so nothing lands in
+  # `helm get values` or in a committed values file (srd009 R1.3).
+  existingSecret: ""
+  secretKey: api-key
+
+ollama:
+  enabled: true
+  image: {repository: ollama/ollama, tag: latest, pullPolicy: IfNotPresent}
+  # The models, named once here, feed both the preload Job and the agents' rendered
+  # config: the embedding model, the chat models (fast + deep), and the tier-selector model.
+  models:
+    embedding: qwen3-embedding:8b
+    chat: ["qwen2.5:3b", "ornith:9b"]
+    tier: qwen2.5:3b
+  preload:
+    # Test-only transition observation may install this Job suspended, assert
+    # agents are unready, then resume it. Production defaults to immediate pull.
+    suspend: false
+    # Integration-only aggregate cache. Empty in production. The release rig
+    # supplies an identity-keyed path on an owned kind node so the suspended Job
+    # restores models into fresh scenario storage before validating each model.
+    integrationCacheHostPath: ""
+  persistence:
+    size: 10Gi
+    storageClass: ""
+  resources:
+    requests: {cpu: 500m, memory: 2Gi}
+    limits: {cpu: "4", memory: 8Gi}
+  # GPU scheduling; CPU-only is permitted (the kind smoke path). Set gpu.count > 0
+  # and provide nodeSelector/tolerations for a GPU node pool in production.
+  gpu:
+    count: 0
+  nodeSelector: {}
+  tolerations: []
+  # Topology: a single Ollama instance serving all models (default), or one instance
+  # per logical service (embedding vs chat) when set to per-model. Single is the
+  # default -- one process holds all models in one PVC, simplest and sufficient for
+  # the mesh; per-model maps to the two-logical-services split for isolation or
+  # independent GPU sizing (srd015 R6.5).
+  topology: single
+
+# Fleet observer (srd008): discovers mesh pods by label selector, polls each
+# agent's monitor surface, and serves a fleet-level UX at observer.localhost.
+observer:
+  enabled: true
+  # Optional immutable UI archive provisioned outside Helm release storage.
+  ports:
+    control: 18201
+    monitor: 18202
+  pollInterval: "10s"
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  # kube API access goes through a kubectl-proxy sidecar that holds the pod's
+  # service-account token and forwards read-only requests, so bearer auth stays
+  # out of the declarative runtime (which carries no credential resolver). The
+  # observer reaches the proxy over loopback with auth_ref none (GH-1302).
+  proxy:
+    image: {repository: rancher/kubectl, tag: v1.31.4, pullPolicy: IfNotPresent}
+    port: 8001
+    resources:
+      requests: {cpu: 25m, memory: 32Mi}
+      limits: {cpu: 250m, memory: 128Mi}
+
+# Dolt checkpoint backend (agent-core srd035/srd036).
+dolt:
+  enabled: true
+  image: {repository: dolthub/dolt-sql-server, tag: latest, pullPolicy: IfNotPresent}
+  port: 3306
+  metricsPort: 11228
+  storage: 1Gi
+  rootHost: "%"
+  # The MySQL-wire user and database the chatbot's checkpoint DSN targets. The
+  # dolt-sql-server root user has no password; the database is created on the Dolt
+  # volume (see NOTES). Used by chatbot-mesh.doltDSN.
+  user: root
+  database: agent_checkpoints
+
+# OTel collector receives OTLP from every agent (R5.1) and exports to the trace
+# backend that the observability panel queries (R5.2).
+collector:
+  enabled: true
+  # agent (default) runs the declarative collector profile, which owns both trace
+  # and OTLP metric intake (GH-1207); no contrib container is deployed. The opt-in
+  # contrib option preserves the previous combined trace/metric gateway and the
+  # pull-based Dolt Prometheus scrape.
+  implementation: agent
+  # Optional immutable UI archive provisioned outside Helm release storage.
+  # The archive contains ui/dist at its root and is checksum-verified before
+  # extraction into the collector's /collector-ui working directory.
+  uiArchiveConfigMap: ""
+  uiArchiveChecksum: ""
+  # Contrib image, used only when implementation: contrib. 0.127.0 ships a
+  # statically linked arm64 binary. The 0.116.0 arm64 image is dynamically linked
+  # against /lib/ld-linux-aarch64.so.1, which a distroless image does not carry,
+  # so the collector exited 255 with "exec /otelcol-contrib: no such file or
+  # directory" on every Apple Silicon host and no agent span ever reached the
+  # trace backend (GH-736).
+  image: {repository: otel/opentelemetry-collector-contrib, tag: "0.127.0", pullPolicy: IfNotPresent}
+  otlpGRPCPort: 4317
+  otlpHTTPPort: 4318
+  # The control, monitor, and query surfaces the agent collector serves, and the
+  # resources it runs under, as the shared agent-services collector reads them.
+  controlPort: 18191
+  monitorPort: 18192
+  queryPort: 18193
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+  # Durable storage (srd042 R10/R11). Absent keeps the emptyDir NDJSON spool;
+  # app:up sets backend: object with the application bucket.
+  storage: {}
+  # Integration overlays may forward through this chart-local gateway to the
+  # persistent host ingress. Empty keeps production self-contained.
+  externalOTLPEndpoint: ""
+  integrationResource:
+    repository: ""
+    module: ""
+    target: ""
+    commit: ""
+    runID: ""
+
+
+ingress:
+  enabled: true
+  className: ""
+  host: chatbot.local
+  # The observer's fleet page and the collector's trace query surface, each on its
+  # own host; app:up names them under the application host.
+  observerHost: observer.localhost
+  collectorHost: telemetry.localhost
+  annotations: {}
+  # What the external Ingresses route beyond the chat UI: the control plane at
+  # /provisioning on the chatbot host, and the observer and collector hosts. A
+  # public deployment turns all three off and keeps them internal (#813).
+  expose: {provisioning: true, observer: true, collector: true}
+  # On GKE the chart renders no Ingress: the chatbot's edge (reserved address,
+  # certificate, Gateway, IAP) is Terraform's, in infra/gcp/modules/exposure
+  # (#885). transportHeaders are the request headers that edge adds to every
+  # request; each public chatbot route declares them, because the REST server
+  # refuses an undeclared header and Google's load balancer cannot remove
+  # x-goog-* headers (#883).
+  gke:
+    enabled: false
+    transportHeaders: []
+
+# Validate the rendered chatbot rest.yaml before serving (R2.2). The co-generation
+# that renders it from ragUnits lands in GH-314; the init check wires here.
+validateProfiles: true
+
+# The applier (srd006): the declarative deployment API (srd003 R4) -- the agent-core
+# runtime with a mounted profile whose request-machine binds the helm and kubectl CLIs
+# as exec words. It views the mesh and applies values edits that trigger a rollout,
+# never submitting an endpoint to a running agent. Reached same-origin via the chatbot
+# ingress at /provisioning.
+# The sandboxed brief exporter (srd013, rel14.0). Its image adds pandoc and
+# the XeTeX toolchain to agent-core -- the recorded sanctioned divergence
+# (R6.2), roughly 900 MB over the runtime image, built from
+# images/exporter.Dockerfile -- because the egress-denied workload must
+# render offline. Deployable with or without the Cohere provider path
+# (R6.4): the exporter renders markdown and calls nothing. This repository is
+# its only publisher: demo:up builds it locally over the runtime image and
+# overrides the reference for kind, and mage exporter:publish pushes the
+# multi-arch image a cluster pulls (R6.5), tagged <agent-core release>-<recipe
+# digest>. It sits outside the declarative-agents image prefix, whose tags
+# deps:verify holds to the upstream release.
+exporter:
+  enabled: true
+  replicas: 1
+  image: {repository: ghcr.io/mesh-intelligence/cohere-demo/exporter, tag: "0.1.0", pullPolicy: IfNotPresent}
+  ports:
+    export: 18120
+    control: 18121
+    monitor: 18122
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+applier:
+  enabled: true
+  # The applier runs the agent-core runtime image; helm and kubectl come from
+  # cliDonor below (GH-2222), and the chart from chartArchiveConfigMap (GH-1368).
+  image: {repository: ghcr.io/mesh-intelligence/declarative-agents/agent-core, tag: v0.20261005.0, pullPolicy: IfNotPresent}
+  # CLI donor (GH-2222): an init container copies this image's helm and kubectl
+  # into a tools volume mounted read-only at /opt/tools and first on PATH. The pin
+  # is the CLI version contract: helm 3.16.3 (the exec words use helm 3 flags) and
+  # kubectl 1.31. An empty repository means applier.image carries the CLIs.
+  cliDonor:
+    image:
+      repository: docker.io/alpine/k8s
+      tag: "1.31.4"
+      digest: sha256:9c4976d47656d78cf53a92b0203fc54ac45eae18a2b45001ac221c27da4c8036
+      pullPolicy: IfNotPresent
+  # Name of a ConfigMap carrying the packaged chart (a `chart.tgz` binaryData key)
+  # that the applier's `helm upgrade chatbot-mesh /chart` word installs, mounted at
+  # /chart rather than baked into the image (GH-1368). The deploy/test tooling
+  # provisions this ConfigMap out-of-release (kubectl create) and passes its name via
+  #   --set applier.chartArchiveConfigMap=<name>
+  # It is kept out of the Helm release because the chart embeds the collector UI,
+  # and carrying the archive in the release Secret overflowed the 1 MiB apiserver
+  # limit (GH-1407). Empty by default; with it empty the applier renders without the
+  # chart mount (fine for render-only checks; a live applier needs the chart).
+  chartArchiveConfigMap: ""
+  ports: {apply: 18090, control: 18091, monitor: 18092}
+  # allowApply grants the apply-path RBAC (helm upgrade manages the chart objects).
+  allowApply: true
+  # Authenticate the apply surface apart from the chat path at the network layer:
+  # only the creator may reach the apply port (srd006 R4.1).
+  networkPolicy:
+    enabled: true
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  # The interesting parameters the panel edits (srd003). They seed the read-state mesh
+  # view; nResults is the per-RAG retrieval bound (srd001 R2.1).
+  params:
+    nResults: 5
+    chunkCap: 0
+    tierDefault: invoke_llm_fast
+    chatModel: "qwen2.5:3b"
+
+# The control plane (srd004 provisioning-workflow-orchestrator, srd005 creator): two persistent agents on
+# the runtime image that turn a provisioning intent into an ingest and a rollout
+# through the deployment API. Disabled by default; the data plane serves without it.
+# The chatbot gains its declared provisioning-workflow-orchestrator client only when this is enabled.
+#
+# The ingress /provisioning route is gated on this too, because the provisioning-workflow-orchestrator is
+# the panel's intake (srd004 R1.5). With the control plane off, no provisioning
+# route renders at all -- previously the route rendered against the applier, whose
+# NetworkPolicy admits only the creator, so it was present but dead (GH-502).
+controlPlane:
+  enabled: false
+  provisioningWorkflowOrchestrator:
+    replicas: 1
+    ports: {intent: 18100, control: 18101, monitor: 18102}
+    # The intent port is the panel's only provisioning intake, so it is the one
+    # control-plane surface the ingress controller may reach. Admitting it here is
+    # what lets the browser route work while the applier's apply surface stays
+    # creator-only (srd006 R4.1, srd003 R4.5).
+    #
+    # Name your own ingress controller with these selectors; the defaults match
+    # the minimal Traefik controller installed by the shared kind demo rig
+    # (eng01, GH-1321). Both apply together, so the source must
+    # be an ingress-controller pod in the ingress-controller namespace.
+    networkPolicy:
+      enabled: true
+      ingressController:
+        namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: traefik
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: traefik
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 256Mi}
+  creator:
+    replicas: 1
+    ports: {instance: 18110, control: 18111, monitor: 18112}
+    # Which RAG unit's Chroma the corpus-ingest child writes into, and which the
+    # creator counts before and after that child runs. A mesh has one Chroma per
+    # RAG unit, so this is a choice rather than a lookup: an empty value takes the
+    # first declared unit, which is the only one a single-unit mesh has and the one
+    # an operator means by "the corpus" in a larger one. Name a unit to ingest
+    # elsewhere.
+    ingestRagUnit: ""
+    # The embedding family the ingest child embeds with: provider names the
+    # library its embedder root binds to (srd058 R2.2). Empty follows the release:
+    # the Cohere library when the provider is enabled, and the Ollama one otherwise. srd002 R3.3 excludes any source whose reported
+    # identity differs from the query vector's, so an ingest embedding at the other
+    # family adds a source no turn can retrieve.
+    ingestEmbedding: {provider: "", model: ""}
+    # Where the ingest child reaches an Ollama when it embeds there. A mesh
+    # running the in-cluster LLM tier serves one; without it there is none, and
+    # the default leaves the child on the loopback address a developer host answers.
+    ingestOllamaURL: ""
+    # Chat model the ingest child invokes to select files. Empty leaves the
+    # child profile's own default, which a mesh serving other models will not have.
+    ingestChatModel: ""
+    # The instance endpoint is reached only by the provisioning-workflow-orchestrator (srd005 R1.1, R5.4).
+    # Without this the port is open to every pod in the cluster, and since the
+    # creator is the only pod the applier admits to its apply surface, that is the
+    # widest remaining path to apply (GH-685).
+    networkPolicy:
+      enabled: true
+    resources:
+      requests: {cpu: 50m, memory: 64Mi}
+      limits: {cpu: 500m, memory: 256Mi}

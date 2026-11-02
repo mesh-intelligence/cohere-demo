@@ -1,0 +1,550 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: creator-request-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - request-declarations-types.yaml
+tools:
+  - name: apply_instance
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Realize the decided operation by forwarding the values document to the deployment API's apply path.
+    problem: A decided instance operation must be realized against real instances, and the creator alone holds the deployment-API authority that does so.
+    goals:
+      - Forward the provisioning-workflow-orchestrator's decided values-plane document as the versioned apply request content (srd006 R1.4).
+      - Drive the deployment API to apply it, authoring no values decision.
+      - Advance to the health verification when the deployment API accepts the apply.
+    requirements:
+      input:
+        - The values document (content) is selected from the seeded instance body.
+        - The caller's operation name is selected from the same body and carried, not sent; the deployment API decides nothing from it.
+      output:
+        - Output reports the deployment API's apply status, with the caller's operation carried forward.
+      errors:
+        - A values document the chart's own schema refuses emits InstanceRejected.
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not decide what to change; the values decision is the provisioning-workflow-orchestrator's.
+      - Does not accept a runtime method, URL, host, or credential for the deployment API.
+    output:
+      description: Deployment-API apply status, carrying the caller's operation.
+    side_effects:
+      - kind: external_api
+        target: deployment_api.apply
+        state: instance_applied
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: The deployment API exposes no prior-state handle that can restore a successful apply.
+    errors:
+      - signal: InstanceRejected
+        condition: The deployment API rejected the values document against the chart's values.schema.json.
+        state_after_failure: Nothing was applied and the release is untouched; the request ends in ApplyRejected.
+      - signal: CommandError
+        condition: Network, timeout, schema, or mapping failure reaching the deployment API.
+        state_after_failure: The operation outcome is unknown; the request ends in Failed.
+    relationships:
+      before: [verify_health]
+    config:
+      rest_ref: deployment_api
+      operation: apply_instance
+    signature:
+      input: builtin.Message<creator-request-declarations-types.ApplyInstanceInput>
+      emits:
+        - {signal: InstanceApplied, message: builtin.Message<creator-request-declarations-types.ApplyInstanceOutput>}
+        - {signal: InstanceRejected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The corpus-ingest child run (srd005 R3.1), realized through agent-core's
+  # agent-as-child-CLI contract (agent-core srd021): the creator runs the agent
+  # binary its own image already carries against the corpus-ingest profile.
+  # run_agent is evaluator-specific; profile child dispatch reuses self_invoke
+  # needing a suite path or a point workspace -- and srd021 R1.1 prescribes
+  # exactly this shape: type exec, binary agent.
+  #
+  # The child's exit code is the outcome: agent-core maps a success terminal to 0
+  # and a failure terminal to ExitMachineFailed (cmd/agent/main.go), which exec
+  # surfaces as ToolDone and ToolFailed.
+  - name: run_corpus_ingest
+    type: exec
+    binary: agent
+    # --core-root resolves the /opt/agent-core builtin declaration paths the child
+    # profile references. The defaults are the in-cluster mounted-profile layout
+    # (srd003 R1.3); both are overridable so the same declaration runs from a
+    # local checkout.
+    #
+    # --library binds the child's embedder root to the provider library the
+    # deployment embeds with (srd058 R2.2), so a Cohere tier embeds its corpus at
+    # Cohere while the child's file-selection chat stays on the providers root.
+    # The profile declares the root, and the flag is always passed, so the
+    # default names the same Ollama library the profile does.
+    args:
+      - --profile
+      - "${CORPUS_INGEST_PROFILE:-/profiles/agents/corpus-ingest/profile.yaml}"
+      - --core-root
+      - "${AGENT_CORE_ROOT:-/opt/agent-core}"
+      - --library
+      - "embedder=${AGENT_CORE_ROOT:-/opt/agent-core}/tools/providers/${CORPUS_INGEST_EMBEDDER:-ollama}"
+    # The collection the caller named, handed to the child as environment
+    # (agent-core GH-1884, pinned at v0.20260828.0). The child reads
+    # CORPUS_INGEST_COLLECTION for the collection it writes into
+    # (agents/corpus-ingest/corpus-rest.yaml), and this entry overlays the
+    # creator's own value for the duration of this run, so a request chooses
+    # where its documents go. Until the field existed the child could only
+    # inherit the deployment's collection, and an intent naming another was
+    # refused rather than honoured (GH-192, GH-195).
+    #
+    # The overlay is not a fall-back: an entry whose parameter resolves empty
+    # fails dispatch rather than leaving the inherited value in place. Nothing
+    # reaches here empty, because the ingest endpoint declares collection
+    # required and its only caller requires it on the intent as well.
+    env:
+      - CORPUS_INGEST_COLLECTION={{ params.collection }}
+    category: boundary
+    visibility: internal
+    description: Run a corpus-ingest child agent over the requested directory and into the requested collection, so the creator realizes an ingest operation rather than forwarding it to the deployment API.
+    problem: The creator must create a child agent run per requested directory (srd005 R3.1); its only other client drives the deployment API, which applies values and cannot ingest a corpus.
+    goals:
+      - Run the corpus-ingest profile as a child agent over the requested directory.
+      - Write into the collection the caller named, by overlaying it on the child's inherited environment.
+      - Emit ToolDone when the child reaches a success terminal and ToolFailed when it reaches a failure terminal.
+    requirements:
+      input:
+        - must run the configured corpus-ingest profile with the requested directory as the child workspace
+        - must give the child the requested collection, so the collection resolved, counted, and written is one value
+      output:
+        - must include the child's exit status and captured output
+      errors:
+        - must emit ToolFailed when the child reaches a failure terminal or cannot run
+    non_goals:
+      - Does not decide what to ingest; the provisioning-workflow-orchestrator names the directory and the collection.
+      - Does not verify the outcome; the collection count read does, because a child can exit zero having written nothing.
+      - Does not choose the embedding family; that stays deployment configuration, because an ingest at a family the serving RAG unit does not report leaves every document it wrote unreachable (srd002 R3.3).
+    output:
+      description: corpus-ingest child agent process result.
+    side_effects:
+      - kind: child_process
+        target: corpus_ingest_agent
+        description: Runs the agent binary against the corpus-ingest profile; the child writes embeddings into the Chroma collection the request named.
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    errors:
+      - signal: ToolFailed
+        condition: the child reaches a failure terminal, exhausts its budget, or the binary cannot run
+        message_shape: <captured child agent output>
+        state_after_failure: the requested collection may hold a partial ingest; the request ends in IngestFailed
+    relationships:
+      after: [count_before_ingest]
+      before: [count_after_ingest]
+    undo:
+      strategy: irreversible
+      description: The child may have added external collection records that this parent command cannot identify or remove safely.
+    signature:
+      input: builtin.Message<creator-request-declarations-types.RunCorpusIngestInput>
+      emits:
+        - {signal: ToolDone, message: builtin.Message<creator-request-declarations-types.RunCorpusIngestOutput>}
+        - {signal: ToolFailed, message: builtin.Message<builtin.Text>}
+    argv:
+      - field: collection
+        source: $from(resolve_ingest_collection).body.carried.collection
+      - field: directory
+        flag: --directory
+        source: $from(resolve_ingest_collection).body.carried.directory
+  - name: resolve_ingest_collection
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Resolve the collection the caller named to its id before the child run, so both count reads and the child address the same collection.
+    problem: Chroma's count endpoint addresses a collection by id, and the request carries only a name.
+    goals:
+      - Resolve the requested collection to its id.
+      - Keep the read total by creating the collection when absent, so an ingest that wrote nothing counts zero rather than failing as a missing resource, and a caller's first ingest into a new collection is not a missing resource either.
+      - Carry the requested name forward, so the child run downstream is given the same collection this word resolved.
+    requirements:
+      input:
+        - The collection and directory are mapped from the seeded request; the endpoint declares both required, so neither arrives empty.
+      output:
+        - Output carries the resolved collection id and the name Chroma echoed for it.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not write documents; the child does.
+    output:
+      description: Resolved Chroma collection id and the name Chroma resolved.
+    side_effects:
+      - kind: external_api
+        target: chroma.collection
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Resolving a collection changes no documents.
+    errors:
+      - signal: CommandError
+        condition: Network, timeout, schema, or mapping failure reaching Chroma.
+        state_after_failure: No count is read; the request ends in IngestFailed.
+    relationships:
+      before: [count_before_ingest]
+    config:
+      rest_ref: chroma
+      operation: resolve_ingest_collection
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CollectionResolved, message: builtin.Message<creator-request-declarations-types.ResolveIngestCollectionOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: count_before_ingest
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Read the collection's document count before the child run, establishing the baseline for this run's outcome.
+    problem: A collection can already hold documents, so its total after a child run cannot show whether that run contributed anything.
+    goals:
+      - Read the item count of the resolved collection before the child runs.
+      - Leave the baseline addressable through command state for the later predicate (agent-core srd038).
+    requirements:
+      input:
+        - The collection id is selected from resolve_ingest_collection through command state.
+      output:
+        - Output carries the pre-run collection count.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not judge the run; the predicate compares this baseline with the post-run count.
+      - Does not mutate the collection.
+    output:
+      description: The pre-run collection count, carried as a string because Chroma answers with a bare integer.
+    side_effects:
+      - kind: external_api
+        target: chroma.count
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a count changes nothing.
+    errors:
+      - signal: CommandError
+        condition: Network, timeout, schema, or mapping failure reaching Chroma.
+        state_after_failure: No baseline is recorded and the child does not run; the request ends in IngestFailed.
+    relationships:
+      after: [resolve_ingest_collection]
+      before: [run_corpus_ingest]
+    config:
+      rest_ref: chroma
+      operation: count_ingested_documents
+    signature:
+      input: builtin.Message<creator-request-declarations-types.CountBeforeIngestInput>
+      emits:
+        - {signal: DocumentsCounted, message: builtin.Message<creator-request-declarations-types.CountBeforeIngestOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: count_after_ingest
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Read the collection's document count after the child run, so the creator can measure this run's contribution.
+    problem: A corpus-ingest child can exit zero having written nothing, and a populated collection's total remains non-zero even when the child contributes nothing.
+    goals:
+      - Read the item count of the same collection after the child runs.
+      - Supply the post-run count to the predicate while the pre-run baseline remains in command state.
+    requirements:
+      input:
+        - The collection id is selected from resolve_ingest_collection through command state.
+      output:
+        - Output carries the post-run collection count.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not judge the run; the predicate compares this count with the pre-run baseline.
+      - Does not mutate the collection.
+    output:
+      description: The post-run collection count, carried as a string because Chroma answers with a bare integer.
+    side_effects:
+      - kind: external_api
+        target: chroma.count
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a count changes nothing.
+    errors:
+      - signal: CommandError
+        condition: Network, timeout, schema, or mapping failure reaching Chroma.
+        state_after_failure: No post-run count is reported; the request ends in IngestFailed.
+    relationships:
+      after: [run_corpus_ingest]
+      before: [ingest_wrote_documents]
+    config:
+      rest_ref: chroma
+      operation: count_ingested_documents
+    signature:
+      input: builtin.Message<creator-request-declarations-types.CountAfterIngestInput>
+      emits:
+        - {signal: DocumentsCounted, message: builtin.Message<creator-request-declarations-types.CountAfterIngestOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: requested_family_matches
+    type: builtin
+    init: value_predicate
+    category: word
+    visibility: internal
+    description: Decide whether the embedding family the caller expects is the family this deployment ingests at.
+    problem: |
+      The child embeds at the family the creator's own environment names, and the
+      intent's embedding_model reached this agent and was read by nothing. A
+      caller expecting another family got a 200 and documents written, and every
+      one of them unreachable: srd002 R3.3 excludes a source whose reported
+      identity differs from the query vector's, so nothing told the caller its
+      field had been ignored (GH-205).
+    goals:
+      - Compare the family the caller expects against the one this deployment ingests at, and route a mismatch to its own terminal.
+      - Refuse before the child runs, so an ingest that would be unretrievable writes nothing at all.
+    requirements:
+      input:
+        - The expected family rides resolve_ingest_collection's carry set; the deployment's own is the same reference the child reads.
+      output:
+        - Output reports the comparison that was made and its outcome.
+      errors:
+        - An unresolvable family emits CommandError rather than a mismatch, so a broken read is never reported as the caller having expected the wrong family.
+    non_goals:
+      - Does not choose or change the family; it compares two names and routes. The family the child embeds at stays deployment configuration.
+      - Does not judge the documents; whether the run wrote any is the count delta's question.
+    output:
+      description: The expected and deployed families, the comparison type and operator, and the outcome.
+    side_effects: []
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Comparing two names has no durable effect.
+    relationships:
+      after: [resolve_ingest_collection]
+      before: [count_before_ingest]
+    config:
+      # The left operand is the family the caller expects, carried through the
+      # resolve word: a predicate reads only the previous result, so the seeded
+      # request is out of reach by here.
+      #
+      # The right operand is a literal, not a selector. An operand that starts
+      # with neither $. nor $from( is returned as written, and environment
+      # references expand over this file before it is parsed, so this resolves at
+      # load to the family this deployment ingests at -- the same reference the
+      # corpus-ingest child reads for its own embedding, and the identity the
+      # unit's rag-server reports for the collection (srd002 R3.3).
+      left: $.carried.embedding_model
+      op: eq
+      right: ${CORPUS_EMBEDDING_MODEL:-qwen3-embedding:8b}
+      operand_type: string
+      satisfied: FamilyMatched
+      unsatisfied: FamilyMismatched
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FamilyMatched, message: builtin.Message<creator-request-declarations-types.RequestedFamilyMatchesOutput>}
+        - {signal: FamilyMismatched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: ingest_wrote_documents
+    type: builtin
+    init: value_predicate
+    category: word
+    visibility: internal
+    description: Decide whether the child run met the requested source, by testing whether the post-run count exceeds the pre-run count.
+    problem: A corpus-ingest child reaches its own Succeeded terminal on CountReady whatever the count, and an existing collection can remain non-zero when the child adds nothing; the creator must measure this run rather than the collection total.
+    goals:
+      - Compare the post-run count against the pre-run baseline and route the two outcomes to distinct terminals.
+      - Keep the shortfall decision in the machine, where the branch is readable, rather than in the child's contract.
+    requirements:
+      input:
+        - The post-run count is selected from the previous Result and the pre-run count from count_before_ingest through command state.
+      output:
+        - Output reports the comparison that was made and its outcome.
+      errors:
+        - An unresolvable count emits CommandError rather than a shortfall, so a broken read is never reported as an empty corpus.
+    non_goals:
+      - Does not read or write documents; it compares a number the previous word produced.
+      - Does not judge relevance or content; "met the requested source" means documents were written.
+    output:
+      description: The raw pre-run and post-run counts, numeric comparison type and operator, and outcome.
+    side_effects: []
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Comparing a count changes nothing.
+    errors:
+      - signal: CommandError
+        condition: Either count cannot be resolved or coerced to a number.
+        message_shape: 'ingest_wrote_documents: operand <selector> did not resolve'
+        state_after_failure: No shortfall decision is made; the request ends in IngestFailed rather than reporting an empty corpus.
+    relationships:
+      after: [count_after_ingest]
+    config:
+      # Both counts arrive as strings because Chroma answers with a bare integer
+      # that agent-core stores under raw. The default number operand type compares
+      # them numerically (agent-core srd041 R3.2). The baseline is non-adjacent,
+      # so command state preserves it across the child and post-run count.
+      left: $.mapped.count
+      op: gt
+      right: $from(count_before_ingest).body.mapped.count
+      satisfied: DocumentsWritten
+      unsatisfied: NoDocumentsWritten
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsWritten, message: builtin.Message<creator-request-declarations-types.IngestWroteDocumentsOutput>}
+        - {signal: NoDocumentsWritten, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: report_ingest_outcome
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Put the judged count and the collection the child wrote into one command-state value, so the ingest response can select both.
+    problem: |
+      A machine_request terminal response body resolves only $. selectors, and
+      only against the terminal word's own output. The terminal word for a
+      successful ingest is the count judge, and a value predicate emits exactly
+      left, op, operand_type, held, and right -- so the collection the child
+      actually wrote cannot ride it. Selecting it with $from(resolve_ingest_collection)
+      is not an error either: an unresolvable selector is returned verbatim, so
+      the response carried its own selector text as the collection name (GH-198).
+    goals:
+      - Render the judged post-run count and the resolved collection name as one JSON object.
+      - Be the terminal word for a successful ingest, so both fields are plain $. selectors in the response body.
+    requirements:
+      input:
+        - The count is the post-run count the judge compared; the collection is the name resolve_ingest_collection read back from Chroma.
+      output:
+        - Output is a JSON object carrying count and collection.
+      errors:
+        - An input that does not resolve emits CommandError rather than an empty field, so a missing collection is never reported as a successful ingest into nowhere.
+    non_goals:
+      - Does not judge the ingest; ingest_wrote_documents already did, and this word runs only on the satisfied branch.
+      - Does not read Chroma again; both values are already in command state.
+    output:
+      description: The judged count and the collection the run ingested into.
+    side_effects: []
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Rendering values already in command state has no durable effect.
+    errors:
+      - signal: CommandError
+        condition: Either input selector does not resolve.
+        message_shape: 'report_ingest_outcome: input <name> did not resolve'
+        state_after_failure: No outcome is reported; the request ends in IngestFailed.
+    relationships:
+      after: [ingest_wrote_documents]
+    config:
+      signal: IngestOutcomeReported
+      inputs:
+        # The judge's own left operand, which is the post-run count it compared.
+        count: $from(count_after_ingest).body.mapped.count
+        # The name Chroma echoed for the collection actually resolved, which is
+        # the value the caller needs and the one the old selector aimed at.
+        collection: $from(resolve_ingest_collection).body.mapped.collection_name
+      template: |-
+        {"count": "{{ count }}", "collection": "{{ collection }}"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: IngestOutcomeReported, message: builtin.Message<creator-request-declarations-types.ReportIngestOutcomeOutput>}
+  - name: read_state
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Read the deployed mesh view from the applier's state endpoint, so the provisioning panel's initial load is served by the creator.
+    problem: The panel loads its mesh view from the provisioning-workflow-orchestrator rather than from the deployment API, which no browser may reach, and the creator is the only agent that declares a deployment-API client.
+    goals:
+      - Read the applier-reported RAG topology, LLM configuration, and parameters.
+      - Serve the mesh view the provisioning panel renders on its initial load (srd006 R1.5).
+    requirements:
+      input:
+        - Takes no request-scoped input; the read is unparameterized.
+      output:
+        - Output carries the flat mesh-view fields the applier's state endpoint reports.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError rather than an empty view.
+        - A creator read that answers 502 because the applier could not read the release is outside the declared success status and emits CommandError.
+    non_goals:
+      - Does not drive an instance operation; a state read mutates nothing.
+      - Does not accept a runtime method, URL, host, or credential for the applier.
+    output:
+      description: Applier-reported mesh view -- topology, LLM configuration, and parameters -- as the flat fields the state_response contract declares (srd006 deployment_api_contract).
+    side_effects:
+      - kind: external_api
+        target: deployment_api.state
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading the deployed mesh view changes nothing.
+    errors:
+      - signal: CommandError
+        condition: Network, timeout, schema, or mapping failure reaching the applier.
+        state_after_failure: No mesh view is reported; the request ends in Failed.
+    relationships:
+      overlaps:
+        - tool: verify_health
+          difference: read_state reads the deployed values for the panel's initial view; verify_health reads rollout health to confirm an operation's outcome.
+    config:
+      rest_ref: deployment_api
+      operation: read_state
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: StateReported, message: builtin.Message<creator-request-declarations-types.ReadStateOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: verify_health
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Verify the instance's health through the deployment API's rollout read.
+    problem: A created or restarted instance must be confirmed healthy before the operation is reported complete.
+    goals:
+      - Read the rollout status from the deployment API.
+      - Report the instance health and revision for the provisioning-workflow-orchestrator's aggregated status.
+    requirements:
+      input:
+        - The rollout read takes no request-scoped input beyond the applied operation.
+      output:
+        - Output includes the reported health phase and the Deployment's ready and desired replicas and revision.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+        - A rollout read the applier could not serve answers 502, outside the declared success status, and so emits CommandError rather than a phase.
+    non_goals:
+      - Does not mutate the deployment state; the read is idempotent.
+      - Does not accept a runtime method, URL, host, or credential for the deployment API.
+    output:
+      description: Deployment-API rollout health and the Deployment's replica counts and revision.
+    side_effects:
+      - kind: external_api
+        target: deployment_api.rollout
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading the rollout status does not mutate state.
+    errors:
+      - signal: CommandError
+        condition: Network, timeout, schema, or mapping failure reaching the deployment API.
+        state_after_failure: The instance health is unknown; the request ends in Failed.
+    relationships:
+      after: [apply_instance]
+    config:
+      rest_ref: deployment_api
+      operation: read_rollout
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: HealthReported, message: builtin.Message<creator-request-declarations-types.VerifyHealthOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

@@ -1,0 +1,2615 @@
+// Copyright (c) 2026 Mesh Intelligence Inc.
+// SPDX-License-Identifier: MIT-0
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/mesh-intelligence/declarative-agents/magefiles/kindrig"
+)
+
+const (
+	helmRelease         = "smoke"
+	helmImageRepository = "declarative-agents/agent-core"
+
+	helmInstallTimeout   = 5 * time.Minute
+	helmImageLoadTimeout = 3 * time.Minute
+	helmReadyTimeout     = 90 * time.Second
+	helmSpanTimeout      = 60 * time.Second
+
+	helmFailureDiagnosticsTimeout = 30 * time.Second
+	helmEvidenceCommandTimeout    = 10 * time.Second
+)
+
+// chatbotIntegrationImages names the commit-tagged images the integrations
+// build. The applier runs Runtime: its helm and kubectl come from the pinned CLI
+// donor (GH-2222), so no applier image is built.
+type chatbotIntegrationImages struct {
+	Revision string
+	Runtime  string
+	Exporter string
+}
+
+// exporterImageRepository names the locally built exporter image (srd013
+// R6.2): the agent-core runtime plus the rendering toolchain, built from
+// this application's images/exporter.Dockerfile.
+const exporterImageRepository = "cohere-demo/exporter"
+
+// commitImage names this application's own first-party image at a commit.
+// Upstream kindrig.CommitImage now serves only the agent-core runtime
+// repository (typed image identity, pre-fork upstream GH-2506), so the exporter keeps its
+// prior repository:12-hex form here.
+func commitImage(repository, revision string) (string, error) {
+	revision = strings.TrimSpace(revision)
+	if len(revision) < 12 {
+		return "", fmt.Errorf("git revision %q must carry at least 12 hexadecimal characters", revision)
+	}
+	return repository + ":" + strings.ToLower(revision[:12]), nil
+}
+
+// buildExporterImage builds the exporter image over the verified runtime
+// image. Docker's layer cache makes a repeat build a no-op; the TeX tree
+// install pays once per runtime revision.
+func buildExporterImage(root, runtimeImage, image string) error {
+	// The context is the images directory alone: the recipe copies nothing
+	// from context, and the application root drags the corpus and document
+	// store -- hundreds of megabytes docker would tar before every build.
+	cmd := exec.Command("docker", "build",
+		"-f", filepath.Join(root, "images", "exporter.Dockerfile"),
+		"--build-arg", "RUNTIME_IMAGE="+runtimeImage,
+		"-t", image, filepath.Join(root, "images"))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("build exporter image: %w: %s", err, tailOfOutput(string(output)))
+	}
+	return nil
+}
+
+func tailOfOutput(output string) string {
+	const keep = 2000
+	if len(output) <= keep {
+		return strings.TrimSpace(output)
+	}
+	return strings.TrimSpace(output[len(output)-keep:])
+}
+
+// resolveChatbotIntegrationImages names the images the demo and the helm
+// integrations build and load. Both ship agent-core, so both are tagged with
+// the agent-core revision rather than this repository's commit: the tag has to
+// change when the content does, and the application commit moves for reasons
+// that leave the image identical (GH-110).
+func resolveChatbotIntegrationImages(repoRoot string) (chatbotIntegrationImages, error) {
+	commit, err := agentCoreRevision(repoRoot)
+	if err != nil {
+		return chatbotIntegrationImages{}, err
+	}
+	runtimeImage, revision, err := kindrig.CommitImage(helmImageRepository, commit)
+	if err != nil {
+		return chatbotIntegrationImages{}, fmt.Errorf("resolve runtime image revision: %w", err)
+	}
+	exporterImage, err := commitImage(exporterImageRepository, commit)
+	if err != nil {
+		return chatbotIntegrationImages{}, fmt.Errorf("resolve exporter image revision: %w", err)
+	}
+	return chatbotIntegrationImages{
+		Revision: revision, Runtime: runtimeImage, Exporter: exporterImage,
+	}, nil
+}
+
+// applicationChartDir returns the chatbot-mesh Helm chart under the application, which
+// ships with the application rather than as a sibling deploy directory.
+func applicationChartDir(profilesRoot string) string {
+	return filepath.Join(profilesRoot, "helm")
+}
+
+func loadKindImageWithCommands(
+	commands kindrig.Commands,
+	cluster, image string,
+) error {
+	ctx, cancel := context.WithTimeout(context.Background(), helmImageLoadTimeout)
+	defer cancel()
+	return kindrig.LoadImage(ctx, commands.KindRunContext, cluster, image)
+}
+
+// HelmSmoke deploys the chatbot-mesh chart on a disposable kind cluster with the
+// ci values and proves the mesh stands up, serves a chat turn, and exports spans
+// from more than one service. It gates on docker, kind, helm, and kubectl and on
+// an Ollama with the chatbot's configured models, recording a skip reason for
+// each missing dependency rather than failing. Teardown (kind delete) runs in
+// all paths.
+//
+// Scope: this is the deploy smoke bar (srd003 R1/R5, uc rel03.0 S1). The span
+// assertion needs each agent to report a distinct service.name, which the chart
+// wires (chatbot and each rag unit) so the collector spool surfaces the mesh as
+// more than one service.
+func (Integration) HelmSmoke() error {
+	profilesRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	coreRoot := demoCoreRoot(profilesRoot)
+	chartDir := applicationChartDir(profilesRoot)
+	if err := requireProfilePaths(profilesRoot,
+		"agents/chatbot/profile.yaml", "agents/chatbot/rest.yaml",
+		"agents/rag-server/profile.yaml",
+	); err != nil {
+		return err
+	}
+	if _, err := os.Stat(filepath.Join(chartDir, "Chart.yaml")); err != nil {
+		return fmt.Errorf("chatbot-mesh chart not found at %s: %w", chartDir, err)
+	}
+	if reason := helmSmokeSkipReason(profilesRoot, coreRoot); reason != "" {
+		fmt.Printf("SKIP helmSmoke: %s\n", reason)
+		return nil
+	}
+	return runHelmSmoke(coreRoot, profilesRoot, chartDir)
+}
+
+// helmSmokeSkipReason reports why the smoke test cannot run, or "" when every
+// dependency is present. Missing tooling, no agent-core checkout, and an Ollama
+// without the configured models each yield a recorded skip rather than a failure.
+func helmSmokeSkipReason(profilesRoot, coreRoot string) string {
+	for _, bin := range []string{"docker", "kind", "helm", "kubectl"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			return fmt.Sprintf("%s not found on PATH", bin)
+		}
+	}
+	if !agentCoreAvailable(coreRoot) {
+		return fmt.Sprintf("agent-core checkout not found at %s (set core_root in demo.yaml)", coreRoot)
+	}
+	return chatbotOllamaSkipReason(profilesRoot)
+}
+
+type helmTelemetryIdentity struct {
+	OTLPEndpoint string
+	RunID        string
+	Commit       string
+	Started      time.Time
+}
+
+func newHelmTelemetryIdentity(repoRoot string) helmTelemetryIdentity {
+	runID := generatedRunID("integration:helmSmoke")
+	commit := gitCommit(repoRoot)
+	endpoint := demoIntegrationOTLPEndpoint()
+	if endpoint == "" {
+		endpoint = "host.docker.internal:" + demoObservability().OTELGRPCPort
+	} else {
+		endpoint = strings.Replace(endpoint, "127.0.0.1", "host.docker.internal", 1)
+		endpoint = strings.Replace(endpoint, "localhost", "host.docker.internal", 1)
+	}
+	return helmTelemetryIdentity{
+		OTLPEndpoint: endpoint, RunID: runID, Commit: commit, Started: time.Now(),
+	}
+}
+
+func collectorQueryBase() string {
+	return "http://127.0.0.1:" + demoObservability().QueryPort
+}
+
+func collectorControlBase() string {
+	return "http://127.0.0.1:" + demoObservability().ControlPort
+}
+
+func requireSharedObservability(timeout time.Duration) error {
+	if err := (Observability{}).Up(); err != nil {
+		return fmt.Errorf("start source-matched shared observability: %w", err)
+	}
+	checks := []string{
+		collectorControlBase() + "/api/lifecycle/health",
+		collectorQueryBase() + "/query/traces",
+		collectorQueryBase() + "/query/metrics",
+	}
+	for _, endpoint := range checks {
+		if err := waitHTTPStatus(endpoint, http.StatusOK, timeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runHelmSmoke(coreRoot, profilesRoot, chartDir string) (result error) {
+	images, err := resolveChatbotIntegrationImages(profilesRoot)
+	if err != nil {
+		return err
+	}
+	telemetry := newHelmTelemetryIdentity(profilesRoot)
+	if err := requireSharedObservability(helmReadyTimeout); err != nil {
+		return fmt.Errorf("shared observability stack is required: %w", err)
+	}
+	fmt.Printf("helmSmoke: building runtime image %s from %s\n", images.Runtime, coreRoot)
+	if err := buildSmokeRuntimeImage(coreRoot, images.Runtime); err != nil {
+		return err
+	}
+	stagedChart, cleanupChart, err := stageSmokeChart(chartDir, profilesRoot)
+	if err != nil {
+		return err
+	}
+	defer cleanupChart()
+	assets, cleanupAssets, err := externalizeUIAssets(stagedChart, helmRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupAssets()
+	profiles, cleanupProfiles, err := externalizeProfiles(stagedChart, helmRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupProfiles()
+	chartArchive, cleanupArchive, err := packageApplierChart(stagedChart)
+	if err != nil {
+		return err
+	}
+	defer cleanupArchive()
+	dependencyImages, err := smokeDependencyImages(chartDir)
+	if err != nil {
+		return err
+	}
+	if err := pullIntegrationDependencyImages(
+		"helmSmoke", dependencyImages, runHelmSmokeCommand); err != nil {
+		return err
+	}
+
+	cluster, err := acquireIntegrationCluster(profilesRoot)
+	if err != nil {
+		return err
+	}
+	commands, cleanupCommands, err := kindrig.ClusterCommands(
+		kindrig.CaptureRun, cluster.Name)
+	if err != nil {
+		cluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	defer cleanupCommands()
+	namespace, cleanupNamespace, err := prepareScenarioNamespace(
+		commands.Run, "helm-smoke", helmRelease)
+	if err != nil {
+		cluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	cleanupNamespaceFn := cleanupNamespace
+	defer func() { result = errors.Join(result, cleanupNamespaceFn()) }()
+	released := false
+	evidenceDir := helmScenarioEvidenceDirectory(
+		profilesRoot, cluster.Name, images.Revision)
+	evidence := kindrig.FailureEvidence{
+		Directory:  evidenceDir,
+		Namespaces: []string{namespace},
+		Run: boundedHelmEvidenceRunnerWith(
+			helmDiagnosticRunner(commands.RunContext), helmEvidenceCommandTimeout),
+	}
+	defer func() {
+		failed := result != nil
+		if failed {
+			diagnostics := captureHelmFailureDiagnostics(
+				evidenceDir, helmRelease,
+				helmDiagnosticRunner(commands.RunContext),
+				helmFailureDiagnosticsTimeout)
+			result = fmt.Errorf("%w\n%s", result, diagnostics)
+		}
+		if !released {
+			if releaseAggregateKindCluster(
+				cluster, commands.KindRun, evidence, result,
+			) {
+				if failed && scenarioClusterGone(cluster.Name) {
+					cleanupNamespaceFn = func() error { return nil }
+				}
+			} else {
+				result = errors.Join(result, releaseDirectScenarioCluster(
+					cluster, commands.KindRun, failed, evidence, &cleanupNamespaceFn))
+			}
+		}
+	}()
+
+	cleanupMetrics, err := kindrig.InstallMetricsServer(
+		commands.Run, cluster.Name)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cleanupMetrics != nil {
+			result = errors.Join(result, cleanupMetrics())
+		}
+	}()
+
+	if err := provisionExternalUIAssets(commands.Run, assets); err != nil {
+		return err
+	}
+	if err := provisionExternalProfiles(commands.Run, profiles); err != nil {
+		return err
+	}
+	if err := loadKindImageWithCommands(
+		commands, cluster.Name, images.Runtime); err != nil {
+		return err
+	}
+	for _, image := range dependencyImages {
+		if err := loadSmokeDependencyImageWithCommands(
+			commands, cluster.Name, image); err != nil {
+			return err
+		}
+	}
+	if err := helmInstallSmokeWithRunner(
+		stagedChart, chartArchive, images.Runtime, telemetry, assets, profiles, commands.Run); err != nil {
+		return err
+	}
+	if err := assertHelmIntegrationRelease(
+		commands.Run, helmRelease, chartArchive, assets, 1); err != nil {
+		return err
+	}
+	if err := assertExternalUIAssetsMountedWithRunner(
+		commands.Run, helmRelease, assets, helmReadyTimeout); err != nil {
+		return err
+	}
+
+	localPorts, err := reserveLoopbackPorts(3)
+	if err != nil {
+		return err
+	}
+	chatURL := loopbackURL(localPorts[0], "/api/v1/chat")
+	healthURL := loopbackURL(localPorts[1], "/api/lifecycle/health")
+	observerURL := loopbackURL(localPorts[2], "")
+	stopObserver, err := kubectlPortForwardPairs(commands,
+		"svc/"+helmRelease+"-chatbot-mesh-observer",
+		portForwardPair{local: localPorts[2], remote: 18202})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if stopObserver != nil {
+			stopObserver()
+		}
+	}()
+
+	stop, err := kubectlPortForwardPairs(
+		commands, "svc/"+helmRelease+"-chatbot-mesh-chatbot",
+		portForwardPair{local: localPorts[0], remote: 18080},
+		portForwardPair{local: localPorts[1], remote: 18081})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
+	if err := waitHTTPStatus(healthURL, http.StatusOK, helmReadyTimeout); err != nil {
+		return fmt.Errorf("chatbot control health not ready: %w", err)
+	}
+	// Checked before the turn that is supposed to produce its spans, so a
+	// collector that cannot start is reported as itself (GH-736).
+	if err := assertCollectorAvailable(
+		commands.Run, helmRelease, helmReadyTimeout); err != nil {
+		return err
+	}
+	if err := assertCollectorOTLPReady(commands, helmRelease, helmReadyTimeout); err != nil {
+		return err
+	}
+	if err := assertSmokeChatServed(chatURL); err != nil {
+		return err
+	}
+	if err := assertCollectorSpoolIdentity(commands.Run, helmRelease, telemetry.RunID,
+		[]string{"chatbot", "rag0"}, helmSpanTimeout); err != nil {
+		return err
+	}
+	if err := assertNoCollectorSelfIngest(
+		commands.Run, helmRelease, telemetry.RunID); err != nil {
+		return err
+	}
+	if err := verifySharedMetricsEvidence(
+		collectorQueryBase(), telemetry, helmSpanTimeout); err != nil {
+		return err
+	}
+	if err := assertObserverHelmFleet(
+		commands.Run, observerURL, helmRelease, helmReadyTimeout); err != nil {
+		return err
+	}
+	if err := assertObserverFleetPodMetrics(
+		observerURL, helmReadyTimeout); err != nil {
+		return err
+	}
+	if err := assertObserverServesEmbeddedUI(
+		observerURL, []string{"chatbot", "rag0"}, helmReadyTimeout); err != nil {
+		return err
+	}
+	stop()
+	stop = nil
+	stopObserver()
+	stopObserver = nil
+	if err := cleanupMetrics(); err != nil {
+		return err
+	}
+	cleanupMetrics = nil
+	if !releaseAggregateKindCluster(cluster, commands.KindRun, evidence, nil) {
+		if err := releaseDirectScenarioCluster(
+			cluster, commands.KindRun, false, kindrig.FailureEvidence{},
+			&cleanupNamespaceFn); err != nil {
+			released = true
+			return err
+		}
+	}
+	released = true
+	if err := verifySharedMetricsEvidence(
+		collectorQueryBase(), telemetry, helmSpanTimeout); err != nil {
+		return err
+	}
+
+	fmt.Printf("integration:helmSmoke PASS - revision %s spool and collector retained agent and Dolt metric evidence for run %s after cluster cleanup\n",
+		images.Revision, telemetry.RunID)
+	return nil
+}
+
+type smokeImage struct {
+	Repository string `yaml:"repository"`
+	Tag        string `yaml:"tag"`
+}
+
+const smokeUtilityImage = "busybox:1.36"
+
+// smokeDependencyImages returns every external image used by the kind smoke
+// topology when its Ollama tier is disabled. Keeping the complete set on the
+// host-pull/kind-load path prevents kind's containerd from reaching a registry
+// directly, which fails behind TLS-intercepting proxies that only the host
+// container engine trusts (GH-1321).
+func smokeDependencyImages(chartDir string) ([]string, error) {
+	var values struct {
+		Collector struct {
+			Image smokeImage `yaml:"image"`
+		} `yaml:"collector"`
+		Chroma struct {
+			Image smokeImage `yaml:"image"`
+		} `yaml:"chroma"`
+		Dolt struct {
+			Image smokeImage `yaml:"image"`
+		} `yaml:"dolt"`
+		Observer struct {
+			Proxy struct {
+				Image smokeImage `yaml:"image"`
+			} `yaml:"proxy"`
+		} `yaml:"observer"`
+	}
+	if err := readIntegrationYAML(filepath.Join(chartDir, "values.yaml"), "chart values", &values); err != nil {
+		return nil, err
+	}
+	refs := []smokeImage{
+		values.Collector.Image,
+		values.Chroma.Image,
+		values.Dolt.Image,
+		values.Observer.Proxy.Image,
+	}
+	images := make([]string, 0, len(refs)+1)
+	for _, image := range refs {
+		if image.Repository == "" || image.Tag == "" {
+			return nil, fmt.Errorf("smoke dependency image requires repository and tag")
+		}
+		images = append(images, image.Repository+":"+image.Tag)
+	}
+	return append(images, smokeUtilityImage), nil
+}
+
+// swapDependencyImages deliberately closes over the same external pod-image set
+// as helmSmoke. Swap changes topology, not its dependency boundary.
+func swapDependencyImages(chartDir string) ([]string, error) {
+	return smokeDependencyImages(chartDir)
+}
+
+func pullIntegrationDependencyImages(
+	scenario string,
+	images []string,
+	run helmLLMCommandRunner,
+) error {
+	for _, image := range images {
+		source := image
+		if image == helmLLMOllamaImage {
+			source = helmLLMOllamaSourceImage
+		}
+		reused, err := reusePreparedHostImage(run, source)
+		if err != nil {
+			return err
+		}
+		if reused {
+			continue
+		}
+		fmt.Printf("%s: preloading dependency image %s\n", scenario, source)
+		out, err := run("docker", "pull", "--platform", "linux/"+runtime.GOARCH, source)
+		if err != nil {
+			return fmt.Errorf("pull %s dependency %s: %w: %s",
+				scenario, source, err, strings.TrimSpace(string(out)))
+		}
+		if err := recordPreparedHostImage(run, source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+const (
+	trustedOllamaRecipeLabel   = "io.declarative-agents.ollama.recipe"
+	trustedOllamaPlatformLabel = "io.declarative-agents.ollama.platform"
+)
+
+func buildTrustedOllamaImage(image string) (string, error) {
+	caBundle, err := hostTrustedCABundle()
+	if err != nil {
+		return "", err
+	}
+	platform := "linux/" + runtime.GOARCH
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		"trusted-ollama-image/v1",
+		trustedOllamaDockerfile(),
+		string(caBundle),
+		platform,
+	}, "\x00")))
+	recipe := fmt.Sprintf("sha256:%x", sum)
+	if imageID, matches := inspectTrustedOllamaImage(image, recipe, platform); matches {
+		fmt.Printf("helmLLMTier: reusing trusted Ollama runtime %s digest=%s\n",
+			image, imageID)
+		return imageID, nil
+	}
+	dir, err := os.MkdirTemp("", "chatbot-mesh-ollama-trust-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	if err := os.WriteFile(
+		filepath.Join(dir, "host-ca.pem"), caBundle, 0o644); err != nil {
+		return "", fmt.Errorf("write trusted Ollama CA bundle: %w", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "Dockerfile"),
+		[]byte(trustedOllamaDockerfile()), 0o644); err != nil {
+		return "", fmt.Errorf("write trusted Ollama Dockerfile: %w", err)
+	}
+	args := trustedOllamaBuildArgs(image, recipe, platform)
+	cmd := exec.Command("docker", args...)
+	cmd.Dir = dir
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("build trusted Ollama image %s: %w", image, err)
+	}
+	imageID, matches := inspectTrustedOllamaImage(image, recipe, platform)
+	if !matches {
+		return "", fmt.Errorf(
+			"built trusted Ollama image %s does not carry its verified recipe and platform identity",
+			image)
+	}
+	return imageID, nil
+}
+
+func trustedOllamaBuildArgs(image, recipe, platform string) []string {
+	return []string{
+		"build", "--platform", platform, "--provenance=false",
+		"--label", trustedOllamaRecipeLabel + "=" + recipe,
+		"--label", trustedOllamaPlatformLabel + "=" + platform,
+		"-t", image, ".",
+	}
+}
+
+func inspectTrustedOllamaImage(
+	image, recipe, platform string,
+) (string, bool) {
+	output, err := exec.Command("docker", "image", "inspect", image).Output()
+	if err != nil {
+		return "", false
+	}
+	return trustedOllamaInspectPayload(output, recipe, platform)
+}
+
+func trustedOllamaInspectPayload(
+	output []byte,
+	recipe, platform string,
+) (string, bool) {
+	var inspected []struct {
+		ID           string
+		Os           string
+		Architecture string
+		Config       struct {
+			Labels map[string]string
+		}
+	}
+	if json.Unmarshal(output, &inspected) != nil || len(inspected) != 1 {
+		return "", false
+	}
+	item := inspected[0]
+	matches := strings.HasPrefix(item.ID, "sha256:") &&
+		item.Os+"/"+item.Architecture == platform &&
+		item.Config.Labels[trustedOllamaRecipeLabel] == recipe &&
+		item.Config.Labels[trustedOllamaPlatformLabel] == platform
+	return item.ID, matches
+}
+
+func trustedOllamaDockerfile() string {
+	return "FROM " + helmLLMOllamaSourceImage + "\n" +
+		"COPY host-ca.pem /tmp/host-ca.pem\n" +
+		"RUN cat /tmp/host-ca.pem >> /etc/ssl/certs/ca-certificates.crt && rm /tmp/host-ca.pem\n"
+}
+
+func hostTrustedCABundle() ([]byte, error) {
+	//nolint:forbidigo // SSL_CERT_FILE is the OS and Go convention naming the host CA bundle; honoring it is reading a third-party contract, not repository configuration (GH-1481).
+	if path := strings.TrimSpace(os.Getenv("SSL_CERT_FILE")); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read SSL_CERT_FILE for trusted Ollama image: %w", err)
+		}
+		return data, nil
+	}
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command(
+			"security", "find-certificate", "-a", "-p",
+			"/Library/Keychains/System.keychain").CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf(
+				"export macOS system trust for Ollama: %w: %s",
+				err, strings.TrimSpace(string(out)))
+		}
+		if len(bytes.TrimSpace(out)) == 0 {
+			return nil, fmt.Errorf("export macOS system trust for Ollama: empty certificate bundle")
+		}
+		return out, nil
+	}
+	for _, path := range []string{
+		"/etc/ssl/certs/ca-certificates.crt",
+		"/etc/pki/tls/certs/ca-bundle.crt",
+	} {
+		data, err := os.ReadFile(path)
+		if err == nil && len(bytes.TrimSpace(data)) > 0 {
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"host CA bundle unavailable; set SSL_CERT_FILE to the trusted PEM bundle")
+}
+
+func loadIntegrationDependencyImages(
+	commands kindrig.Commands,
+	cluster string,
+	images []string,
+) error {
+	for _, image := range images {
+		if err := loadSmokeDependencyImageWithCommands(
+			commands, cluster, image); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadSmokeDependencyImageWithCommands(
+	commands kindrig.Commands,
+	cluster, image string,
+) error {
+	present, err := kindNodeHasImage(commands, cluster, image)
+	if err != nil {
+		return err
+	}
+	if present {
+		fmt.Printf("shared kind: reusing prepared node image %s\n", image)
+		return nil
+	}
+	save := commands.Command("docker", "save", image)
+	stream, err := save.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	node := cluster + "-control-plane"
+	load := commands.Command("docker", "exec", "-i", node, "ctr", "--namespace=k8s.io",
+		"images", "import", "--platform=linux/"+runtime.GOARCH, "--snapshotter=overlayfs", "-")
+	load.Stdin = stream
+	var output bytes.Buffer
+	load.Stdout, load.Stderr = &output, &output
+	if err := load.Start(); err != nil {
+		return err
+	}
+	if err := save.Run(); err != nil {
+		_ = load.Process.Kill()
+		_ = load.Wait()
+		return fmt.Errorf("save smoke dependency %s: %w", image, err)
+	}
+	if err := load.Wait(); err != nil {
+		return fmt.Errorf("load smoke dependency %s: %w: %s", image, err, strings.TrimSpace(output.String()))
+	}
+	return nil
+}
+
+func kindNodeHasImage(
+	commands kindrig.Commands,
+	cluster, image string,
+) (bool, error) {
+	node := cluster + "-control-plane"
+	output, err := commands.Run(
+		"docker", "exec", node, "ctr", "--namespace=k8s.io", "images", "ls", "-q")
+	if err != nil {
+		return false, fmt.Errorf("list prepared images on %s: %w: %s",
+			node, err, strings.TrimSpace(string(output)))
+	}
+	normalized := normalizedDockerImageReference(image)
+	for _, reference := range strings.Fields(string(output)) {
+		if reference == image || reference == normalized {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func normalizedDockerImageReference(image string) string {
+	name := strings.SplitN(image, "@", 2)[0]
+	slash := strings.IndexByte(name, '/')
+	if slash < 0 {
+		return "docker.io/library/" + image
+	}
+	first := name[:slash]
+	if strings.ContainsAny(first, ".:") || first == "localhost" {
+		return image
+	}
+	return "docker.io/" + image
+}
+
+// buildSmokeRuntimeImage verifies and reuses the commit-addressed canonical
+// Agent Core image. kindrig rebuilds only when revision, recipe, or platform
+// identity differs, so all aggregate targets consume one tested artifact.
+func buildSmokeRuntimeImage(coreRoot, image string) error {
+	_, err := kindrig.EnsureAgentCoreImage(coreRoot, image)
+	return err
+}
+
+func smokeRuntimeBuildArgs(image string) []string {
+	return kindrig.AgentCoreImageBuildArgs(image)
+}
+
+// stageSmokeChart copies the classified chart source to a temp directory and
+// stages the exact manifest-derived closure and provenance used by packaging.
+func stageSmokeChart(chartDir, profilesRoot string) (string, func(), error) {
+	catalogRoot, err := resolveCatalogRoot("chatbot-mesh Helm staging", profilesRoot)
+	if err != nil {
+		return "", nil, err
+	}
+	staged, err := os.MkdirTemp("", "chatbot-mesh-chart-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(staged) }
+	dst := filepath.Join(staged, "chatbot-mesh")
+	if err := stageChatbotChartSource(chartDir, dst); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	if err := vendorAgentServices(dst); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	if err := stageChatbotComposition(dst, profilesRoot, catalogRoot); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return dst, cleanup, nil
+}
+
+func copyDirContents(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dst, err)
+	}
+	cmd := exec.Command("cp", "-a", src+"/.", dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("copy %s -> %s: %s: %w", src, dst, strings.TrimSpace(string(out)), err)
+	}
+	return makeTreeWritable(dst)
+}
+
+// makeTreeWritable restores the owner write bit across a staged copy. `cp -a`
+// preserves permissions, and a source that resolved to the Go module cache is
+// read-only, so the staged tree inherits that and the staging steps that write
+// into it fail with a permission error. The staged copy is a scratch tree the
+// build owns; the source is left untouched (GH-110).
+func makeTreeWritable(root string) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode()
+		if mode&fs.ModeSymlink != 0 || mode.Perm()&0o200 != 0 {
+			return nil
+		}
+		if chmodErr := os.Chmod(path, mode.Perm()|0o200); chmodErr != nil {
+			return fmt.Errorf("make staged copy writable at %s: %w", path, chmodErr)
+		}
+		return nil
+	})
+}
+
+func helmInstallSmoke(
+	chartPath, chartArchive, image string,
+	telemetry helmTelemetryIdentity,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+) error {
+	return helmInstallSmokeWithRunner(
+		chartPath, chartArchive, image, telemetry, assets, profiles, runHelmSmokeCommand)
+}
+
+func helmInstallSmokeWithRunner(
+	chartPath, chartArchive, image string,
+	telemetry helmTelemetryIdentity,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+	run helmLLMCommandRunner,
+) error {
+	valueArgs := helmSmokeValueArgs(chartPath, image, telemetry, assets, profiles)
+	measured, err := measureHelmReleaseBudget(
+		helmRelease, chartPath, chartArchive, valueArgs)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("helmSmoke: release budget PASS - %s\n", measured.String())
+	args := append([]string{"install", helmRelease, chartPath}, valueArgs...)
+	args = append(args, "--wait", "--timeout", helmInstallTimeout.String())
+	out, err := run("helm", args...)
+	if len(out) > 0 {
+		_, _ = os.Stderr.Write(out)
+	}
+	if err != nil {
+		return fmt.Errorf("helm install %s: %w: %s", helmRelease, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func helmSmokeValueArgs(
+	chartPath, image string,
+	telemetry helmTelemetryIdentity,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+) []string {
+	repo, tag := splitImageRef(image)
+	args := []string{
+		"--values", filepath.Join(chartPath, "ci", "kind-values.yaml"),
+		"--set", "image.repository=" + repo,
+		"--set-string", "image.tag=" + tag,
+		"--set", "image.pullPolicy=Never",
+		"--set", "llm.externalURL=http://host.docker.internal:11434",
+		"--set-string", "collector.externalOTLPEndpoint=" + telemetry.OTLPEndpoint,
+		"--set-string", "collector.integrationResource.target=integration:helmSmoke",
+		"--set-string", "collector.integrationResource.commit=" + telemetry.Commit,
+		"--set-string", "collector.integrationResource.runID=" + telemetry.RunID,
+	}
+	args = append(args, externalUIAssetValueArgs(assets)...)
+	return append(args, externalProfileValueArgs(profiles)...)
+}
+
+func provisionExternalUIAssets(
+	run helmLLMCommandRunner,
+	assets []externalUIAsset,
+) error {
+	for _, asset := range assets {
+		if err := provisionExternalUIAssetWithRunner(run, asset); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// assertHelmIntegrationRelease checks every stored revision against the release
+// budget, then proves that the revision just created exists. The second check is
+// significant for the swap gate, where a successful-looking upgrade must create
+// v2 rather than leave only the install Secret.
+func assertHelmIntegrationRelease(
+	run helmLLMCommandRunner,
+	releaseName, chartArchive string,
+	assets []externalUIAsset,
+	revision int,
+) error {
+	if err := assertHelmReleaseSecretsWithRunner(
+		run, releaseName, chartArchive, assets); err != nil {
+		return err
+	}
+	name := fmt.Sprintf("sh.helm.release.v1.%s.v%d", releaseName, revision)
+	out, err := run("kubectl", "get", "secret", name)
+	if err != nil {
+		return fmt.Errorf("Helm release %s revision %d Secret missing: %w: %s",
+			releaseName, revision, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+var runHelmSmokeCommand helmLLMCommandRunner = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+// splitImageRef splits repo:tag on the last colon so a registry port in the repo
+// is preserved.
+func splitImageRef(image string) (repo, tag string) {
+	if i := strings.LastIndex(image, ":"); i >= 0 && !strings.Contains(image[i:], "/") {
+		return image[:i], image[i+1:]
+	}
+	return image, "latest"
+}
+
+// kubectlPortForward forwards each remote port to the same local port and returns
+// a stop function. Fixed local ports keep the assertion URLs constant; the smoke
+// test owns the loopback ports for its duration.
+func kubectlPortForwardWithCommands(
+	commands kindrig.Commands,
+	target string,
+	ports ...int,
+) (func(), error) {
+	pairs := make([]portForwardPair, 0, len(ports))
+	for _, p := range ports {
+		pairs = append(pairs, portForwardPair{local: p, remote: p})
+	}
+	return kubectlPortForwardPairs(commands, target, pairs...)
+}
+
+// assertSmokeChatServed posts one chat turn and asserts the mesh answered (200
+// with a non-empty answer). The deploy smoke bar is that the served
+// machine_request endpoint routes a turn through the chatbot in cluster.
+func assertSmokeChatServed(url string) error {
+	return assertChatServedWithMessage(
+		url, "Summarize the most relevant record you can retrieve.")
+}
+
+func assertLLMChatServed(url string) error {
+	return assertChatServedWithMessage(
+		url, "Name one fact from the retrieved record in five words.")
+}
+
+func assertChatServedWithMessage(url, message string) error {
+	body, err := json.Marshal(map[string]string{"message": message})
+	if err != nil {
+		return err
+	}
+	data, status, err := requestInference(
+		http.MethodPost, url, string(body), "in-cluster chat turn")
+	if err != nil {
+		return fmt.Errorf("chat request: %w", err)
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("chat turn status %d: %s", status, strings.TrimSpace(string(data)))
+	}
+	var resp struct {
+		Answer string `json:"answer"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return fmt.Errorf("decode chat response: %w: %s", err, strings.TrimSpace(string(data)))
+	}
+	if strings.TrimSpace(resp.Answer) == "" {
+		return fmt.Errorf("chat turn returned an empty answer: %s", strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+// assertCollectorAvailable waits for the collector Deployment to report
+// available. Nothing else in the smoke touches the collector, so before GH-736
+// a collector that never started surfaced only as an empty spool after the span
+// timeout -- a symptom two hops from the cause.
+func assertCollectorAvailable(
+	run helmLLMCommandRunner,
+	release string,
+	timeout time.Duration,
+) error {
+	target := "deploy/" + release + "-chatbot-mesh-collector"
+	out, err := run("kubectl", "wait", "--for=condition=available", target,
+		fmt.Sprintf("--timeout=%ds", int(timeout.Seconds())))
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("collector never became available: %v: %s%s",
+		err, strings.TrimSpace(string(out)), collectorDiagnostics(run, release))
+}
+
+func assertCollectorOTLPReady(
+	commands kindrig.Commands,
+	release string,
+	timeout time.Duration,
+) error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("reserve collector OTLP probe port: %w", err)
+	}
+	localPort := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	resource := "svc/" + release + "-chatbot-mesh-collector"
+	return assertCollectorOTLPReadyWith(
+		localPort,
+		func(port int) (func(), error) {
+			cmd := commands.Command(
+				"kubectl", "port-forward", resource, fmt.Sprintf("%d:4317", port))
+			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+			if err := cmd.Start(); err != nil {
+				return nil, fmt.Errorf("kubectl port-forward %s: %w", resource, err)
+			}
+			return func() {
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+				_ = cmd.Wait()
+			}, nil
+		},
+		probeCollectorTCP,
+		timeout,
+	)
+}
+
+func assertCollectorOTLPReadyWith(
+	localPort int,
+	startForward func(int) (func(), error),
+	probe func(string, time.Duration) error,
+	timeout time.Duration,
+) error {
+	stop, err := startForward(localPort)
+	if err != nil {
+		return fmt.Errorf("start collector OTLP readiness forward: %w", err)
+	}
+	defer stop()
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort))
+	deadline := time.Now().Add(timeout)
+	var last error
+	for time.Now().Before(deadline) {
+		if err := probe(address, 500*time.Millisecond); err == nil {
+			return nil
+		} else {
+			last = err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("collector OTLP endpoint %s not ready within %s: %w",
+		address, timeout, last)
+}
+
+func probeCollectorTCP(address string, timeout time.Duration) error {
+	connection, err := net.DialTimeout("tcp", address, timeout)
+	if err != nil {
+		return err
+	}
+	return connection.Close()
+}
+
+// collectorDiagnostics returns the collector's pod line and last log lines, so
+// a span failure names the hop that dropped them instead of leaving the reader
+// to guess between "the agents never exported" and "the collector never ran"
+// (GH-736 R4).
+func collectorDiagnostics(run helmLLMCommandRunner, release string) string {
+	selector := "app.kubernetes.io/component=collector,app.kubernetes.io/instance=" + release
+	var b strings.Builder
+	if out, err := run("kubectl", "get", "pods", "-l", selector, "--no-headers"); err == nil {
+		b.WriteString("\n  collector pod: " + strings.TrimSpace(string(out)))
+	}
+	if out, err := run("kubectl", "logs", "-l", selector, "--tail=5"); err == nil {
+		if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+			b.WriteString("\n  collector logs: " + trimmed)
+		}
+	}
+	return b.String()
+}
+
+var spoolTraceIDPattern = regexp.MustCompile(`"TraceID":"([0-9a-f]+)"`)
+
+func assertCollectorSpoolIdentity(
+	run helmLLMCommandRunner,
+	release, runID string,
+	services []string,
+	timeout time.Duration,
+) error {
+	target := "deploy/" + release + "-chatbot-mesh-collector"
+	path := "/work/traces/collector.ndjson"
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		out, err := run("kubectl", "exec", target, "--", "sh", "-c",
+			"test -s "+path+" && cat "+path)
+		last = string(out)
+		if err == nil && strings.Contains(last, runID) {
+			all := true
+			for _, service := range services {
+				if !strings.Contains(last, service) {
+					all = false
+					break
+				}
+			}
+			if all {
+				ids := spoolTraceIDPattern.FindAllStringSubmatch(last, -1)
+				fmt.Printf("helmSmoke: collector spool contains %d trace ids for run %s services %v\n",
+					len(ids), runID, services)
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("collector spool lacks run %q and services %v%s",
+		runID, services, collectorDiagnostics(run, release))
+}
+
+func assertNoCollectorSelfIngest(
+	run helmLLMCommandRunner,
+	release, runID string,
+) error {
+	target := "deploy/" + release + "-chatbot-mesh-collector"
+	path := "/work/traces/collector.ndjson"
+	out, err := run("kubectl", "exec", target, "--", "sh", "-c",
+		"test -s "+path+" && cat "+path)
+	if err != nil {
+		return nil
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, `"collector"`) && strings.Contains(line, runID) {
+			return fmt.Errorf("collector self-ingested spans for run %s", runID)
+		}
+	}
+	return nil
+}
+
+func verifySharedMetricsEvidence(
+	queryBase string,
+	telemetry helmTelemetryIdentity,
+	timeout time.Duration,
+) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		evidence, err := collectSharedMetricsEvidence(queryBase, telemetry)
+		if err == nil {
+			fmt.Printf(
+				"helmSmoke: retained evidence agent_metrics=%s dolt_metrics=%s\n",
+				strings.Join(evidence.AgentMetrics, ","),
+				strings.Join(evidence.DoltMetrics, ","),
+			)
+			return nil
+		}
+		lastErr = err
+		time.Sleep(2 * time.Second)
+	}
+	return lastErr
+}
+
+type sharedMetricsEvidence struct {
+	AgentMetrics []string
+	DoltMetrics  []string
+}
+
+// collectSharedMetricsEvidence reads the collector agent's metric query surface
+// (srd042 R9, GH-1207) rather than Prometheus. The agent dispatch metric is
+// found by the services that emit it (chatbot and rag0) rather than a fixed
+// name, since the OTLP metric name is not Prometheus-mangled; Dolt metrics keep
+// the dss_ prefix and the run identity rides in each record's resource
+// attributes.
+func collectSharedMetricsEvidence(
+	queryBase string,
+	telemetry helmTelemetryIdentity,
+) (sharedMetricsEvidence, error) {
+	evidence := sharedMetricsEvidence{}
+	summaries, err := collectorMetricSummaries(queryBase)
+	if err != nil {
+		return evidence, err
+	}
+	var agentMetric string
+	for _, summary := range summaries {
+		if metricServicesInclude(summary.Services, "chatbot", "rag0") {
+			agentMetric = summary.Name
+			evidence.AgentMetrics = append(evidence.AgentMetrics, summary.Name)
+		}
+		if strings.HasPrefix(summary.Name, "dss_") && metricServicesInclude(summary.Services, "dolt") {
+			evidence.DoltMetrics = append(evidence.DoltMetrics, summary.Name)
+		}
+	}
+	if agentMetric == "" {
+		return evidence, fmt.Errorf("collector metrics missing an agent metric emitted by chatbot and rag0 for run %s", telemetry.RunID)
+	}
+	// In agent mode the declarative collector has no Prometheus scrape, so the
+	// in-cluster Dolt metric path is retired (GH-1366); Dolt dss_* metrics are
+	// recorded when present (opt-in contrib) but no longer required.
+	found, err := collectorMetricHasRunID(queryBase, agentMetric, telemetry.RunID)
+	if err != nil {
+		return evidence, err
+	}
+	if !found {
+		return evidence, fmt.Errorf("collector metric %s records lack run id %s", agentMetric, telemetry.RunID)
+	}
+	sort.Strings(evidence.AgentMetrics)
+	sort.Strings(evidence.DoltMetrics)
+	return evidence, nil
+}
+
+// collectorMetricPageSize keeps a metric page under the collector query
+// server's 1 MiB max_response_bytes: one spooled record carries a whole export
+// batch and reaches ~145 KB, so twenty of them overran the cap once a worktree's
+// spool held a few runs, and the query answered 502 instead of a page.
+const collectorMetricPageSize = 5
+
+// collectorMetricHasRunID pages newest-first: the spool appends, so the run
+// under test is at the tail, and a spool that has retained many runs is not
+// read end to end to find it. A page the server still refuses as too large is
+// retried at half the size before the query fails.
+func collectorMetricHasRunID(queryBase, metricName, runID string) (bool, error) {
+	first, err := readCollectorMetricPage(queryBase, metricName, 0, 1)
+	if err != nil {
+		return false, err
+	}
+	for _, record := range first.Records {
+		if strings.Contains(string(record), runID) {
+			return true, nil
+		}
+	}
+	pageSize := collectorMetricPageSize
+	for end := first.Total; end > 0; {
+		offset := max(end-pageSize, 0)
+		page, err := readCollectorMetricPage(queryBase, metricName, offset, end-offset)
+		if errors.Is(err, errCollectorPageTooLarge) && end-offset > 1 {
+			pageSize = max((end-offset)/2, 1)
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if len(page.Records) == 0 {
+			return false, fmt.Errorf("collector metric %s returned an empty page at offset %d of %d",
+				metricName, offset, first.Total)
+		}
+		for _, record := range page.Records {
+			if strings.Contains(string(record), runID) {
+				return true, nil
+			}
+		}
+		end = offset
+	}
+	return false, nil
+}
+
+var errCollectorPageTooLarge = errors.New("collector metric page exceeds the response limit")
+
+type collectorMetricPage struct {
+	Records []json.RawMessage `json:"records"`
+	Total   int               `json:"total"`
+}
+
+func readCollectorMetricPage(
+	queryBase, metricName string,
+	offset, pageSize int,
+) (collectorMetricPage, error) {
+	query := url.Values{
+		"page_size": {strconv.Itoa(pageSize)},
+		"offset":    {strconv.Itoa(offset)},
+	}
+	data, status, err := requestHTTP(http.MethodGet,
+		queryBase+"/query/metrics/"+url.PathEscape(metricName)+"?"+query.Encode(), "")
+	if err != nil {
+		return collectorMetricPage{}, err
+	}
+	if status != http.StatusOK {
+		err := fmt.Errorf("collector /query/metrics/%s status %d: %s",
+			metricName, status, strings.TrimSpace(string(data)))
+		if strings.Contains(string(data), "response body too large") {
+			err = fmt.Errorf("%w: %w", errCollectorPageTooLarge, err)
+		}
+		return collectorMetricPage{}, err
+	}
+	var page collectorMetricPage
+	if err := json.Unmarshal(data, &page); err != nil {
+		return collectorMetricPage{}, fmt.Errorf("decode collector metric %s page: %w", metricName, err)
+	}
+	return page, nil
+}
+
+type collectorMetricSummary struct {
+	Name     string   `json:"name"`
+	Services []string `json:"services"`
+}
+
+func collectorMetricSummaries(queryBase string) ([]collectorMetricSummary, error) {
+	data, status, err := requestHTTP(http.MethodGet, queryBase+"/query/metrics?page_size=100", "")
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("collector /query/metrics status %d: %s",
+			status, strings.TrimSpace(string(data)))
+	}
+	var listed struct {
+		Metrics []collectorMetricSummary `json:"metrics"`
+	}
+	if err := json.Unmarshal(data, &listed); err != nil {
+		return nil, fmt.Errorf("decode collector metric list: %w", err)
+	}
+	return listed.Metrics, nil
+}
+
+func metricServicesInclude(services []string, required ...string) bool {
+	for _, want := range required {
+		if !containsString(services, want) {
+			return false
+		}
+	}
+	return true
+}
+
+const helmSwapRelease = "swap"
+
+// HelmSwap proves the two tiered-swap paths of the chatbot-mesh chart on a kind
+// cluster (srd003 R3): repointing a RAG is a Service selector change that does not
+// roll the chatbot (R3.1), and adding a RAG re-renders the co-generated profile and
+// rolls the chatbot (R3.2). It asserts the infrastructure contracts (pod identity,
+// workload existence, the co-generated ConfigMap breadth) via kubectl and helm,
+// and holds a deterministic mock-model answer open during the rollout to prove the
+// old pod drains the active HTTP turn before it exits. It needs docker, kind, helm,
+// and kubectl but no installed Ollama models. Teardown (kind delete) runs in all
+// paths.
+func (Integration) HelmSwap() error {
+	profilesRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	coreRoot := demoCoreRoot(profilesRoot)
+	chartDir := applicationChartDir(profilesRoot)
+	if _, err := os.Stat(filepath.Join(chartDir, "Chart.yaml")); err != nil {
+		return fmt.Errorf("chatbot-mesh chart not found at %s: %w", chartDir, err)
+	}
+	for _, bin := range []string{"docker", "kind", "helm", "kubectl"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			fmt.Printf("SKIP helmSwap: %s not found on PATH\n", bin)
+			return nil
+		}
+	}
+	if !agentCoreAvailable(coreRoot) {
+		fmt.Printf("SKIP helmSwap: agent-core checkout not found at %s (set core_root in demo.yaml)\n", coreRoot)
+		return nil
+	}
+	return runHelmSwap(coreRoot, profilesRoot, chartDir)
+}
+
+func runHelmSwap(coreRoot, profilesRoot, chartDir string) (result error) {
+	images, err := resolveChatbotIntegrationImages(profilesRoot)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("helmSwap: building runtime image %s\n", images.Runtime)
+	if err := buildSmokeRuntimeImage(coreRoot, images.Runtime); err != nil {
+		return err
+	}
+	llmMock, err := startHelmSwapLLMMock()
+	if err != nil {
+		return err
+	}
+	defer llmMock.close()
+	stagedChart, cleanupChart, err := stageSmokeChart(chartDir, profilesRoot)
+	if err != nil {
+		return err
+	}
+	defer cleanupChart()
+	assets, cleanupAssets, err := externalizeUIAssets(stagedChart, helmSwapRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupAssets()
+	profiles, cleanupProfiles, err := externalizeProfiles(stagedChart, helmSwapRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupProfiles()
+	chartArchive, cleanupArchive, err := packageApplierChart(stagedChart)
+	if err != nil {
+		return err
+	}
+	defer cleanupArchive()
+	dependencyImages, err := swapDependencyImages(chartDir)
+	if err != nil {
+		return err
+	}
+	if err := pullIntegrationDependencyImages(
+		"helmSwap", dependencyImages, runHelmSmokeCommand); err != nil {
+		return err
+	}
+
+	swapCluster, err := acquireIntegrationCluster(profilesRoot)
+	if err != nil {
+		return err
+	}
+	commands, cleanupCommands, err := kindrig.ClusterCommands(
+		kindrig.CaptureRun, swapCluster.Name)
+	if err != nil {
+		swapCluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	defer cleanupCommands()
+	namespace, cleanupNamespace, err := prepareScenarioNamespace(
+		commands.Run, "helm-swap", helmSwapRelease)
+	if err != nil {
+		swapCluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	cleanupNamespaceFn := cleanupNamespace
+	defer func() { result = errors.Join(result, cleanupNamespaceFn()) }()
+	evidenceDir := helmScenarioEvidenceDirectory(
+		profilesRoot, swapCluster.Name, images.Revision)
+	evidence := kindrig.FailureEvidence{
+		Directory:  evidenceDir,
+		Namespaces: []string{namespace},
+		Run: boundedHelmEvidenceRunnerWith(
+			helmDiagnosticRunner(commands.RunContext), helmEvidenceCommandTimeout),
+	}
+	defer func() {
+		failed := result != nil
+		if failed {
+			diagnostics := captureHelmFailureDiagnostics(
+				evidenceDir, helmSwapRelease,
+				helmDiagnosticRunner(commands.RunContext),
+				helmFailureDiagnosticsTimeout)
+			result = fmt.Errorf("%w\n%s", result, diagnostics)
+		}
+		if releaseAggregateKindCluster(
+			swapCluster, commands.KindRun, evidence, result,
+		) {
+			if failed && scenarioClusterGone(swapCluster.Name) {
+				cleanupNamespaceFn = func() error { return nil }
+			}
+			return
+		}
+		result = errors.Join(result, releaseDirectScenarioCluster(
+			swapCluster, commands.KindRun, failed, evidence, &cleanupNamespaceFn))
+	}()
+	if err := provisionExternalUIAssets(commands.Run, assets); err != nil {
+		return err
+	}
+	if err := provisionExternalProfiles(commands.Run, profiles); err != nil {
+		return err
+	}
+	if err := loadKindImageWithCommands(
+		commands, swapCluster.Name, images.Runtime); err != nil {
+		return err
+	}
+	if err := loadIntegrationDependencyImages(
+		commands, swapCluster.Name, dependencyImages); err != nil {
+		return err
+	}
+
+	// Deploy three units so the rollout can remove the middle identity without
+	// changing the later unit's name.
+	initial := append(llmMock.helmArgs(),
+		"--set", "ragUnits[1].name=rag1",
+		"--set", "ragUnits[1].description=Second integration corpus",
+		"--set", "ragUnits[1].collection=corpus1",
+		"--set", "ragUnits[1].embeddingModel=qwen3-embedding:8b",
+		"--set", "ragUnits[1].replicas=1",
+		"--set", "ragUnits[2].name=rag2",
+		"--set", "ragUnits[2].description=Third integration corpus",
+		"--set", "ragUnits[2].collection=corpus2",
+		"--set", "ragUnits[2].embeddingModel=qwen3-embedding:8b",
+		"--set", "ragUnits[2].replicas=1",
+	)
+	if err := helmSwapDeployWithRunner(
+		stagedChart, chartArchive, images.Runtime, "install", initial, assets, profiles,
+		commands.Run); err != nil {
+		return err
+	}
+	if err := assertHelmIntegrationRelease(
+		commands.Run, helmSwapRelease, chartArchive, assets, 1); err != nil {
+		return err
+	}
+	if err := assertExternalUIAssetsMountedWithRunner(
+		commands.Run, helmSwapRelease, assets, helmReadyTimeout); err != nil {
+		return err
+	}
+	if err := assertCollectorOTLPReady(commands, helmSwapRelease, helmReadyTimeout); err != nil {
+		return err
+	}
+
+	if err := assertSwapRepoint(commands); err != nil {
+		return err
+	}
+	if err := assertSwapReplaceMiddleRag(
+		commands, stagedChart, chartArchive, images.Runtime, llmMock, assets, profiles); err != nil {
+		return err
+	}
+	fmt.Printf("integration:helmSwap PASS - revision %s repoint left the chatbot pod unchanged; replacing middle unit rag1 with rag4 preserved rag2 identity and an in-flight turn, rolled the chatbot, and served a turn from the replacement pod\n", images.Revision)
+	return nil
+}
+
+// helmSwapDeploy installs or upgrades the release with the given extra --set args.
+func helmSwapDeploy(
+	chartPath, chartArchive, image, verb string,
+	extra []string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+) error {
+	return helmSwapDeployWithRunner(
+		chartPath, chartArchive, image, verb, extra, assets, profiles, runHelmSmokeCommand)
+}
+
+func helmSwapDeployWithRunner(
+	chartPath, chartArchive, image, verb string,
+	extra []string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+	run helmLLMCommandRunner,
+) error {
+	valueArgs := helmSwapValueArgs(chartPath, image, extra, assets, profiles)
+	measured, err := measureHelmReleaseBudget(
+		helmSwapRelease, chartPath, chartArchive, valueArgs)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("helmSwap %s: release budget PASS - %s\n", verb, measured.String())
+	args := append([]string{verb, helmSwapRelease, chartPath}, valueArgs...)
+	args = append(args, "--wait", "--timeout", helmInstallTimeout.String())
+	out, err := run("helm", args...)
+	if len(out) > 0 {
+		_, _ = os.Stderr.Write(out)
+	}
+	if err != nil {
+		return fmt.Errorf("helm %s %s: %w: %s",
+			verb, helmSwapRelease, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func helmSwapValueArgs(
+	chartPath, image string,
+	extra []string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+) []string {
+	repo, tag := splitImageRef(image)
+	args := []string{
+		"--values", filepath.Join(chartPath, "ci", "kind-values.yaml"),
+		"--set", "image.repository=" + repo,
+		"--set-string", "image.tag=" + tag,
+		"--set", "image.pullPolicy=Never",
+	}
+	args = append(args, extra...)
+	args = append(args, externalUIAssetValueArgs(assets)...)
+	return append(args, externalProfileValueArgs(profiles)...)
+}
+
+// assertSwapRepoint patches the rag0 Service selector and asserts the chatbot pod
+// is unchanged: repointing a RAG source touches no agent configuration and requires
+// no chatbot restart (srd003 R3.1).
+func assertSwapRepoint(commands kindrig.Commands) error {
+	before, err := chatbotPodName(commands.Run)
+	if err != nil {
+		return err
+	}
+	svc := helmSwapRelease + "-chatbot-mesh-rag0"
+	patch := `{"spec":{"selector":{"chatbot-mesh/rag-unit":"rag0","repointed":"true"}}}`
+	// Helm 4 uses server-side apply for upgrades. Keep this intentional live
+	// selector drift under Helm's field manager so the following upgrade can
+	// reconcile it instead of conflicting with kubectl-patch ownership.
+	if out, err := commands.Run("kubectl", "patch", "service", svc,
+		"--field-manager=helm", "-p", patch); err != nil {
+		return fmt.Errorf("repoint patch of %s: %w: %s",
+			svc, err, strings.TrimSpace(string(out)))
+	}
+	after, err := chatbotPodName(commands.Run)
+	if err != nil {
+		return err
+	}
+	if before != after {
+		return fmt.Errorf("repoint rolled the chatbot pod (%s -> %s); a Service selector change must not restart the chatbot (R3.1)", before, after)
+	}
+	// The next proof changes the Helm values rather than retaining this manual
+	// drift. Restore the chart-owned selector after observing the unchanged pod;
+	// otherwise Helm 4's server-side apply correctly rejects the later upgrade
+	// because the live selector still differs from the release manifest.
+	restore := `{"spec":{"selector":{"repointed":null}}}`
+	out, err := commands.Run("kubectl", "patch", "service", svc,
+		"--field-manager=helm", "-p", restore)
+	if err != nil {
+		return fmt.Errorf("restore selector of %s after repoint proof: %w: %s",
+			svc, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// assertSwapReplaceMiddleRag removes rag1 from the middle of rag0/rag1/rag2 and
+// adds rag4, then proves rag2 kept its identity, the active turn drained, and the
+// chatbot Deployment rolled to the replacement config (srd003 R2/R3.2).
+func assertSwapReplaceMiddleRag(
+	commands kindrig.Commands,
+	chartPath, chartArchive, image string,
+	llmMock *helmSwapLLMMock,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+) error {
+	genBefore, err := chatbotDeploymentGeneration(commands.Run)
+	if err != nil {
+		return err
+	}
+	localPorts, err := reserveLoopbackPorts(3)
+	if err != nil {
+		return err
+	}
+	chatURL := loopbackURL(localPorts[0], "/api/v1/chat")
+	healthURL := loopbackURL(localPorts[1], "/api/lifecycle/health")
+	observerURL := loopbackURL(localPorts[2], "")
+	chatPairs := []portForwardPair{
+		{local: localPorts[0], remote: 18080},
+		{local: localPorts[1], remote: 18081},
+	}
+	stopForward, err := kubectlPortForwardPairs(
+		commands, "svc/"+helmSwapRelease+"-chatbot-mesh-chatbot", chatPairs...)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if stopForward != nil {
+			stopForward()
+		}
+	}()
+	if err := waitHTTPStatus(healthURL, http.StatusOK, helmReadyTimeout); err != nil {
+		return fmt.Errorf("chatbot did not become reachable before warm swap: %w", err)
+	}
+	stopObserver, err := kubectlPortForwardPairs(
+		commands, "svc/"+helmSwapRelease+"-chatbot-mesh-observer",
+		portForwardPair{local: localPorts[2], remote: 18202})
+	if err != nil {
+		return err
+	}
+	defer stopObserver()
+	baseline, err := observerTurnBaselineSnapshot(
+		observerURL, helmReadyTimeout)
+	if err != nil {
+		return fmt.Errorf("observer live-turn baseline: %w", err)
+	}
+	turnResult := make(chan error, 1)
+	go func() { turnResult <- assertSmokeChatServed(chatURL) }()
+	if err := llmMock.waitForAnswer(helmReadyTimeout); err != nil {
+		return err
+	}
+	if err := waitObserverLiveTurn(
+		observerURL, collectorQueryBase(), baseline, helmReadyTimeout); err != nil {
+		return fmt.Errorf("observer live-turn evidence: %w", err)
+	}
+
+	extra := append(llmMock.helmArgs(),
+		"--set", "ragUnits[1].name=rag2",
+		"--set", "ragUnits[1].description=Replacement integration corpus",
+		"--set", "ragUnits[1].collection=corpus2",
+		"--set", "ragUnits[1].embeddingModel=qwen3-embedding:8b",
+		"--set", "ragUnits[1].replicas=1",
+		"--set", "ragUnits[2].name=rag4",
+		"--set", "ragUnits[2].description=Additional integration corpus",
+		"--set", "ragUnits[2].collection=corpus4",
+		"--set", "ragUnits[2].embeddingModel=qwen3-embedding:8b",
+		"--set", "ragUnits[2].replicas=1",
+	)
+	if err := helmSwapDeployWithRunner(
+		chartPath, chartArchive, image, "upgrade", extra, assets, profiles, commands.Run); err != nil {
+		return err
+	}
+	if err := assertHelmIntegrationRelease(
+		commands.Run, helmSwapRelease, chartArchive, assets, 2); err != nil {
+		return err
+	}
+	if err := assertExternalUIAssetsMountedWithRunner(
+		commands.Run, helmSwapRelease, assets, helmReadyTimeout); err != nil {
+		return err
+	}
+	if err := <-turnResult; err != nil {
+		return fmt.Errorf("middle-RAG replacement dropped the in-flight chat turn: %w", err)
+	}
+	stopForward()
+	stopForward = nil
+
+	stopReplacementForward, err := kubectlPortForwardPairs(
+		commands, "svc/"+helmSwapRelease+"-chatbot-mesh-chatbot", chatPairs...)
+	if err != nil {
+		return err
+	}
+	defer stopReplacementForward()
+	if err := waitHTTPStatus(healthURL, http.StatusOK, helmReadyTimeout); err != nil {
+		return fmt.Errorf("replacement chatbot did not become reachable: %w", err)
+	}
+	if err := assertSmokeChatServed(chatURL); err != nil {
+		return fmt.Errorf("replacement chatbot did not serve a turn: %w", err)
+	}
+	if err := kubectlResourceExists(
+		commands.Run, "deployment", helmSwapRelease+"-chatbot-mesh-rag4"); err != nil {
+		return fmt.Errorf("middle-RAG replacement did not stand up the rag4 Deployment: %w", err)
+	}
+	if out, err := commands.Run(
+		"kubectl", "get", "deployment", helmSwapRelease+"-chatbot-mesh-rag1"); err == nil {
+		return fmt.Errorf("middle-RAG replacement left the removed rag1 Deployment present: %s", strings.TrimSpace(string(out)))
+	}
+	// The chart ships one profiles ConfigMap per agent, so the chatbot's
+	// co-generated rest.yaml lives in the chatbot's own.
+	cm, err := kubectlConfigMapKey(
+		commands.Run, helmSwapRelease+"-chatbot-mesh-profiles-chatbot", "agents__chatbot__rest.yaml")
+	if err != nil {
+		return err
+	}
+	for _, identity := range []string{"rag0", "rag2", "rag4"} {
+		host := helmSwapRelease + "-chatbot-mesh-" + identity
+		if !strings.Contains(cm, identity+": http://"+host+":18087") ||
+			!strings.Contains(cm, "- "+host) {
+			return fmt.Errorf("middle-RAG replacement did not preserve %s in chatbot rest.yaml (R2/R3.2)", identity)
+		}
+	}
+	if strings.Contains(cm, "rag1:") ||
+		strings.Contains(cm, helmSwapRelease+"-chatbot-mesh-rag1") {
+		return fmt.Errorf("middle-RAG replacement left positional or removed client rag1 in chatbot rest.yaml (R2)")
+	}
+	genAfter, err := chatbotDeploymentGeneration(commands.Run)
+	if err != nil {
+		return err
+	}
+	if genAfter <= genBefore {
+		return fmt.Errorf("add-RAG did not roll the chatbot Deployment (generation %d -> %d); the profile change must trigger a rollout (R3.2)", genBefore, genAfter)
+	}
+	return nil
+}
+
+func chatbotPodName(run helmLLMCommandRunner) (string, error) {
+	out, err := run("kubectl", "get", "pods",
+		"-l", "app.kubernetes.io/component=chatbot",
+		"-o", "jsonpath={.items[0].metadata.name}")
+	if err != nil {
+		return "", fmt.Errorf("get chatbot pod: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func chatbotDeploymentGeneration(run helmLLMCommandRunner) (int, error) {
+	out, err := run("kubectl", "get", "deployment", helmSwapRelease+"-chatbot-mesh-chatbot",
+		"-o", "jsonpath={.metadata.generation}")
+	if err != nil {
+		return 0, fmt.Errorf("get chatbot deployment generation: %w", err)
+	}
+	var gen int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &gen); err != nil {
+		return 0, fmt.Errorf("parse chatbot generation %q: %w", out, err)
+	}
+	return gen, nil
+}
+
+func kubectlResourceExists(
+	run helmLLMCommandRunner,
+	kind, name string,
+) error {
+	_, err := run("kubectl", "get", kind, name)
+	return err
+}
+
+func kubectlConfigMapKey(
+	run helmLLMCommandRunner,
+	name, key string,
+) (string, error) {
+	out, err := run("kubectl", "get", "configmap", name,
+		"-o", "jsonpath={.data."+strings.ReplaceAll(key, ".", "\\.")+"}")
+	if err != nil {
+		return "", fmt.Errorf("get configmap %s key %s: %w", name, key, err)
+	}
+	return string(out), nil
+}
+
+const (
+	helmLLMRelease = "llm"
+	// Model pulls run on CPU inside kind. Installation deliberately does not use
+	// --wait: the integration observes the agent readiness transition around the
+	// suspended preload Job before allowing models to pull.
+	helmLLMInstallTimeout       = 20 * time.Minute
+	helmLLMStartupTimeout       = 5 * time.Minute
+	helmLLMModelPreloadTimeout  = 20 * time.Minute
+	helmLLMWorkloadReadyTimeout = 5 * time.Minute
+
+	helmLLMOllamaImage       = "declarative-agents/ollama:0.32.5-kind-trusted"
+	helmLLMOllamaSourceImage = "ollama/ollama:0.32.5@sha256:4dea9fb511947e24a84237bb636b0203abcb2ff0d3fbc7b4ff865deb91362131"
+)
+
+// helmLLMModels are the CPU-only small models the kind LLM-tier values pull; the
+// assertion confirms /api/tags reports each one after preload.
+var helmLLMModels = []string{"all-minilm", "qwen2.5:0.5b"}
+
+func llmDependencyImages(chartDir string) ([]string, error) {
+	images, err := smokeDependencyImages(chartDir)
+	if err != nil {
+		return nil, err
+	}
+	var values struct {
+		Ollama struct {
+			Image struct {
+				Repository string `yaml:"repository"`
+				Tag        string `yaml:"tag"`
+				PullPolicy string `yaml:"pullPolicy"`
+			} `yaml:"image"`
+		} `yaml:"ollama"`
+	}
+	if err := readIntegrationYAML(
+		filepath.Join(chartDir, "ci", "kind-llm-values.yaml"),
+		"kind LLM values", &values); err != nil {
+		return nil, err
+	}
+	image := values.Ollama.Image.Repository + ":" + values.Ollama.Image.Tag
+	if image != helmLLMOllamaImage {
+		return nil, fmt.Errorf(
+			"kind LLM Ollama image = %q, want exact trusted image %q",
+			image, helmLLMOllamaImage)
+	}
+	if values.Ollama.Image.PullPolicy != "Never" {
+		return nil, fmt.Errorf(
+			"kind LLM Ollama pullPolicy = %q, want Never for kind-loaded image",
+			values.Ollama.Image.PullPolicy)
+	}
+	return append(images, image), nil
+}
+
+// HelmLLMTier deploys the chart with the in-cluster LLM tier enabled on a kind
+// cluster and proves the tier stands up: the Ollama StatefulSet becomes ready, the
+// preload Job pulls the configured models once, /api/tags reports them, and the
+// chatbot serves a turn wired to the in-cluster endpoint (srd003 R6). CPU-only
+// small models keep it runnable without a GPU, a recorded divergence from GPU
+// production sizing (R6.4). It gates on docker, kind, helm, and kubectl, recording
+// a skip for each missing dependency; unlike helmSmoke it needs no external Ollama
+// because the tier under test is the in-cluster one. Teardown (kind delete) runs in
+// all paths.
+func (Integration) HelmLLMTier() error {
+	profilesRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	coreRoot := demoCoreRoot(profilesRoot)
+	chartDir := applicationChartDir(profilesRoot)
+	if _, err := os.Stat(filepath.Join(chartDir, "Chart.yaml")); err != nil {
+		return fmt.Errorf("chatbot-mesh chart not found at %s: %w", chartDir, err)
+	}
+	for _, bin := range []string{"docker", "kind", "helm", "kubectl"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			fmt.Printf("SKIP helmLLMTier: %s not found on PATH\n", bin)
+			return nil
+		}
+	}
+	if !agentCoreAvailable(coreRoot) {
+		fmt.Printf("SKIP helmLLMTier: agent-core checkout not found at %s (set core_root in demo.yaml)\n", coreRoot)
+		return nil
+	}
+	return runHelmLLMTier(coreRoot, profilesRoot, chartDir)
+}
+
+func runHelmLLMTier(coreRoot, profilesRoot, chartDir string) (result error) {
+	images, err := resolveChatbotIntegrationImages(profilesRoot)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("helmLLMTier: building runtime image %s\n", images.Runtime)
+	if err := buildSmokeRuntimeImage(coreRoot, images.Runtime); err != nil {
+		return err
+	}
+	stagedChart, cleanupChart, err := stageSmokeChart(chartDir, profilesRoot)
+	if err != nil {
+		return err
+	}
+	defer cleanupChart()
+	assets, cleanupAssets, err := externalizeUIAssets(stagedChart, helmLLMRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupAssets()
+	profiles, cleanupProfiles, err := externalizeProfiles(stagedChart, helmLLMRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupProfiles()
+	chartArchive, cleanupArchive, err := packageApplierChart(stagedChart)
+	if err != nil {
+		return err
+	}
+	defer cleanupArchive()
+	dependencyImages, err := llmDependencyImages(chartDir)
+	if err != nil {
+		return err
+	}
+	if err := runHelmLLMPhase("dependency-pull", func() error {
+		return pullIntegrationDependencyImages(
+			"helmLLMTier", dependencyImages, runHelmLLMCommand)
+	}); err != nil {
+		return err
+	}
+	fmt.Printf("helmLLMTier: building trusted Ollama runtime %s from %s\n",
+		helmLLMOllamaImage, helmLLMOllamaSourceImage)
+	var ollamaImageID string
+	if err := runHelmLLMPhase("trusted-image", func() error {
+		var imageErr error
+		ollamaImageID, imageErr = buildTrustedOllamaImage(helmLLMOllamaImage)
+		return imageErr
+	}); err != nil {
+		return err
+	}
+
+	var llmCluster kindrig.Cluster
+	if err := runHelmLLMPhase("cluster-ensure", func() error {
+		var clusterErr error
+		llmCluster, clusterErr = acquireIntegrationCluster(profilesRoot)
+		return clusterErr
+	}); err != nil {
+		return err
+	}
+	commands, cleanupCommands, err := kindrig.ClusterCommands(
+		kindrig.CaptureRun, llmCluster.Name)
+	if err != nil {
+		llmCluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	defer cleanupCommands()
+	namespace, cleanupNamespace, err := prepareScenarioNamespace(
+		commands.Run, "helm-llm-tier", helmLLMRelease)
+	if err != nil {
+		llmCluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	var cache aggregateOllamaCache
+	cleanupNamespaceFn := func() error {
+		return runHelmLLMPhase("namespace-cleanup", func() error {
+			var clearErr error
+			if cache.HostPath != "" {
+				clearErr = clearLLMScenarioModels(commands.Run)
+			}
+			return errors.Join(clearErr, cleanupNamespace())
+		})
+	}
+	defer func() { result = errors.Join(result, cleanupNamespaceFn()) }()
+	evidenceDir := helmScenarioEvidenceDirectory(
+		profilesRoot, llmCluster.Name, images.Revision)
+	evidence := kindrig.FailureEvidence{
+		Directory:  evidenceDir,
+		Namespaces: []string{namespace},
+		Run: boundedHelmEvidenceRunnerWith(
+			helmDiagnosticRunner(commands.RunContext), helmEvidenceCommandTimeout),
+	}
+	defer func() {
+		failed := result != nil
+		if failed {
+			diagnostics := captureHelmFailureDiagnostics(
+				evidenceDir, helmLLMRelease,
+				helmDiagnosticRunner(commands.RunContext),
+				helmFailureDiagnosticsTimeout)
+			result = fmt.Errorf("%w\n%s", result, diagnostics)
+		}
+		if releaseAggregateKindCluster(
+			llmCluster, commands.KindRun, evidence, result,
+		) {
+			if failed && scenarioClusterGone(llmCluster.Name) {
+				cleanupNamespaceFn = func() error { return nil }
+			}
+			return
+		}
+		result = errors.Join(result, releaseDirectScenarioCluster(
+			llmCluster, commands.KindRun, failed, evidence, &cleanupNamespaceFn))
+	}()
+	if err := runHelmLLMPhase("model-cache", func() error {
+		var cacheErr error
+		cache, cacheErr = prepareAggregateOllamaCache(
+			runHelmLLMCommand, llmCluster, ollamaImageID, helmLLMModels)
+		return cacheErr
+	}); err != nil {
+		return err
+	}
+	var seed ollamaSeedImage
+	if cache.HostPath != "" {
+		if err := runHelmLLMPhase("model-seed", func() error {
+			var seedErr error
+			seed, seedErr = ensureOllamaSeedImage(
+				helmLLMOllamaImage, ollamaImageID, helmLLMModels)
+			return seedErr
+		}); err != nil {
+			return err
+		}
+		if err := runHelmLLMPhase("model-seed-transfer", func() error {
+			return seedAggregateOllamaCache(seed, llmCluster.Name, cache)
+		}); err != nil {
+			return err
+		}
+	}
+	if err := provisionExternalUIAssets(commands.Run, assets); err != nil {
+		return err
+	}
+	if err := provisionExternalProfiles(commands.Run, profiles); err != nil {
+		return err
+	}
+	if err := runHelmLLMPhase("image-loads", func() error {
+		if loadErr := loadKindImageWithCommands(
+			commands, llmCluster.Name, images.Runtime); loadErr != nil {
+			return loadErr
+		}
+		return loadIntegrationDependencyImages(
+			commands, llmCluster.Name, dependencyImages)
+	}); err != nil {
+		return err
+	}
+	if err := runHelmLLMPhase("helm-install", func() error {
+		return helmInstallLLMWithRunner(
+			stagedChart, chartArchive, images.Runtime, assets, profiles,
+			cache.HostPath, commands.Run)
+	}); err != nil {
+		return err
+	}
+	if err := assertHelmIntegrationRelease(
+		commands.Run, helmLLMRelease, chartArchive, assets, 1); err != nil {
+		return err
+	}
+	localPorts, err := reserveLoopbackPorts(3)
+	if err != nil {
+		return err
+	}
+	chatURL := loopbackURL(localPorts[0], "/api/v1/chat")
+	healthURL := loopbackURL(localPorts[1], "/api/lifecycle/health")
+	tagsURL := loopbackURL(localPorts[2], "/api/tags")
+
+	// Ollama must serve before the suspended preload Job can be resumed; agent
+	// readiness remains blocked until the transition proof below completes.
+	if err := runHelmLLMPhase("preload-transition", func() error {
+		workloads, preloadErr := beginObservedLLMPreload(commands.Run)
+		if preloadErr != nil {
+			return preloadErr
+		}
+		stopTags, forwardErr := kubectlPortForwardPairs(
+			commands, "svc/"+helmLLMRelease+"-chatbot-mesh-ollama",
+			portForwardPair{local: localPorts[2], remote: 11434})
+		if forwardErr != nil {
+			return forwardErr
+		}
+		defer stopTags()
+		if modelsErr := assertLLMModelsLoaded(
+			tagsURL, helmLLMModels, helmLLMModelPreloadTimeout); modelsErr != nil {
+			return modelsErr
+		}
+		return finishLLMPreloadTransition(commands.Run, workloads)
+	}); err != nil {
+		return err
+	}
+	if err := runHelmLLMPhase("ui-assets", func() error {
+		return assertExternalUIAssetsMountedWithRunner(
+			commands.Run, helmLLMRelease, assets, helmLLMWorkloadReadyTimeout)
+	}); err != nil {
+		return err
+	}
+
+	if err := runHelmLLMPhase("chat-proof", func() error {
+		stop, forwardErr := kubectlPortForwardPairs(
+			commands, "svc/"+helmLLMRelease+"-chatbot-mesh-chatbot",
+			portForwardPair{local: localPorts[0], remote: 18080},
+			portForwardPair{local: localPorts[1], remote: 18081})
+		if forwardErr != nil {
+			return forwardErr
+		}
+		defer stop()
+		if healthErr := waitHTTPStatus(
+			healthURL, http.StatusOK, helmReadyTimeout); healthErr != nil {
+			return fmt.Errorf("chatbot control health not ready: %w", healthErr)
+		}
+		if chatErr := assertLLMChatServed(chatURL); chatErr != nil {
+			return fmt.Errorf(
+				"chatbot did not serve a turn against the in-cluster LLM: %w", chatErr)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	fmt.Printf("integration:helmLLMTier PASS - revision %s the chart stood up the in-cluster Ollama tier, the preload Job pulled the configured models, /api/tags reported them, and the chatbot served a turn against the in-cluster endpoint\n", images.Revision)
+	return nil
+}
+
+func runHelmLLMPhase(name string, run func() error) error {
+	started := time.Now()
+	err := run()
+	outcome := "passed"
+	if err != nil {
+		outcome = "failed"
+	}
+	kindrig.LogPhase("helmLLMTier", name, outcome, started, "")
+	return err
+}
+
+func clearLLMScenarioModels(run helmLLMCommandRunner) error {
+	statefulSet := "statefulset/" + helmLLMRelease + "-chatbot-mesh-ollama"
+	output, err := run(
+		"kubectl", "exec", statefulSet, "-c", "ollama", "--",
+		"sh", "-c", "rm -rf /root/.ollama/models/* && sync")
+	if err != nil {
+		return fmt.Errorf("clear scenario Ollama storage before deletion: %w: %s",
+			err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+func helmInstallLLM(
+	chartPath, chartArchive, image string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+	cacheHostPath string,
+) error {
+	return helmInstallLLMWithRunner(
+		chartPath, chartArchive, image, assets, profiles, cacheHostPath, runHelmLLMCommand)
+}
+
+func helmInstallLLMWithRunner(
+	chartPath, chartArchive, image string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+	cacheHostPath string,
+	run helmLLMCommandRunner,
+) error {
+	valueArgs := helmLLMValueArgs(chartPath, image, assets, profiles, cacheHostPath)
+	measured, err := measureHelmReleaseBudget(
+		helmLLMRelease, chartPath, chartArchive, valueArgs)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("helmLLMTier: release budget PASS - %s\n", measured.String())
+	args := append([]string{"install", helmLLMRelease, chartPath}, valueArgs...)
+	args = append(args, "--timeout", helmLLMInstallTimeout.String())
+	out, err := run("helm", args...)
+	if len(out) > 0 {
+		_, _ = os.Stderr.Write(out)
+	}
+	if err != nil {
+		return fmt.Errorf("helm install %s: %w: %s",
+			helmLLMRelease, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func helmLLMValueArgs(
+	chartPath, image string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+	cacheHostPath string,
+) []string {
+	repo, tag := splitImageRef(image)
+	args := []string{
+		"--values", filepath.Join(chartPath, "ci", "kind-llm-values.yaml"),
+		"--set", "image.repository=" + repo,
+		"--set-string", "image.tag=" + tag,
+		"--set", "image.pullPolicy=Never",
+		"--set", "ollama.preload.suspend=true",
+	}
+	if cacheHostPath != "" {
+		args = append(args,
+			"--set-string", "ollama.preload.integrationCacheHostPath="+cacheHostPath)
+	}
+	args = append(args, externalUIAssetValueArgs(assets)...)
+	return append(args, externalProfileValueArgs(profiles)...)
+}
+
+type helmLLMCommandRunner func(name string, args ...string) ([]byte, error)
+
+var runHelmLLMCommand helmLLMCommandRunner = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+type llmWorkloadList struct {
+	Items []struct {
+		Metadata struct {
+			Name   string            `json:"name"`
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+		Spec struct {
+			Replicas int `json:"replicas"`
+		} `json:"spec"`
+		Status struct {
+			ReadyReplicas int `json:"readyReplicas"`
+		} `json:"status"`
+	} `json:"items"`
+}
+
+func beginLLMPreloadTransition(run helmLLMCommandRunner) ([]string, error) {
+	job := helmLLMRelease + "-chatbot-mesh-ollama-preload"
+	jobData, err := run("kubectl", "get", "job/"+job, "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("inspect suspended preload Job: %w: %s", err, strings.TrimSpace(string(jobData)))
+	}
+	var jobState struct {
+		Spec struct {
+			Suspend bool `json:"suspend"`
+		} `json:"spec"`
+		Status struct {
+			Succeeded int `json:"succeeded"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(jobData, &jobState); err != nil {
+		return nil, fmt.Errorf("decode preload Job: %w", err)
+	}
+	if !jobState.Spec.Suspend || jobState.Status.Succeeded != 0 {
+		return nil, fmt.Errorf("preload observation requires suspended incomplete Job; suspend=%t succeeded=%d",
+			jobState.Spec.Suspend, jobState.Status.Succeeded)
+	}
+
+	data, err := run("kubectl", "get", "deployment",
+		"-l", "app.kubernetes.io/instance="+helmLLMRelease, "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("inspect pre-preload agent readiness: %w: %s", err, strings.TrimSpace(string(data)))
+	}
+	var list llmWorkloadList
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("decode agent workload readiness: %w", err)
+	}
+	var names []string
+	for _, item := range list.Items {
+		component := item.Metadata.Labels["app.kubernetes.io/component"]
+		if component != "chatbot" && component != "rag-server" {
+			continue
+		}
+		names = append(names, item.Metadata.Name)
+		if item.Spec.Replicas <= 0 || item.Status.ReadyReplicas >= item.Spec.Replicas {
+			return nil, fmt.Errorf("agent workload %s became ready before preload: ready=%d desired=%d",
+				item.Metadata.Name, item.Status.ReadyReplicas, item.Spec.Replicas)
+		}
+	}
+	if len(names) < 2 {
+		return nil, fmt.Errorf("expected chatbot and RAG workloads before preload, found %v", names)
+	}
+	fmt.Printf("helmLLMTier: agents unready while preload is suspended: %s\n", strings.Join(names, ", "))
+	patch := `{"spec":{"suspend":false}}`
+	if out, err := run("kubectl", "patch", "job/"+job, "--type=merge", "-p", patch); err != nil {
+		return nil, fmt.Errorf("resume preload Job: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := run("kubectl", "wait", "--for=condition=complete", "job/"+job,
+		"--timeout", helmLLMModelPreloadTimeout.String()); err != nil {
+		return nil, fmt.Errorf("preload Job did not complete: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return names, nil
+}
+
+func beginObservedLLMPreload(run helmLLMCommandRunner) ([]string, error) {
+	if err := waitForLLMStartup(run); err != nil {
+		return nil, fmt.Errorf("ollama StatefulSet did not become ready: %w", err)
+	}
+	return beginLLMPreloadTransition(run)
+}
+
+func finishLLMPreloadTransition(run helmLLMCommandRunner, workloads []string) error {
+	for _, name := range workloads {
+		if out, err := run("kubectl", "rollout", "status", "deployment/"+name,
+			"--timeout", helmLLMWorkloadReadyTimeout.String()); err != nil {
+			return fmt.Errorf("agent workload %s did not become ready after model preload: %w: %s",
+				name, err, strings.TrimSpace(string(out)))
+		}
+	}
+	fmt.Printf("helmLLMTier: agents ready after configured models became present: %s\n", strings.Join(workloads, ", "))
+	return nil
+}
+
+func waitForLLMStartup(run helmLLMCommandRunner) error {
+	name := helmLLMRelease + "-chatbot-mesh-ollama"
+	out, err := run("kubectl", "rollout", "status", "statefulset/"+name,
+		"--timeout", helmLLMStartupTimeout.String())
+	if err != nil {
+		return fmt.Errorf("rollout status statefulset/%s --timeout %s: %w: %s",
+			name, helmLLMStartupTimeout, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// assertLLMModelsLoaded polls Ollama's /api/tags until every configured model is
+// reported, so the preload contract (models present before the agents query) is
+// checked directly rather than inferred from readiness.
+func assertLLMModelsLoaded(tagsURL string, models []string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		data, status, err := requestHTTP(http.MethodGet, tagsURL, "")
+		if err != nil {
+			lastErr = err
+		} else if status != http.StatusOK {
+			lastErr = fmt.Errorf("ollama /api/tags status %d", status)
+		} else {
+			body := string(data)
+			missing := ""
+			for _, m := range models {
+				if !strings.Contains(body, m) {
+					missing = m
+					break
+				}
+			}
+			if missing == "" {
+				fmt.Printf("helmLLMTier: /api/tags reports all configured models: %s\n", strings.Join(models, ", "))
+				return nil
+			}
+			lastErr = fmt.Errorf("ollama /api/tags missing model %q: %s", missing, strings.TrimSpace(body))
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return lastErr
+}
+
+type helmDiagnosticRunner func(context.Context, string, ...string) ([]byte, error)
+
+var runHelmDiagnosticCommand helmDiagnosticRunner = func(
+	ctx context.Context,
+	name string,
+	args ...string,
+) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+type helmDiagnosticCommand struct {
+	label string
+	name  string
+	args  []string
+}
+
+func helmFailureDiagnosticCommands(release string) []helmDiagnosticCommand {
+	selector := "app.kubernetes.io/instance=" + release
+	return []helmDiagnosticCommand{
+		{label: "Helm status", name: "helm", args: []string{"status", release}},
+		{label: "pod and workload status", name: "kubectl", args: []string{
+			"get", "deploy,statefulset,job,pods,pvc", "-l", selector, "-o", "wide",
+		}},
+		{label: "persistent volume claims", name: "kubectl", args: []string{
+			"get", "pvc", "-o", "wide",
+		}},
+		{label: "events", name: "kubectl", args: []string{
+			"get", "events", "--sort-by=.metadata.creationTimestamp",
+		}},
+		{label: "container and init status", name: "kubectl", args: []string{
+			"get", "pods", "-l", selector, "-o", "json",
+		}},
+		{label: "pod scheduling and probes", name: "kubectl", args: []string{
+			"describe", "pods", "-l", selector,
+		}},
+	}
+}
+
+type helmPodContainerState struct {
+	Waiting *struct {
+		Reason  string `json:"reason"`
+		Message string `json:"message"`
+	} `json:"waiting"`
+	Running *struct {
+		StartedAt string `json:"startedAt"`
+	} `json:"running"`
+	Terminated *struct {
+		ExitCode int    `json:"exitCode"`
+		Reason   string `json:"reason"`
+		Message  string `json:"message"`
+	} `json:"terminated"`
+}
+
+type helmPodContainerStatus struct {
+	Name         string                `json:"name"`
+	Ready        bool                  `json:"ready"`
+	RestartCount int                   `json:"restartCount"`
+	State        helmPodContainerState `json:"state"`
+	LastState    helmPodContainerState `json:"lastState"`
+}
+
+func summarizeHelmUnreadyPods(data []byte) string {
+	var pods struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				Phase                 string                   `json:"phase"`
+				Reason                string                   `json:"reason"`
+				Message               string                   `json:"message"`
+				InitContainerStatuses []helmPodContainerStatus `json:"initContainerStatuses"`
+				ContainerStatuses     []helmPodContainerStatus `json:"containerStatuses"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &pods); err != nil {
+		return ""
+	}
+	var causes []string
+	for _, pod := range pods.Items {
+		if pod.Status.Reason != "" || pod.Status.Message != "" {
+			causes = append(causes, fmt.Sprintf(
+				"pod/%s phase=%s reason=%s message=%s",
+				pod.Metadata.Name, pod.Status.Phase,
+				pod.Status.Reason, pod.Status.Message))
+		}
+		for _, status := range pod.Status.InitContainerStatuses {
+			if cause := helmContainerUnreadyCause(
+				pod.Metadata.Name, "init", status); cause != "" {
+				causes = append(causes, cause)
+			}
+		}
+		for _, status := range pod.Status.ContainerStatuses {
+			if cause := helmContainerUnreadyCause(
+				pod.Metadata.Name, "container", status); cause != "" {
+				causes = append(causes, cause)
+			}
+		}
+	}
+	sort.Strings(causes)
+	return strings.Join(causes, "\n")
+}
+
+func helmContainerUnreadyCause(
+	pod, kind string,
+	status helmPodContainerStatus,
+) string {
+	if status.Ready {
+		return ""
+	}
+	state, reason, message := "unknown", "", ""
+	switch {
+	case status.State.Waiting != nil:
+		state = "waiting"
+		reason = status.State.Waiting.Reason
+		message = status.State.Waiting.Message
+		if previous := helmTerminatedState(status.LastState); previous != "" {
+			reason += " last_" + previous
+		}
+	case status.State.Terminated != nil:
+		if kind == "init" && status.State.Terminated.ExitCode == 0 {
+			return ""
+		}
+		state = "terminated"
+		reason = fmt.Sprintf("%s exit_code=%d",
+			status.State.Terminated.Reason, status.State.Terminated.ExitCode)
+		message = status.State.Terminated.Message
+	case status.State.Running != nil:
+		state = "running"
+	}
+	return fmt.Sprintf(
+		"pod/%s %s/%s unready: state=%s reason=%s message=%s restarts=%d",
+		pod, kind, status.Name, state, reason, message, status.RestartCount)
+}
+
+func helmTerminatedState(state helmPodContainerState) string {
+	if state.Terminated == nil {
+		return ""
+	}
+	return fmt.Sprintf("terminated_reason=%s exit_code=%d",
+		state.Terminated.Reason, state.Terminated.ExitCode)
+}
+
+type helmPodContainerRef struct {
+	Pod          string
+	Kind         string
+	Container    string
+	RestartCount int
+}
+
+func helmPodContainerRefs(data []byte) []helmPodContainerRef {
+	var pods struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Status struct {
+				InitContainerStatuses []helmPodContainerStatus `json:"initContainerStatuses"`
+				ContainerStatuses     []helmPodContainerStatus `json:"containerStatuses"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &pods); err != nil {
+		return nil
+	}
+	var refs []helmPodContainerRef
+	for _, pod := range pods.Items {
+		for _, status := range pod.Status.InitContainerStatuses {
+			refs = append(refs, helmPodContainerRef{
+				Pod: pod.Metadata.Name, Kind: "init",
+				Container: status.Name, RestartCount: status.RestartCount,
+			})
+		}
+		for _, status := range pod.Status.ContainerStatuses {
+			refs = append(refs, helmPodContainerRef{
+				Pod: pod.Metadata.Name, Kind: "container",
+				Container: status.Name, RestartCount: status.RestartCount,
+			})
+		}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		left := refs[i].Pod + "/" + refs[i].Kind + "/" + refs[i].Container
+		right := refs[j].Pod + "/" + refs[j].Kind + "/" + refs[j].Container
+		return left < right
+	})
+	return refs
+}
+
+func collectHelmContainerLogs(
+	ctx context.Context,
+	podStatus []byte,
+	run helmDiagnosticRunner,
+) string {
+	var report strings.Builder
+	for _, ref := range helmPodContainerRefs(podStatus) {
+		args := []string{
+			"logs", "pod/" + ref.Pod, "-c", ref.Container, "--tail=120",
+		}
+		out, err := run(ctx, "kubectl", args...)
+		fmt.Fprintf(&report, "\n\n== current log pod/%s %s/%s ==\n%s",
+			ref.Pod, ref.Kind, ref.Container, strings.TrimSpace(string(out)))
+		if err != nil {
+			fmt.Fprintf(&report, "\n[diagnostic failed: %v]", err)
+		}
+		if ref.RestartCount == 0 {
+			continue
+		}
+		previousArgs := append(append([]string(nil), args...), "--previous")
+		out, err = run(ctx, "kubectl", previousArgs...)
+		fmt.Fprintf(&report, "\n\n== previous log pod/%s %s/%s ==\n%s",
+			ref.Pod, ref.Kind, ref.Container, strings.TrimSpace(string(out)))
+		if err != nil {
+			fmt.Fprintf(&report, "\n[diagnostic failed: %v]", err)
+		}
+	}
+	return report.String()
+}
+
+func collectHelmFailureDiagnostics(
+	release string,
+	run helmDiagnosticRunner,
+	timeout time.Duration,
+) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var report strings.Builder
+	var podStatus []byte
+	fmt.Fprintf(&report, "%s bounded diagnostics:", release)
+	for _, diagnostic := range helmFailureDiagnosticCommands(release) {
+		out, err := run(ctx, diagnostic.name, diagnostic.args...)
+		if diagnostic.label == "container and init status" {
+			podStatus = append([]byte(nil), out...)
+		}
+		fmt.Fprintf(&report, "\n\n== %s ==\n%s",
+			diagnostic.label, strings.TrimSpace(string(out)))
+		if err != nil {
+			fmt.Fprintf(&report, "\n[diagnostic failed: %v]", err)
+		} else if ctx.Err() != nil {
+			fmt.Fprintf(&report, "\n[diagnostic failed: %v]", ctx.Err())
+		}
+	}
+	if summary := summarizeHelmUnreadyPods(podStatus); summary != "" {
+		fmt.Fprintf(&report, "\n\n== unready root causes ==\n%s", summary)
+	}
+	report.WriteString(collectHelmContainerLogs(ctx, podStatus, run))
+	return report.String()
+}
+
+func captureHelmFailureDiagnostics(
+	directory string,
+	release string,
+	run helmDiagnosticRunner,
+	timeout time.Duration,
+) string {
+	report := collectHelmFailureDiagnostics(release, run, timeout)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return report + fmt.Sprintf(
+			"\n[write bounded diagnostics failed: create %s: %v]", directory, err)
+	}
+	path := filepath.Join(directory, "bounded-diagnostics.txt")
+	if err := os.WriteFile(path, []byte(report+"\n"), 0o644); err != nil {
+		return report + fmt.Sprintf(
+			"\n[write bounded diagnostics failed: %v]", err)
+	}
+	return report + "\n[evidence: " + path + "]"
+}
+
+func helmScenarioEvidenceDirectory(root, cluster, revision string) string {
+	return filepath.Join(root, "build", "kind-evidence",
+		cluster+"-"+revision+"-"+time.Now().UTC().Format("20060102T150405.000000000Z"))
+}
+
+func boundedHelmEvidenceRunner(timeout time.Duration) kindrig.CommandRunner {
+	return boundedHelmEvidenceRunnerWith(runHelmDiagnosticCommand, timeout)
+}
+
+func boundedHelmEvidenceRunnerWith(
+	run helmDiagnosticRunner,
+	timeout time.Duration,
+) kindrig.CommandRunner {
+	return func(name string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return run(ctx, name, args...)
+	}
+}

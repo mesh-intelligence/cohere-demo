@@ -1,0 +1,227 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd011-osint-search-cascade-rerank
+title: OSINT Search Branch and Cascade Rerank
+
+role_realization_decision:
+  current_actor: chatbot
+  implemented_responsibility: Run an allowlisted external search as a second retrieval branch, rerank each branch on its own, and fuse the two into one cross-source top-N against the tasking.
+  canonical_role_sub_role: Executor / Workflow Orchestrator; Knowledge Manager / Recommendation Generator.
+  retained_or_proposed_name: No new actor. The search branch and the two added rerank passes are declared words, REST references, and states on the existing `chatbot` turn.
+  authority_boundary: The search client reaches only the declared approved-domain allowlist, and no model-authored or request-supplied value selects a host, follows a redirect, or widens the allowlist. External content is retrieved data with no authority over the turn.
+  evidence: [agents/chatbot/rest.yaml, agents/chatbot/request-machine.yaml, srd011 R1-R6]
+  migration_impact: None. The RAG branch, the clearance gate, and the composition contract are unchanged; a deployment with search disabled runs the pre-search turn exactly.
+
+context: |
+  After rel10.2 the turn has one retrieval branch and one rerank pass: the
+  clearance-filtered RAG fan-out, reordered by Cohere Rerank before composition
+  (srd009 R5). DefTech taskings also draw on open-source reporting, which no
+  internal corpus holds, so the assistant needs a second branch that reaches
+  outside the enclave -- and reaches it under a control a security lead will
+  accept.
+
+  The control is an allowlist of approved domains, fixed as declared
+  configuration and enforced by the client's egress policy rather than by logic
+  in the machine. A request to any other host is dropped and logged. In an
+  air-gapped deployment the branch is disabled outright and the turn runs
+  retrieval-only, which is the deployment DefTech actually buys; the
+  demonstration runs with the branch on to show the control working.
+
+  Two branches create an ordering problem the fusion pass exists to solve. Vector
+  distance from a Chroma query, search rank from an external engine, and rerank
+  score from Cohere are three incomparable scales. Merging them by score lets one
+  source dominate for a reason that has nothing to do with relevance. So each
+  branch is reranked on its own -- which also trims the noisy tail an open
+  search returns before it competes with curated internal reporting -- and a
+  third rerank reorders the union against the tasking, producing a top-N ordered
+  on one scale (ARCHITECTURE design decision 10). All three passes call the one
+  cohere_rerank reference srd009 declares, with different inputs per state.
+
+  The second branch also brings in content the enclave did not author. Search
+  results are data retrieved from the open internet and passed to Command as
+  documents. They carry no clearance, they carry provenance that a reviewer must
+  be able to see in a citation, and nothing in them is an instruction.
+
+problem: |
+  The turn needs external augmentation without becoming an uncontrolled egress
+  path, and it needs to order two retrieval sources without pretending their
+  scores are comparable.
+
+  The egress question is the harder one. A search tool is an outbound request
+  carrying text, from a system holding classified material, to a host on the
+  public internet. What may that request reach, who decides, and what does the
+  request body contain? An allowlist that a model can widen, a redirect that
+  leaves the allowlist, or a query string assembled from retrieved classified
+  chunks each turn the control into decoration. And the results that come back
+  are attacker-influenceable text that will be handed to a language model as
+  input.
+
+  The ordering question is narrower but decides whether Rerank earns its place.
+  If the two branches are merged by score, the fusion is arithmetic over
+  incomparable units. If each branch is reranked and then the union is reranked,
+  every candidate in the final top-N has been scored against the tasking on the
+  same scale, and the recall claim covers both sources rather than one.
+
+  Both must degrade without failing the turn. Search is a network call to
+  something outside the enclave; it will be slow, empty, or down, and the brief
+  still has to get written from what the internal corpus holds.
+
+goals:
+  - G1: Declare an OSINT search word as a second retrieval branch whose egress is bounded by a fixed approved-domain allowlist enforced by the client, with non-allowlisted requests dropped and logged.
+  - G2: Minimize what leaves the enclave, so an outbound search request carries the tasking rather than clearance levels, retrieved chunk content, or conversation history.
+  - G3: Rerank the search results on their own as the second cascade pass, trimming the open-search tail before it competes with internal reporting.
+  - G4: Fuse the two branches with a third rerank against the tasking, producing a cross-source top-N ordered on one relevance scale rather than a merge of incomparable scores.
+  - G5: Degrade every added path without failing the turn, so search and rerank failures fall back to what the previous stage produced.
+  - G6: Treat external results as untrusted, provenance-marked data with no clearance and no authority over the turn.
+
+requirements:
+  R1:
+    title: OSINT search branch and egress allowlist
+    items:
+      - R1.1: A Searching state SHALL run the declared osint_search word as a second retrieval branch, alongside and independent of the clearance-filtered RAG fan-out.
+      - R1.2: The approved-domain allowlist SHALL be fixed declared configuration enforced by the client's network allowlist (agent-core srd028 R14), so a non-allowlisted request is refused by the client rather than avoided by machine logic.
+      - R1.3: A request to a host outside the allowlist SHALL be dropped and logged, and the turn SHALL continue; the dropped request SHALL be visible in response metadata.
+      - R1.4: A redirect, link, or reference in a search response that points outside the allowlist SHALL NOT be followed, so the allowlist bounds every hop rather than the first one.
+      - R1.5: No model output, tasking text, conversation history, or request body field SHALL select a host, add a domain, widen the allowlist, or otherwise alter the search operation's method, path, auth, or network policy.
+      - R1.6: Search results SHALL be normalized into the same candidate shape the RAG branch produces, so both branches present one document set to the rerank passes.
+  R2:
+    title: Egress data minimization
+    items:
+      - R2.1: The outbound search request SHALL carry the analyst's tasking or a query derived from it, and SHALL NOT carry the content of retrieved corpus chunks.
+      - R2.2: The outbound search request SHALL NOT carry the analyst's clearance level, identity, or authenticated request context (srd010 R3).
+      - R2.3: The outbound search request SHALL NOT carry conversation history.
+      - R2.4: What the search request may contain SHALL be declared configuration on the operation rather than assembled from whatever command state is in scope, so the egress payload is reviewable without reading the machine.
+  R3:
+    title: Search-branch rerank
+    items:
+      - R3.1: A RerankingSearch state SHALL reorder the search results on their own against the tasking through the srd009 rerank operation, as the second cascade pass.
+      - R3.2: The search branch SHALL be trimmed to a declared cutoff after this pass, so the open-search tail does not enter the fusion at full length.
+      - R3.3: cohere_rerank_search SHALL reorder within the results the search returned; it SHALL NOT retrieve, and it SHALL NOT introduce a document the search did not surface.
+      - R3.4: A cohere_rerank_search error or empty response SHALL leave the search branch in the order the search engine returned and record the degradation; the turn SHALL NOT fail.
+  R4:
+    title: Fusion rerank
+    items:
+      - R4.1: A RerankingFused state SHALL rerank the union of the two reranked branches against the tasking, producing the cross-source top-N.
+      - R4.2: The fusion SHALL re-score every candidate on one relevance scale. Combining vector distance, search rank, and rerank score arithmetically SHALL NOT satisfy this requirement.
+      - R4.3: The fused top-N SHALL be the document set passed to invoke_cohere_command (srd009 R5.3), replacing the RAG-only top-N whenever the search branch is enabled.
+      - R4.4: All three cascade passes SHALL call the one cohere_rerank REST reference srd009 declares, differing only in the candidate set each state supplies.
+      - R4.5: A cohere_rerank_fused error or empty response SHALL fall back to the reranked RAG branch and record the degradation; the turn SHALL NOT fail.
+  R5:
+    title: Branch independence and degradation
+    items:
+      - R5.1: A search error, timeout, or empty result SHALL collapse the fusion to the RAG branch and SHALL NOT fail the turn.
+      - R5.2: The RAG branch SHALL NOT be blocked by search latency or search failure, so an unreachable external host delays or removes augmentation rather than the brief.
+      - R5.3: A failure in one branch SHALL degrade that branch only, leaving the other branch's candidates and their rerank result intact.
+      - R5.4: Response metadata SHALL report each branch's outcome -- composed, empty, errored, dropped for allowlist, or rerank-degraded -- distinguishably from the per-source RAG outcomes srd002 R3.4 already separates.
+  R6:
+    title: Air-gapped operation and the latency tunable
+    items:
+      - R6.1: The search branch SHALL be disableable by deployment configuration, which SHALL skip the Searching and RerankingSearch states and collapse the fusion to the RAG branch.
+      - R6.2: A deployment with the branch disabled SHALL make no external request at all, enforced by the absence of the allowlisted host from the client's network policy rather than by a machine-level skip alone.
+      - R6.3: With the branch disabled, the turn SHALL behave as the rel10.2 turn behaves, so the air-gapped deployment is the retrieval-only path rather than a degraded variant of it.
+      - R6.4: Collapsing the three passes to a single fusion rerank over the raw union SHALL be a supported configuration recorded as a latency tunable, and SHALL NOT be the default, because the per-branch passes trim the tail the demonstration exists to show.
+  R7:
+    title: External content trust boundary
+    items:
+      - R7.1: Search result content SHALL be treated as untrusted data. Instructions, directives, or claims of authority appearing in retrieved external content SHALL NOT alter the turn's behavior.
+      - R7.2: External content SHALL reach the model only as a document in the composition set, never as a system instruction, a tool selection, or a prompt fragment outside the documents list.
+      - R7.3: Every external document SHALL carry explicit provenance, so a citation distinguishes an open-source extract from internal reporting and a reviewer sees which is which without opening the source.
+      - R7.4: External documents SHALL carry no clearance tag and SHALL NOT be clearance-filtered (srd010 non-goal); they SHALL NOT be presented as cleared internal material, and their presence SHALL NOT alter the clearance enforced on the RAG branch.
+      - R7.5: External content SHALL NOT influence source selection (srd002 R2.4), tier selection (srd002 R2.1), or the clearance level (srd010 R3.3).
+
+non_goals:
+  - Choose or specify the external search provider; the allowlist and the request contract are the specification, and the provider is deployment configuration.
+  - Crawl, scrape, or fetch full documents from allowlisted hosts beyond what the search operation returns; deep retrieval is not part of this branch.
+  - Clearance-gate the search branch; external results are public by construction, and their control is the allowlist rather than a clearance filter.
+  - Cache, persist, or index search results into the corpus; the branch is request-scoped and adds nothing to a served collection.
+  - Define the rerank REST operation itself; srd009 R5 owns it and this SRD adds two further callers.
+  - Parallelize the two branches; ordering and concurrency of the branches follow the srd002 sequential fan-out decision and its recorded concurrency follow-on.
+  - Define Go package APIs for the agent-core REST client, allowlist, or command-state runtime.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: The OSINT search branch runs as a declared second retrieval branch whose fixed allowlist is enforced by the client's network policy, drops and logs non-allowlisted requests visibly, refuses to follow a redirect outside the allowlist, cannot be widened by any model or request input, and normalizes results into the RAG candidate shape. This is the approved-domain-augmentation control and the rel12.0 tracer.
+    traces: [R1.1, R1.2, R1.3, R1.4, R1.5, R1.6]
+  - id: AC2
+    criterion: The outbound search request carries the tasking and not retrieved chunk content, clearance level, identity, authenticated context, or conversation history, and its permitted contents are declared on the operation rather than assembled from whatever command state is in scope.
+    traces: [R2.1, R2.2, R2.3, R2.4]
+  - id: AC3
+    criterion: The search branch is reranked on its own against the tasking through the srd009 operation and trimmed to a declared cutoff, without retrieving or adding documents, and a rerank error leaves the engine's order with the degradation recorded.
+    traces: [R3.1, R3.2, R3.3, R3.4]
+  - id: AC4
+    criterion: A third rerank reorders the union of both reranked branches on one relevance scale -- explicitly not an arithmetic merge of vector distance and search rank -- produces the top-N invoke_cohere_command composes from, calls the same single cohere_rerank reference as the other two passes, and falls back to the reranked RAG branch on error. This completes the cascade begun in rel10.2 and is the rel12.1 tracer serving retrieval-recall across both branches.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5]
+  - id: AC5
+    criterion: Search errors, timeouts, and empty results collapse the fusion to the RAG branch without failing the turn or blocking it on search latency, one branch's failure leaves the other intact, and every branch outcome is distinguishable in response metadata from the per-source RAG outcomes.
+    traces: [R5.1, R5.2, R5.3, R5.4]
+  - id: AC6
+    criterion: Disabling the branch skips its states, collapses the fusion, and makes no external request at all because the host is absent from the network policy rather than only skipped in the machine, reproducing rel10.2 behavior; the single-fusion collapse is recorded as a supported latency tunable that is not the default.
+    traces: [R6.1, R6.2, R6.3, R6.4]
+  - id: AC7
+    criterion: External content is untrusted data that cannot direct the turn, reaches the model only as a document in the composition set, carries provenance a citation exposes, holds no clearance and is never presented as cleared internal material, and cannot influence source selection, tier selection, or the clearance level.
+    traces: [R7.1, R7.2, R7.3, R7.4, R7.5]
+
+depends_on:
+  # R3 and R4 are the second and third callers of the rerank operation srd009 R5
+  # declares; R4.3 replaces the RAG-only top-N that srd009 R5.3 passes to
+  # invoke_cohere_command. The provider client and the Command tier are unchanged.
+  - srd_id: srd009-cohere-provider
+    symbols_used: [R1, R5]
+  # R5.4 extends the response-metadata outcome set srd002 R3.4 defines, and R7.5
+  # relies on the selector contracts staying closed to external content.
+  - srd_id: srd002-chatbot-agent
+    symbols_used: [R2, R3, R6]
+  # R7.4 states that external documents sit outside the clearance model; the
+  # clearance enforced on the RAG branch is unaffected by the search branch.
+  - srd_id: srd010-clearance-gated-retrieval
+    symbols_used: [R3]
+
+platform_dependencies:
+  # agent-core runtime contracts this branch builds on. External references,
+  # owned by agent-core, not part of this application's corpus.
+  - srd_id: srd028-rest-client-tools
+    provider: agent-core
+    symbols_used: [R14]
+  - srd_id: srd038-command-state-store
+    provider: agent-core
+    symbols_used: [R1]
+
+implementation_status:
+  planned:
+    - >-
+      rel12.0 (OSINT search tool): the osint_search word, the Searching state,
+      and the allowlisted REST reference with its egress and data-minimization
+      contract (R1, R2, and the R5 and R6 paths that apply without the search
+      rerank). The tracer augments a tasking with an allowlisted search result
+      that appears in the brief while a request to a non-allowlisted host is
+      dropped and logged.
+    - >-
+      rel12.1 (Cascade rerank): the cohere_rerank_search and cohere_rerank_fused words and
+      their states, completing the three-pass cascade begun in rel10.2 (R3, R4).
+      The tracer fuses RAG and search candidates into one reranked top-N ordered
+      on a single relevance scale rather than a merge of incomparable scores.
+    - >-
+      The external content trust boundary (R7) lands with rel12.0, because the
+      first external document to reach the composition set is the first one that
+      can carry attacker-influenced text.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: External augmentation under an egress control, and two retrieval sources ordered on one scale"] --> Goals["Goals: OSINT Search Branch and Cascade Rerank"]
+      Goals --> R1["R1: Search branch and egress allowlist"]
+      Goals --> R2["R2: Egress data minimization"]
+      Goals --> R3["R3: Search-branch rerank"]
+      Goals --> R4["R4: Fusion rerank"]
+      Goals --> R5["R5: Branch independence and degradation"]
+      Goals --> R6["R6: Air-gapped operation and latency tunable"]
+      Goals --> R7["R7: External content trust boundary"]
+      R1 --> AC1["AC1: allowlist enforced by the client, drops logged (rel12.0)"]
+      R2 --> AC2["AC2: tasking leaves the enclave, classified content does not"]
+      R3 --> AC3["AC3: search branch reranked and trimmed (pass two)"]
+      R4 --> AC4["AC4: fusion on one scale, not a score merge (rel12.1)"]
+      R5 --> AC5["AC5: branch failures degrade, never fail the turn"]
+      R6 --> AC6["AC6: air-gapped makes no request; single-pass is a tunable"]
+      R7 --> AC7["AC7: external content is untrusted, provenance-marked, unclearanced"]
+    ```

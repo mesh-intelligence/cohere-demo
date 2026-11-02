@@ -1,0 +1,122 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The observer's monitor surface, separate from rest.yaml because the chart
+# co-generates it (GH-737): the monitor_proxy upstreams and the fleet UI's
+# monitored agents both derive from the deployed RAG units, which a values list
+# decides and an environment reference cannot express. This packaged copy is the
+# local integration source; the render overrides its ConfigMap key in a cluster.
+kind: rest-definition
+schema_version: 1
+unit: mesh-observer-monitor-rest
+rest:
+  version: v1
+  limits:
+    monitor:
+      timeout: 5s
+      read_timeout: 5s
+      max_request_bytes: 4096
+      max_response_bytes: 1048576
+      redirect: {mode: none}
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports:
+          - ${OBSERVER_MONITOR_PORT:-18202}
+        allow_public_listener: true
+
+  servers:
+    observer_monitor:
+      address: ${OBSERVER_BIND_HOST:-127.0.0.1}:${OBSERVER_MONITOR_PORT:-18202}
+      limits_ref: monitor
+      lifecycle_exit: {disabled: true}
+      queue: {name: observer_monitor, capacity: 8, overflow: reject, timeout: 100ms}
+      shutdown:
+        timeout: 2s
+        drain_policy: drain_then_stop
+        stop_listeners: true
+        unblock_await_signal: ServerStopped
+      endpoints:
+        machine_spec:  {method: GET, path: /monitor/machine, binding: read_state, monitor_view: machine_spec}
+        # Every declared machine as authored, for the fleet observer's
+        # declared-machines read (srd033, GH-428/GH-431).
+        declared_machines: {method: GET, path: /monitor/machines, binding: read_state, monitor_view: declared_machines}
+        declared_tools: {method: GET, path: /monitor/tools/declared, binding: read_state, monitor_view: declared_tools}
+        current_state: {method: GET, path: /monitor/state, binding: read_state, monitor_view: current_state}
+        tools:         {method: GET, path: /monitor/tools, binding: read_state, monitor_view: tools}
+        metrics:       {method: GET, path: /monitor/metrics, binding: read_state, monitor_view: metrics}
+        recent_events: {method: GET, path: /monitor/events, binding: read_state, monitor_view: events}
+        event_stream:  {method: GET, path: /monitor/events/stream, binding: stream_events, monitor_view: events}
+        openapi:       {method: GET, path: /monitor/openapi, binding: static_metadata, monitor_view: openapi}
+        # The fleet view exposes each aggregation step's latest declared output
+        # (pods, Deployments, Services, per-agent fan-in, pod metrics) through the
+        # command_state monitor view. The discovery steps carry no authored label,
+        # so the allowlist addresses them by command name (srd033 R7, GH-1270).
+        # The four fan-in steps are for_each joins, which all execute under the
+        # command name for_each.join, so each declares its own join label and the
+        # allowlist names those labels instead (GH-1319).
+        fleet:
+          method: GET
+          path: /monitor/fleet
+          binding: read_state
+          monitor_view: command_state
+          labels:
+            - discover_mesh_pods
+            - list_mesh_deployments
+            - list_mesh_services
+            - agent_machine_fanin
+            - agent_state_fanin
+            - agent_tools_fanin
+            - agent_events_fanin
+            - poll_pod_metrics
+        # The fleet cards' and trace view's same-origin read path (GH-359,
+        # GH-428): a GET proxy to each declared agent's monitor and to the
+        # collector's query surface, which is where the embedded observer reads
+        # traces (/monitor-proxy/<trace backend>/query/traces). Only the declared
+        # upstreams are reachable, only GET forwards, and the monitor limits cap
+        # what a proxied response may weigh.
+        monitor_proxy:
+          method: GET
+          path: /monitor-proxy/{agent}/{path...}
+          binding: monitor_proxy
+          monitor_proxy:
+            upstreams:
+              collector: ${OBSERVER_COLLECTOR_QUERY:-http://127.0.0.1:18193}
+              # Each agent's monitor, for the declared-machines reads the
+              # fleet cards make (GH-428, GH-431). Named upstreams, not a
+              # pattern: the allowlist is the authorization.
+              chatbot: ${OBSERVER_CHATBOT_MONITOR:-http://127.0.0.1:18082}
+              rag0: ${OBSERVER_RAG0_MONITOR:-http://127.0.0.1:18087}
+              exporter: ${OBSERVER_EXPORTER_MONITOR:-http://127.0.0.1:18122}
+              observer: ${OBSERVER_SELF_MONITOR:-http://127.0.0.1:18202}
+              collector-monitor: ${OBSERVER_COLLECTOR_MONITOR:-http://127.0.0.1:18192}
+          request:
+            path:
+              agent: {type: string}
+              path: {type: string}
+        # The fleet observer SPA compiled into agent-core (srd004 R9): the
+        # binding selects the bundle by name, so this mesh ships no observer UI
+        # files. config becomes the bundle's ui-config.json, which names the
+        # agents the proxy above reaches and the trace backend it reads.
+        fleet_ui:
+          method: GET
+          path: /ui/{path...}
+          binding: static_assets
+          static_assets:
+            bundle: observer
+            spa: true
+            config:
+              title: Cohere demo observer
+              monitored_agents:
+                - {name: chatbot, label: Chatbot}
+                - {name: rag0, label: RAG server}
+                - {name: exporter, label: Exporter}
+                - {name: observer, label: Observer}
+              trace_backend: collector
+          request:
+            path:
+              path: {type: string}
+        root_redirect:
+          method: GET
+          path: /
+          binding: redirect
+          redirect: {location: /ui/, status: 302}

@@ -1,0 +1,104 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Version 2 (srd004 R7): panels[] is the composition input the SPA reads through
+# the kit's Vite plugin as virtual:ui-config, so this file is the only route
+# table -- adding a panel is one entry here and one line in app/src/panels.ts,
+# and TestChatbotUIPanelsMatchTheRegistry fails when the two disagree.
+version: 2
+id: chatbot-ui
+title: Chatbot Agent UI
+source_owner: agents/chatbot
+panels:
+  - id: chat
+    package: local
+    route: /chat
+    label: Chat
+    sidebar_group: chat
+  # Labelled "Traces" rather than "Observability" or "Metrics": the panel shows
+  # traces and request-machine walks, not metrics, and the earlier labels either
+  # collided with the fleet link or promised numbers the panel does not show
+  # (GH-410, GH-423). Hidden: it opens from the chat, scoped to the
+  # conversation, and stays deep-linkable (GH-513).
+  - id: observability
+    package: local
+    route: /observability
+    label: Traces
+    sidebar_group: observability
+    hidden: true
+  - id: corpus
+    package: local
+    route: /corpus
+    label: Corpus
+    sidebar_group: chat
+  - id: provisioning
+    package: local
+    route: /provisioning
+    label: Provisioning
+    sidebar_group: provisioning
+sidebar:
+  title: Chatbot
+  groups:
+    chat:
+      label: Chat
+      order: 0
+    observability:
+      label: Observability
+      order: 1
+    provisioning:
+      label: Provisioning
+      order: 2
+actions:
+  chat_send:
+    ui_action: chat_send
+    request_machine_action: chat
+    route: chat
+    endpoint: /api/v1/chat
+    method: POST
+  observability_view:
+    ui_action: observability_view
+    route: observability
+  provisioning_view:
+    ui_action: provisioning_view
+    route: provisioning
+# The observability panel opens one live sub-panel per monitored agent, reading
+# its monitor state and SSE stream through the chatbot's same-origin monitor_proxy
+# (/monitor-proxy/<name>/...). This list is the monitored-agents surface srd003
+# co-generates; keep it in sync with the rest.yaml monitor_proxy upstreams. The
+# SPA reads this list from here through the kit shell, so it has no copy. The list is a superset of any one
+# deployment: the proxy answers 404 for an agent the release declares no
+# upstream for, and the SPA reads that as "not deployed" and renders no panel.
+monitored_agents:
+  - name: chatbot
+    label: Chatbot
+  - name: rag0
+    label: RAG server 0
+  - name: rag1
+    label: RAG server 1
+# The trace backend the observability v2 waterfall queries by trace id, reached
+# same-origin through the chatbot's monitor_proxy (the collector upstream in
+# rest.yaml). This is the same values-driven surface srd003 co-generates; keep the
+# name in sync with the rest.yaml monitor_proxy upstream. The SPA reads it from
+# here, so it has no copy. Absent locally, so the waterfall degrades to a missing-backend
+# notice.
+trace_backend:
+  name: collector
+  query_path: /monitor-proxy/collector/query/traces/{trace_id}
+# The provisioning panel submits its intent same-origin at /provisioning/api,
+# routed by the chatbot ingress to the provisioning-workflow-orchestrator's intent server (srd004 R1.5).
+# The provisioning-workflow-orchestrator orchestrates and the creator alone reaches the applier's apply
+# surface (srd003 R4.4), so the panel never calls the deployment API directly --
+# that route was unreachable under NetworkPolicy enforcement, which is what GH-502
+# fixed. The local source declares the path so a local run wires the panel to a
+# reachable intake. The key name is retained; the base path names the intake, not
+# the agent behind it.
+deployment_api:
+  base_path: /provisioning/api
+  auth: none
+presentation:
+  history_client_side: true
+  source_citations: true
+  degraded_indicator: true
+  observability_per_agent_sse: true
+  observability_turn_correlation: time-window
+  observability_trace_waterfall: true
+  provisioning_panel: true

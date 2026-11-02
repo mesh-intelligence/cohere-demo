@@ -1,0 +1,271 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel11.5-intsum-ui
+title: Test Suite for Release 11.5 Two-Panel INTSUM Interface
+release: "11.5"
+
+traces: [rel11.5-uc001-intsum-ui]
+
+preconditions:
+  - A demo mesh seeded from the committed store, with both collections present. The retrieval collection holds the embed selection and the document collection holds every envelope and chunk version, as rel10.5 seeds them.
+  - A requester whose clearance is below the level of at least one seeded document, since every withholding case needs a document the requester must not reach. The committed corpus carries confidential and secret material for this reason.
+  - A browser the interface target can drive, and the interface served from the chatbot's static assets rather than from a development server, so the assertions run against the bundle the deployment ships.
+  - The corpus manifest declares the source types, the Admiralty ratings per tier, and the clearance set. Every case asserting a facet vocabulary reads the expected values from the manifest rather than carrying its own copy.
+  - A turn whose composed sources include one the corpus grades and one it does not, because the ungraded-source case cannot be produced from a corpus that grades everything.
+  - A recorded turn response fixture carrying citations, Admiralty metadata, and an enforced level, so the form-filling cases run without a live provider and without spend.
+  - A response fixture for each degraded outcome the mesh distinguishes -- composed-but-empty, query-failed, embedding-model-excluded, and not-selected -- since the empty-form case asserts behaviour across all of them rather than one.
+
+test_cases:
+  - use_case: rel11.5-uc001-intsum-ui
+    name: An analyst poses a faceted tasking, the form fills from the turn, and a citation walks to the report behind it
+    integration_target: mage integration:ui
+    status: implemented
+    description: The release tracer, end to end in a browser against a seeded mesh. The chat route renders two columns, the analyst sets a facet and poses the tasking, the INTSUM form fills from the response, and a citation in the filled form resolves through the walk to its chunk, its parent report, and that report's other versions. All three halves are asserted for the reason rel10.5 gives -- a layout whose form never fills, and a form that fills but whose citations open nothing, are each consistent with part of this passing. The form is held to the fields it rendered rather than to the request having returned 200.
+    expected:
+      http_status: 200
+      chat_route_renders_two_columns: true
+      facet_selection_reaches_retrieval: true
+      form_fills_from_the_turn_response: true
+      citation_resolves_to_chunk_document_and_versions: true
+    traces:
+      - rel11.5-uc001-intsum-ui S1
+      - srd016-intsum-ui AC1
+      - srd016-intsum-ui AC3
+      - srd016-intsum-ui AC6
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The chat route carries both columns, the other routes are unchanged, and a narrow viewport collapses to one column
+    integration_target: mage integration:ui
+    status: implemented
+    description: Case (a). The form sits beside the tasking on the chat route rather than at a route of its own. The observability and provisioning routes render what they rendered before this release, asserted against their existing content rather than against a 200, because a panel that renders an error page also returns 200. Below the declared viewport width the layout collapses to one column with the form still reachable rather than clipped off-screen.
+    expected:
+      form_renders_beside_the_tasking_on_the_chat_route: true
+      no_fourth_route_added_for_the_form: true
+      observability_route_renders_its_existing_content: true
+      provisioning_route_renders_its_existing_content: true
+      narrow_viewport_collapses_to_one_column_with_the_form_reachable: true
+    traces:
+      - rel11.5-uc001-intsum-ui S1
+      - srd016-intsum-ui AC1
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: A route declared in the application and not in the served interface configuration fails rather than rendering the default panel
+    go_test: go test ./magefiles -run '^TestPanelRoutesMatchTheServedConfiguration$'
+    status: implemented
+    description: Case (b). The interface configuration the deployment serves and the application's panel registry are cross-checked, so a panel added to one and not the other is a failure at build time. Without the check the app silently renders the default panel for the unknown segment, which reads as a routing bug rather than as a missing declaration. Asserted in both directions, since a panel removed from the app and left in the configuration fails the same way.
+    expected:
+      route_in_the_application_absent_from_the_configuration_fails: true
+      route_in_the_configuration_absent_from_the_application_fails: true
+      matching_declarations_pass: true
+    traces:
+      - rel11.5-uc001-intsum-ui S1
+      - srd016-intsum-ui AC1
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The template artifact declares the ministry sections and the form renders from it
+    go_test: go test ./magefiles -run '^TestINTSUMTemplateArtifactDeclaresTheMinistrySections$'
+    status: implemented
+    description: Case (c). The artifact declares the classification banner, the date-time-group and originator header, the bottom line up front, the threat-activity sections, the Admiralty source-evaluation table, the gaps and outlook sections, and the citation index, and carries a version identifier. It declares structure alone -- no example text, no content, and nothing a renderer owns. The form's rendered section headings are asserted to match the artifact rather than a list written into the component, so the two cannot drift.
+    expected:
+      artifact_declares_all_eight_named_sections: true
+      artifact_carries_a_version_identifier: true
+      artifact_carries_no_content_or_rendering_concern: true
+      rendered_section_headings_match_the_artifact: true
+    traces:
+      - rel11.5-uc001-intsum-ui S2
+      - srd016-intsum-ui AC2
+      - srd012-brief-markdown-conformance AC2
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: Every filled field traces to response data and a section with no data renders empty
+    go_test: go test ./magefiles -run '^TestFormFieldsTraceToResponseData$'
+    status: implemented
+    description: Case (d). The declared contract maps response fields onto template fields, and the case asserts that a field the form displays came from the response fixture rather than from a default the contract supplied. A section the response carries nothing for renders empty rather than plausible, which is the property that keeps a reviewer from reading an assertion the turn never made.
+    expected:
+      every_rendered_field_maps_to_a_response_field: true
+      section_with_no_response_data_renders_empty: true
+      no_field_is_filled_from_a_default: true
+    traces:
+      - rel11.5-uc001-intsum-ui S3
+      - srd016-intsum-ui AC3
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: A degraded, unattributed, or uncomposed turn renders the form's headings without content
+    go_test: go test ./magefiles -run '^TestDegradedTurnRendersAnEmptyForm$'
+    status: implemented
+    description: Case (e). Run over each degraded outcome the mesh distinguishes rather than one, because the four arrive by different paths and a form that empties correctly for a failed query may fill from a composed-but-empty source. In every case the form shows its sections and no content, so a reader sees that the turn produced no brief rather than a brief that says nothing.
+    expected:
+      composed_but_empty_turn_renders_headings_without_content: true
+      query_failed_turn_renders_headings_without_content: true
+      embedding_model_excluded_turn_renders_headings_without_content: true
+      not_selected_turn_renders_headings_without_content: true
+      no_fabricated_section_content_in_any_case: true
+    traces:
+      - rel11.5-uc001-intsum-ui S3
+      - srd016-intsum-ui AC3
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The source-evaluation table carries the Admiralty ratings and shows an ungraded source as ungraded
+    go_test: go test ./magefiles -run '^TestSourceEvaluationTableCarriesAdmiraltyRatings$'
+    status: implemented
+    description: Case (f). Each composed source appears in the table with the source-reliability letter and information-credibility figure its chunks carry. A source the corpus does not grade renders as ungraded rather than as a blank cell, because a blank reads as a rating that failed to load while ungraded is the scale's own answer for a source that cannot be judged. The committed corpus carries an ungraded HUMINT tier for this case.
+    expected:
+      each_composed_source_appears_once_in_the_table: true
+      reliability_letter_and_credibility_figure_match_the_chunk_metadata: true
+      ungraded_source_renders_as_ungraded_not_blank: true
+    traces:
+      - rel11.5-uc001-intsum-ui S3
+      - srd016-intsum-ui AC3
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The citation index lists each source once and the banner marks the composed material
+    go_test: go test ./magefiles -run '^TestCitationIndexDeduplicatesAndBannerMarksComposedMaterial$'
+    status: implemented
+    description: Case (g). A brief citing one chunk many times indexes one entry carrying the assertions that rest on it. The fixture cites a single chunk repeatedly for this reason -- the live demo produced seventy citations over five chunks, which is the shape this case pins. The classification banner shows the highest level among the composed sources and not the level the requester holds, since the banner marks the document and the reader is not the document.
+    expected:
+      repeated_citations_of_one_chunk_index_one_entry: true
+      index_entry_names_the_assertions_resting_on_it: true
+      banner_shows_the_highest_composed_source_level: true
+      banner_does_not_show_the_requester_level: true
+    traces:
+      - rel11.5-uc001-intsum-ui S3
+      - srd016-intsum-ui AC3
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: Facets narrow retrieval before the vector search and an unfaceted turn is unchanged
+    integration_target: mage integration:ui
+    status: implemented
+    description: Case (h). A faceted turn reaches only chunks matching the facet, and the constraint is applied as a metadata filter ahead of the search rather than over the ranked results -- asserted by a tasking whose facet-matching documents rank below the composition cutoff, which returns them under a pre-search filter and returns nothing under a post-search one. A turn with no facet selected produces what it produced before this release, so the facets are additive to the request contract. The offered vocabularies match the corpus manifest rather than a list in the application.
+    expected:
+      faceted_turn_reaches_only_matching_chunks: true
+      facet_applied_before_the_vector_search: true
+      low_ranking_facet_matches_are_returned: true
+      unfaceted_turn_unchanged_from_the_prior_release: true
+      facet_vocabularies_match_the_corpus_manifest: true
+    traces:
+      - rel11.5-uc001-intsum-ui S4
+      - srd016-intsum-ui AC4
+      - srd010-clearance-gated-retrieval AC2
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: No facet raises the clearance level or widens the admitted set
+    go_test: go test ./magefiles -run '^TestFacetsNarrowAndNeverWiden$'
+    status: implemented
+    description: Case (i). Over the declared facet vocabularies, the set a faceted turn admits is a subset of what the same turn admits unfaceted, and the enforced clearance level is identical in both. Asserted across the vocabularies rather than on one facet, because the property that matters is that no combination widens, and a single sampled facet cannot establish it.
+    expected:
+      faceted_admitted_set_is_a_subset_of_the_unfaceted_set: true
+      enforced_clearance_identical_with_and_without_facets: true
+      no_facet_combination_admits_a_source_the_unfaceted_turn_excluded: true
+    traces:
+      - rel11.5-uc001-intsum-ui S4
+      - srd016-intsum-ui AC4
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The read operations are served by the retrieval tier through the chatbot boundary and the browser never reaches the store
+    integration_target: mage integration:ui
+    status: implemented
+    description: Case (j). The four operations answer over HTTP from the retrieval tier against the document collection, reached by the browser through the chatbot request boundary. The interface issues no request to the store's address, asserted from the browser's own network record rather than from the application source, because a direct call added later would pass a source inspection that was written once. No document database is deployed.
+    expected:
+      four_read_operations_answer_over_http: true
+      operations_served_from_the_document_collection_in_the_retrieval_store: true
+      browser_issues_no_request_to_the_store_address: true
+      no_document_database_deployed: true
+      lineage_arrives_parsed_rather_than_as_an_encoded_metadata_field: true
+    traces:
+      - rel11.5-uc001-intsum-ui S5
+      - srd016-intsum-ui AC5
+      - srd017-real-demo-corpus AC8
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The clearance for a document read cannot be named by the request and an inapplicable filter refuses the read
+    go_test: go test ./magefiles -run '^TestDocumentReadClearanceComesFromTheAuthenticatedContext$'
+    status: implemented
+    description: Case (k). A read request carrying its own clearance parameter, header, or body field is answered at the level the authenticated context carries and not at the level the request named, asserted with the request naming a level above the context's. A read whose filter cannot be applied -- absent, unparseable, or outside the declared set -- is refused rather than served unfiltered, matching srd010 R4.2 rather than degrading to an open read.
+    expected:
+      request_supplied_level_above_the_context_level_is_ignored: true
+      read_is_answered_at_the_authenticated_context_level: true
+      unparseable_filter_refuses_the_read: true
+      level_outside_the_declared_set_refuses_the_read: true
+      no_read_is_served_unfiltered: true
+    traces:
+      - rel11.5-uc001-intsum-ui S5
+      - srd016-intsum-ui AC5
+      - srd010-clearance-gated-retrieval AC3
+      - srd010-clearance-gated-retrieval AC4
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The walk resolves a citation to its chunk, the whole parent report, and the report's other versions
+    integration_target: mage integration:ui
+    status: implemented
+    description: Case (l). A citation in the filled form resolves to the chunk it was computed against, that chunk to its parent report shown whole, and that report to its other chunk-profile versions. The report includes the segments the build marked unsearchable -- the classification line and the endnote tail -- because those are part of what an analyst reads though the search never indexed them. The character span locates the chunk inside the report rather than merely naming it. A report the corpus records as derived from other reporting names that reporting.
+    expected:
+      citation_resolves_to_its_chunk: true
+      chunk_resolves_to_its_parent_report: true
+      parent_report_shown_whole_including_unsearchable_segments: true
+      character_span_locates_the_chunk_within_the_report: true
+      other_chunk_profile_versions_reachable: true
+      cross_tier_derivation_named_where_the_document_carries_it: true
+    traces:
+      - rel11.5-uc001-intsum-ui S6
+      - srd016-intsum-ui AC6
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: Repeated citations of one chunk collapse to a single node
+    go_test: go test ./magefiles -run '^TestProvenanceWalkCollapsesRepeatedCitations$'
+    status: implemented
+    description: Case (m). The walk shows the sources a brief drew on rather than one node for each time it drew on them, asserted over the repeated-citation fixture case (g) uses. A walk that renders one node per citation is unreadable on a real brief, which is what the seventy-citation live turn demonstrated.
+    expected:
+      one_node_per_distinct_chunk: true
+      node_carries_every_assertion_citing_it: true
+      node_count_independent_of_citation_count: true
+    traces:
+      - rel11.5-uc001-intsum-ui S6
+      - srd016-intsum-ui AC6
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: A document above the requester's level is reached by no operation, drawn as no node, and answered as absent rather than refused
+    integration_target: mage integration:ui
+    status: implemented
+    description: Case (n). The same tasking runs at two clearance levels over a corpus holding a document above the lower one. The cleared analyst opens it through the walk; the uncleared analyst reaches it through none of the four operations -- not by identifier supplied directly, not among the versions of a document they can read, not by metadata query -- and the walk draws no node for it. The identifier is supplied directly rather than followed from a citation, since a path reachable only by citation is not a path an adversary is limited to. The uncleared answer is absent rather than refused, because a refusal distinguishable from a miss confirms the document exists.
+    expected:
+      cleared_requester_opens_the_document_through_the_walk: true
+      uncleared_requester_reaches_it_by_no_identifier_read: true
+      uncleared_requester_reaches_it_through_no_version_listing: true
+      uncleared_requester_reaches_it_through_no_metadata_query: true
+      walk_draws_no_node_for_a_document_it_could_not_fetch: true
+      uncleared_read_answers_absent_not_refused: true
+    traces:
+      - rel11.5-uc001-intsum-ui S7
+      - srd016-intsum-ui AC5
+      - srd016-intsum-ui AC6
+      - srd010-clearance-gated-retrieval AC2
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The surface names the enforced level and never what it withheld
+    integration_target: mage integration:ui
+    status: implemented
+    description: Case (o). The enforced level is the one the server reported, asserted by requesting a level the deployment does not declare and reading the level that actually applied rather than the one selected. Nothing in the rendered surface carries a count, identifier, or content of a withheld document, and no two displayed figures yield that count by subtraction -- asserted over the whole rendered document rather than over the clearance line alone, because the leak this bars is a property of what is on the screen and not of one component.
+    expected:
+      enforced_level_read_from_the_response_not_the_selection: true
+      undeclared_requested_level_displays_the_level_that_applied: true
+      no_withheld_count_in_the_rendered_surface: true
+      no_withheld_identifier_or_content_in_the_rendered_surface: true
+      no_pair_of_displayed_figures_yields_a_withheld_count: true
+    traces:
+      - rel11.5-uc001-intsum-ui S8
+      - srd016-intsum-ui AC7
+      - srd010-clearance-gated-retrieval AC4
+
+  - use_case: rel11.5-uc001-intsum-ui
+    name: The browser tracer asserts rendered content at two clearance levels and the committed bundle reproduces
+    integration_target: mage integration:ui
+    status: implemented
+    description: Case (p). The evidence extends the existing interface target rather than standing up a second harness, so one target remains the interface evidence. Its assertions read rendered content -- sections filled, facets applied, walk resolved, node absent -- rather than request status, because a panel that renders an error returns 200 and a walk that draws nothing returns 200 twice. The committed bundle reproduces byte for byte from the committed sources, which the existing reproduction check enforces inside the consistency target; a bundle rebuilt in a later commit fails it.
+    expected:
+      tracer_extends_the_existing_interface_target: true
+      assertions_read_rendered_content_not_request_status: true
+      tracer_runs_the_tasking_at_two_clearance_levels: true
+      committed_bundle_reproduces_from_the_committed_sources: true
+    traces:
+      - rel11.5-uc001-intsum-ui S9
+      - srd016-intsum-ui AC8

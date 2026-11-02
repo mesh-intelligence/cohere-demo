@@ -1,0 +1,187 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel10.4-corpus-build
+title: Test Suite for Release 10.4 Corpus Build With Cached Embeddings
+release: "10.4"
+
+traces: [rel10.4-uc001-corpus-build]
+
+# The synthetic corpus this release was written over is retired, and so is the
+# mage integration:corpusBuild target that traced it (srd017 R9.1, GH-284). The
+# mechanism the cases assert -- the offline build, the identity keying, the seed
+# that calls no provider, the metadata copied rather than inferred -- is
+# unchanged and is now traced by mage integration:demoCorpus over the corpus
+# that replaced it. The go_test evidence each case names is unaffected and still
+# resolves.
+
+preconditions:
+  - The synthetic corpus exists with declared front matter on every document. The suite asserts the conditions that corpus must hold, so a run over a corpus authored without them reports what is missing rather than passing on a corpus that exercises nothing.
+  - The declared clearance levels are a totally ordered set in application configuration, so "the lower level of a pair" is decidable and the pairs the corpus must cover are enumerable before rel11.0 iterates them.
+  - Both embedding families are declared and selectable -- the Ollama path srd009 R2.3 keeps and the Cohere path srd009 R2.2 names -- because the coexistence and repoint cases need two identities and one corpus.
+  - The build's embedding cases require COHERE_API_KEY exported by the operator. A run without it is skipped rather than reported, since a build that could not reach the provider proves nothing about how many times it would have called.
+  - An observable count of embedding-provider requests over a given phase. Every zero-call assertion in this suite is a claim about the client and not about the answer, and a suite that cannot count requests can only observe that a brief arrived.
+  - A store built at a known identity, and a store deliberately built without the deployed identity, since the fail-closed case cannot be produced from a correct store.
+
+test_cases:
+  - use_case: rel10.4-uc001-corpus-build
+    name: A build produces chunk records and a demo seeded from them answers a tasking
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusTurnGroundedAcceptsACorrectTurn$|^TestCorpusTurnGroundedRejectsComposedWithoutDocuments$|^TestCorpusTurnGroundedRejectsNoComposedSource$|^TestCorpusTurnGroundedRejectsAFailedSource$|^TestCorpusTurnGroundedRejectsAnEmptyBrief$|^TestCorpusTurnGroundedRejectsANonOKStatus$'
+    status: implemented
+    description: The release tracer, end to end. The build runs against no cluster and writes chunk records carrying vector and metadata; the demo comes up, seeds from those records, and answers one tasking with a brief composed from retrieved documents. Both halves are asserted, because a store nothing seeds from and a demo whose vectors came from anywhere are each consistent with half of this passing. mage integration:corpusBuild writes the records, seeds a live Chroma from them, reads back the documents and metadata that arrived, and then stands two rag-servers and the chatbot over that same collection and serves the corpus's primary tasking against it. The answer is held to the composed-source evidence rather than to its prose -- a source that reached composition carrying no retrieved document fails the case, because a 200 carrying fluent text is exactly what a mesh composing from nothing returns.
+    expected:
+      http_status: 200
+      build_runs_without_a_cluster: true
+      chunk_records_written_with_vector_and_metadata: true
+      demo_seeds_from_the_written_records: true
+      tasking_answers_from_retrieved_documents: true
+    traces:
+      - rel10.4-uc001-corpus-build S1
+      - srd015-corpus-build AC5
+      - srd015-corpus-build AC4
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: The seed issues zero embedding-provider requests, counted at the client
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusTurnEmbedRequestsWantsExactlyOne$|^TestCorpusTurnEmbedProxyCountsOnlyTheEmbedOperation$'
+    status: implemented
+    description: The assertion that separates this release from the seeding path it replaces, which produces an identical brief. The embedding client's request count over the seed phase is zero, and the tasking's single request in the turn phase is what a correct cycle spends. Reading the answer cannot establish this; counting the requests can. mage integration:corpusBuild counts each phase at the client, over its own window. The seed points the declared Cohere base URL at a recording stand-in and asserts zero, and runs with no credential exported, which is the no-reachable-provider leg. The turn cannot reuse that stand-in, because it answers with a fabricated vector and a turn has to retrieve something -- it is counted instead by a proxy that forwards to the declared provider and records only the embed operation, since the rerank and composition calls the same turn makes travel to the same base URL. The turn embeds once however many sources the fan-out reaches, because the query vector is computed once and passed to each.
+    expected:
+      embedding_requests_during_seed: 0
+      embedding_requests_during_turn: 1
+      count_read_from_the_client_not_inferred_from_the_answer: true
+      seed_succeeds_with_no_reachable_embedding_provider: true
+    traces:
+      - rel10.4-uc001-corpus-build S2
+      - srd015-corpus-build AC5
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: A rebuild at an already-held identity issues zero requests and leaves the store unchanged
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusRebuildIssuesNoRequestsAndLeavesTheStoreUnchanged$'
+    status: implemented
+    description: Two builds over one unchanged corpus at one identity. The second issues no embedding request and writes a store identical to the first. Both are asserted, because a build that recomputed every vector and wrote back an identical record would leave the store unchanged while still paying the provider, so store equality alone does not establish the skip.
+    expected:
+      second_build_embedding_requests: 0
+      store_unchanged_after_second_build: true
+      skip_decided_per_chunk_and_identity_pair: true
+      store_equality_not_treated_as_sufficient_evidence: true
+    traces:
+      - rel10.4-uc001-corpus-build S3
+      - srd015-corpus-build AC4
+      - srd015-corpus-build AC3
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: A second embedding family is added to the same records without displacing the first
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusBuildAtASecondIdentityAddsWithoutDisplacingTheFirst$'
+    status: implemented
+    description: A build at one identity followed by a build at another. The chunk records then carry both families' vectors, each under its own identity and with its own dimension recorded, and the first family's vectors are byte-identical to what the first build wrote. The store seeds either family afterwards with no rebuild.
+    expected:
+      both_identities_present_on_the_chunk_record: true
+      dimension_recorded_per_identity: true
+      first_family_vectors_unchanged: true
+      second_build_embeds_only_the_new_identity: true
+      either_family_seeds_without_a_rebuild: true
+    traces:
+      - rel10.4-uc001-corpus-build S4
+      - srd015-corpus-build AC3
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: The stored identity is the identity the rag-server reports, and the exclusion partition stays empty
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusTurnGroundedRejectsAnExcludedSource$|^TestCorpusTurnGroundedRejectsADivergentQueryIdentity$'
+    status: implemented
+    description: The identity recorded in the store, the identity the seeded collection is served under, and the identity the rag-server names in its query response metadata are one value. The turn's embedding-model comparison therefore excludes no source and the embedding-excluded partition in the response metadata is empty. A diverging naming produces a fluent brief composed from nothing, which passes every assertion about the answer and fails this one. The seed side is closed, because app:seed takes the identity from the deployed release's ragUnits[].embeddingModel, which is the same field that reaches the rag-server as RAG_EMBEDDING_MODEL, so the store and the served collection cannot be named separately. The third value is now read from the served turn -- the identity the response reports for its query vector is compared against the identity the store recorded, and the embedding-excluded partition is required empty. Reporting a family the collection was not seeded under was driven by hand against a live mesh and produced a 200 with a fluent brief, which this case rejects and every assertion about the answer accepts.
+    expected:
+      stored_identity_matches_rag_server_reported_identity: true
+      embedding_model_excluded_partition_empty: true
+      every_selected_source_composed: true
+      identity_compared_rather_than_answer_inspected: true
+    traces:
+      - rel10.4-uc001-corpus-build S5
+      - srd015-corpus-build AC3
+      - srd009-cohere-provider AC2
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: Chunk metadata equals the document's declared front matter and is never derived from chunk text
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusBuildCopiesDeclaredFrontMatterOntoEveryChunk$|^TestCorpusBuildNeverReadsChunkTextToDecideMetadata$|^TestCorpusBuildWritesAbsentOrUnrecognizedClearanceAtTheHighestLevel$|^TestCorpusBuildIdentifiersDeriveFromSourceAndPosition$'
+    status: implemented
+    description: Each chunk's source identifier, source type, keywords, clearance level, and Admiralty rating compare equal to the front matter of the document it came from. A document declaring no clearance, or one outside the ordered set, yields chunks at the highest declared level rather than the lowest. Chunk identifiers derive from source and position, so a rebuild overwrites rather than appending a second copy. The four Go tests name one claim each and prove them at the build. The store-reading comparison they cannot make -- every committed record read back and checked against the front matter of the document it came from -- is the assertCorpusStoreMetadataMatchesDocuments phase of mage integration:corpusBuild, which is why both pointers are declared.
+    expected:
+      metadata_equals_source_document_front_matter: true
+      no_metadata_value_derived_from_chunk_text: true
+      absent_or_unrecognized_clearance_written_highest: true
+      identifier_derived_from_source_and_position: true
+      rebuild_overwrites_rather_than_duplicates: true
+    traces:
+      - rel10.4-uc001-corpus-build S6
+      - srd015-corpus-build AC2
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: The corpus holds the retrieval conditions downstream releases exercise
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusConditionsHoldOverTheShippedStore$'
+    status: implemented
+    description: A check over the corpus rather than over a run, for four of the five conditions, and a measurement for the fifth. More than one source type is present; every clearance pair the rel11.0 assertion will iterate has at least one document above its lower level; every document carries an Admiralty rating on both axes; and the content is fictional by construction. Those four hold in the declared front matter and the Go test reads them without a provider or a cluster. The fifth is that some of a tasking's relevant documents fall below the composition top-N, and it is not a property of the files -- a count of declared relevant documents says they exist rather than that embedding retrieval ranks any of them low. mage integration:corpusBuild measures it, by seeding a collection from the committed store, embedding each labeled tasking at the identity the store was seeded under, querying at the declared top-N, and reporting per tasking which labeled relevant documents did not come back. Without these the tracer still passes and rel11.0, rel12.2, and srd014 R1.3 have nothing to exercise.
+    expected:
+      multiple_source_types_present: true
+      document_above_the_lower_level_of_every_declared_pair: true
+      relevant_documents_below_the_composition_top_n: true
+      admiralty_rating_on_both_axes_for_every_document: true
+      corpus_fictional_by_construction: true
+    traces:
+      - rel10.4-uc001-corpus-build S7
+      - srd015-corpus-build AC1
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: A seed whose store lacks the deployed identity fails with both identities named
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestSeedFailsClosedNamingTheWantedAndTheHeldIdentities$'
+    status: implemented
+    description: The fail-closed leg. Seeding against a store built under one identity while the deployed release declares another fails, and the failure names the identity it wanted and the identities the store holds. It does not embed the corpus to recover. The recovery is what makes this case necessary rather than obvious -- a fallback succeeds, the demo answers, and the release has silently reverted to the path it replaced.
+    expected:
+      seed_fails: true
+      wanted_identity_named_in_the_error: true
+      held_identities_named_in_the_error: true
+      embedding_requests_during_failed_seed: 0
+      no_fallback_to_computing_vectors: true
+    traces:
+      - rel10.4-uc001-corpus-build S8
+      - srd015-corpus-build AC5
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: An embedding failure fails the build rather than writing a partial record
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusBuildEmbeddingFailureNamesTheChunkAndWritesNoPartialRecord$'
+    status: implemented
+    description: A build whose provider returns an error on one chunk fails, naming that chunk, and the store holds no record for it with an absent or truncated vector and none recorded under an identity that did not produce it. The case exists because the next build would read a partial record as already held and never retry it, converting a loud provider failure into a chunk that is silently never retrieved.
+    expected:
+      build_fails_on_embedding_error: true
+      failing_chunk_named: true
+      no_record_written_with_absent_or_truncated_vector: true
+      no_vector_recorded_under_an_identity_that_did_not_produce_it: true
+      subsequent_build_retries_the_failed_chunk: true
+    traces:
+      - rel10.4-uc001-corpus-build S9
+      - srd015-corpus-build AC4
+
+  - use_case: rel10.4-uc001-corpus-build
+    name: The store is a versioned, legible, corpus-only artifact that names what produced it
+    integration_target: mage integration:demoCorpus
+    go_test: go test ./magefiles -run '^TestCorpusStoreIndexNamesTheCorpusVersionAndTheIdentitiesHeld$|^TestCorpusStoreVectorsAreLegibleNumbersRatherThanAnEncodedBlob$'
+    status: implemented
+    description: This reads the committed store, so it needs neither provider nor cluster. The store's publishable tiers are tracked in this repository and its keep-private tiers are versioned in the private data repository (srd017 R9.7), read together as one store, so a clone of this repository alone seeds the publishable tiers without a credential and without first running a build; it names its corpus version and every identity it holds; each vector is a sequence of numbers rather than an encoded blob; it carries no taskings, relevant sets, or expected answers; and it identifies the corpus as synthetic in the artifact itself. Two Go tests read the committed files for the version-and-identities claim and the legible-vector claim; the assertCorpusStoreShape phase of mage integration:corpusBuild covers the rest, including the scan that fails on a store carrying taskings, relevant sets, or expected answers.
+    expected:
+      publishable_tiers_tracked_in_this_repository: true
+      keep_private_tiers_versioned_in_the_private_data_repository: true
+      clone_seeds_the_publishable_tiers_without_provider_access_or_a_build: true
+      corpus_version_named_in_the_store: true
+      held_identities_named_in_the_store: true
+      vectors_legible_as_numbers_not_encoded: true
+      no_taskings_or_labeled_relevant_sets_in_the_store: true
+      corpus_identified_as_synthetic_in_the_artifact: true
+    traces:
+      - rel10.4-uc001-corpus-build S10
+      - srd015-corpus-build AC6

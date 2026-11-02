@@ -1,0 +1,215 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+unit: mesh-corpus-ingest-corpus-rest
+rest:
+  version: v1
+  auth:
+    none:
+      type: none
+  limits:
+    # The Chroma authority is deployment-supplied and moves together with its
+    # client's base_url below. A developer host answers on loopback, which is
+    # where the defaults come from; in a pod it is a Service, and an allowlist
+    # still pinned to 127.0.0.1 would refuse the repointed base URL rather than
+    # reach it. The embedding provider is the bound library's own client
+    # (embed-rest.yaml, srd058 R4.2), which the library bounds itself.
+    local_corpus:
+      timeout: 30s
+      read_timeout: 30s
+      max_request_bytes: 1048576
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        # Block sequences, unquoted: a ${...} reference inside [ ] is not valid
+        # YAML, and this file is read unexpanded by the declaration checks.
+        hosts:
+          - ${CHROMA_HOST:-127.0.0.1}
+        ports:
+          - ${CHROMA_PORT:-8000}
+  clients:
+    chroma:
+      # The same reference the creator's own count words read
+      # (agents/creator/rest.yaml), so the collection the child writes and the
+      # collection the creator counts are addressed through one value.
+      base_url: ${CHROMA_URL:-http://127.0.0.1:8000}
+      auth_ref: none
+      limits_ref: local_corpus
+      operations:
+        heartbeat:
+          method: GET
+          path: /api/v2/heartbeat
+          params:
+            body_source: none
+          success: {status: [200], signal: ChromaReady}
+          side_effects:
+            - kind: external_api
+              target: chroma.heartbeat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        create_or_get_collection_carry:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections
+          params:
+            body_schema:
+              type: object
+              required: [embeddings, documents, ids]
+              properties:
+                embeddings: {type: array}
+                documents: {type: string}
+                ids: {type: string}
+            body_source: previous_result
+            input_mapping:
+              embeddings: $.mapped.embedding
+              documents: $.carried.input
+              ids: $.carried.id
+            carry_forward: [embeddings, documents, ids]
+          body:
+            # The same reference the creator's resolve_ingest_collection reads,
+            # so the collection this child writes and the collection the creator
+            # counts before and after it are one value. Two literals that agreed
+            # by coincidence let a count delta pass over the wrong collection.
+            name: ${CORPUS_INGEST_COLLECTION:-corpus}
+            get_or_create: true
+          success: {status: [200, 201], signal: CollectionReady}
+          response:
+            output:
+              collection_id: $.id
+          side_effects:
+            - kind: external_api
+              target: chroma.collection
+              state: collection_upserted
+          reversibility:
+            classification: reversible
+            undo: noop
+        create_or_get_collection:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections
+          params:
+            body_source: previous_result
+            input_mapping: {}
+          body:
+            # The same reference the creator's resolve_ingest_collection reads,
+            # so the collection this child writes and the collection the creator
+            # counts before and after it are one value. Two literals that agreed
+            # by coincidence let a count delta pass over the wrong collection.
+            name: ${CORPUS_INGEST_COLLECTION:-corpus}
+            get_or_create: true
+          success: {status: [200, 201], signal: CollectionReady}
+          response:
+            output:
+              collection_id: $.id
+          side_effects:
+            - kind: external_api
+              target: chroma.collection
+              state: collection_upserted
+          reversibility:
+            classification: reversible
+            undo: noop
+        add_records:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/add
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [embeddings, documents, ids]
+              properties:
+                embeddings: {type: array}
+                documents: {type: string}
+                ids: {type: string}
+            body_source: previous_result
+            input_mapping:
+              collection: $.mapped.collection_id
+              embeddings: $.carried.embeddings
+              documents: $.carried.documents
+              ids: $.carried.ids
+          body:
+            embeddings: ["{{ params.embeddings }}"]
+            documents: ["{{ params.documents }}"]
+            ids: ["{{ params.ids }}"]
+            # srd010 R1.2 binds both write paths, and this is the agent-driven
+            # one. Every record leaves here carrying a clearance level, so the
+            # rag-server's pre-search filter has a field to evaluate rather than
+            # a missing one -- an untagged record matches no window and would be
+            # unreachable at every level, which reads as an empty corpus.
+            #
+            # The level is the highest declared one, and that is R1.3 rather
+            # than a placeholder. The canonical ingest machine carries the
+            # document text and its id and nothing else -- no source path, no
+            # front matter -- so on this path a document's declared
+            # classification is *absent*, and an absent level is tagged highest.
+            # Reading the text to guess a classification is exactly what R1.2
+            # forbids, and extending the canonical machine to carry front matter
+            # is what R1.4 forbids.
+            #
+            # The consequence is deliberate and worth stating: a corpus seeded
+            # through `mage seed` is reachable only by a fully cleared
+            # requester. The demo path (srd015 R5.3) writes the real declared
+            # levels from the chunk store, and that is the path a graded corpus
+            # comes from.
+            #
+            # The row carries the rest of what a chat turn's document render
+            # reads (GH-760): the level's rank in the declared order (secret is
+            # the fourth, rank 3) and the Admiralty grade. An agent-ingested
+            # document has no graded source, and the corpus grades an ungraded
+            # source F6, the scale's own "cannot be judged" (srd015 R2.3). A row
+            # missing either field fails the render and every turn that
+            # retrieves the document.
+            metadatas: [{"clearance": "secret", "clearance_rank": 3, "admiralty_source_reliability": "F", "admiralty_information_credibility": "6"}]
+          success: {status: [200, 201], signal: DocumentAdded}
+          side_effects:
+            - kind: external_api
+              target: chroma.records
+              state: records_added
+          reversibility:
+            classification: compensatable
+            undo: delete_records
+          compensation:
+            operation: delete_records
+            reason: Delete the inserted record IDs from the trusted collection.
+        delete_records:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/delete
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: {type: string}
+          body:
+            ids: ["{{ params.ids }}"]
+          success: {status: [200], signal: DocumentDeleted}
+          side_effects:
+            - kind: external_api
+              target: chroma.records
+              state: records_deleted
+          reversibility:
+            classification: irreversible
+            undo: irreversible
+            requires_confirmation: true
+        count_records:
+          method: GET
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/count
+          params:
+            path:
+              collection: {type: string}
+            body_source: previous_result
+            input_mapping:
+              collection: $.mapped.collection_id
+          success: {status: [200], signal: CountReady}
+          side_effects:
+            - kind: external_api
+              target: chroma.count
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop

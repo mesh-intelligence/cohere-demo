@@ -1,0 +1,132 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: cohere-fallback-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - declarations-types.yaml
+tools:
+  - name: drive_chat_turn
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Post one tasking to the chatbot the rig started and map its answer.
+    problem: Provider degradation must be proven against a controlled refusal rather than by waiting for a real one.
+    goals:
+      - Post a tasking to the chatbot at the address the rig published.
+      - Map the answer so the assertion can compare it.
+    requirements:
+      input:
+        - Tool config fixes the operation; the tasking is literal fixture data.
+      output:
+        - Output reports the answer field of the turn response.
+      errors:
+        - Unreachable or unmapped responses emit CommandError.
+    non_goals:
+      - Does not start or stop the chatbot; the rig owns that.
+    output:
+      description: The chatbot's turn response.
+    side_effects:
+      - kind: external_api
+        target: chatbot.chat
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A chat turn against mocks changes nothing durable.
+    errors:
+      - signal: CommandError
+        condition: The chatbot is unreachable or returns an unmapped status.
+        state_after_failure: No state changes.
+    config:
+      rest_ref: subject
+      operation: chat_turn
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SubjectAnswered, message: builtin.Message<cohere-fallback-declarations-types.DriveChatTurnOutput>}
+        - {signal: SubjectBroke, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: assert_fallback_answer
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Compare the returned answer against the default chat-LLM word's reply.
+    problem: A degraded turn must still answer, and the answer must be the fallback word's rather than a provider error surfaced as text.
+    goals:
+      - Pass only when the answer is exactly what the mock provider served the fallback word.
+      - Separate an unreadable answer from a mismatched one.
+    requirements:
+      input:
+        - The answer is read from the mapped drive_chat_turn output.
+      output:
+        - FallbackMatched when the answer equals the fallback reply; FallbackMismatched otherwise.
+      errors:
+        - An unresolvable or uncoercible answer emits CommandError rather than FallbackMismatched.
+    non_goals:
+      - Does not establish that the provider was reached; the probe does that.
+    output: {description: Comparison outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparing a value changes no external state.}
+    config:
+      left: $from(drive_chat_turn).body.mapped.answer
+      op: eq
+      # The third scripted reply of mocks/llm.yaml, which the fallback word reads.
+      right: "FALLBACK ANSWER: the corpus describes the rig subject and Solar Ridge."
+      operand_type: string
+      satisfied: FallbackMatched
+      unsatisfied: FallbackMismatched
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FallbackMatched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: FallbackMismatched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: probe_cohere
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Ask the Cohere mock whether the turn consumed its scripted refusal.
+    problem: A turn that never reached the provider degrades identically to one that did, so the fallback answer alone does not prove degradation.
+    goals:
+      - Read the mock's next scripted response and map it to a signal.
+      - Distinguish a provider that was called from one that was not.
+    requirements:
+      input:
+        - Tool config fixes the operation; the probe body is literal.
+      output:
+        - A success maps to CohereConsumed; the refusal still being served maps to CohereUntouched.
+      errors:
+        - An unreachable mock emits CommandError, distinct from either verdict.
+    non_goals:
+      - Does not drive a turn, and does not read the brief the provider would have composed.
+    output:
+      description: The mock's next scripted response.
+    side_effects:
+      - kind: external_api
+        target: cohere.chat
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a mock's next scripted response changes nothing durable.
+    errors:
+      - signal: CommandError
+        condition: The Cohere mock is unreachable or returns an unmapped status.
+        state_after_failure: No state changes.
+    config:
+      rest_ref: cohere_probe
+      operation: probe
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CohereConsumed, message: builtin.Message<cohere-fallback-declarations-types.ProbeOutput>}
+        - {signal: CohereUntouched, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

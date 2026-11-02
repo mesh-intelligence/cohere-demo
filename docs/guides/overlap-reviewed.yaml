@@ -1,0 +1,335 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# Runs of eight or more words that tracked files share with the private data
+# checkout, each reviewed and kept for the stated reason (srd017 R9.7). mage
+# corpus:overlap fails on any run not listed. An entry names a fingerprint
+# rather than the text, and editing or moving a run makes it unreviewed again.
+#
+# Reviewed 2026-11-02 by reading every run. This records a judgment about
+# keeping these strings, and it is not legal advice.
+reviewed:
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 1ad8e553e0242e33
+    words: 13
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 0ec09a9ffa709935
+    words: 12
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 4bd0c2a65ef38904
+    words: 11
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 97c0bb58d77ec152
+    words: 11
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: b1ae19809e3a658e
+    words: 10
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 158f250491bc7c1f
+    words: 9
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 446ae8593e464330
+    words: 9
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 535c77d3e954c2e1
+    words: 9
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 601c04474899c71f
+    words: 9
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 23f14057b8e0dafc
+    words: 8
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 70c853065b30f16b
+    words: 8
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: 7541dbbe92762ada
+    words: 8
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: b6de201a25397227
+    words: 8
+    reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
+  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+    fingerprint: bea31df5e8e1820f
+    words: 8
+    reason: "Unicode range in a bundled regular expression; false positive."
+  - file: agents/chatbot/ui/app/src/documentsApi.test.ts
+    fingerprint: 6d7d1d150ac4b417
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: agents/chatbot/ui/app/src/documentsApi.test.ts
+    fingerprint: 89b6aa099ffeb0b6
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 1ad8e553e0242e33
+    words: 13
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 0ec09a9ffa709935
+    words: 12
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 4bd0c2a65ef38904
+    words: 11
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 97c0bb58d77ec152
+    words: 11
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: b1ae19809e3a658e
+    words: 10
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 158f250491bc7c1f
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 446ae8593e464330
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 535c77d3e954c2e1
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 601c04474899c71f
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 23f14057b8e0dafc
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 70c853065b30f16b
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: 7541dbbe92762ada
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: agents/chatbot/ui/app/src/evalCorpus.json
+    fingerprint: b6de201a25397227
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: corpus/corpus.yaml
+    fingerprint: e3215e6d1c20c7e3
+    words: 8
+    reason: "Names the publisher in a provenance statement."
+  - file: corpus/store/documents/hr-23-030/00-envelope.yaml
+    fingerprint: e063fdda7fa495b9
+    words: 20
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/documents/hr-23-030/hr-23-030-atomic-0002.yaml
+    fingerprint: e063fdda7fa495b9
+    words: 20
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/documents/hr-23-030/hr-23-030-large-1800-0001.yaml
+    fingerprint: e063fdda7fa495b9
+    words: 20
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/documents/hr-23-030/hr-23-030-medium-900-0001.yaml
+    fingerprint: e063fdda7fa495b9
+    words: 20
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/documents/hr-23-032/00-envelope.yaml
+    fingerprint: 749b4f648c25299f
+    words: 8
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/documents/hr-23-032/hr-23-032-atomic-0001.yaml
+    fingerprint: 749b4f648c25299f
+    words: 8
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/documents/hr-23-032/hr-23-032-large-1800-0001.yaml
+    fingerprint: 749b4f648c25299f
+    words: 8
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/documents/hr-23-032/hr-23-032-medium-900-0001.yaml
+    fingerprint: 749b4f648c25299f
+    words: 8
+    reason: "Invented hr-* text. It matches only a private generated report that quotes this invented document."
+  - file: corpus/store/store.yaml
+    fingerprint: e3215e6d1c20c7e3
+    words: 8
+    reason: "Names the publisher in a provenance statement."
+  - file: data/isw/README.md
+    fingerprint: c4441557a55fcdf6
+    words: 11
+    reason: "Provenance README naming the source or its column names, as srd017 R9.2 requires."
+  - file: data/isw/README.md
+    fingerprint: a33bcb24064bafc0
+    words: 8
+    reason: "Provenance README naming the source or its column names, as srd017 R9.2 requires."
+  - file: data/missile_attacks/README.md
+    fingerprint: 19e6954c41e9a1a3
+    words: 8
+    reason: "Provenance README naming the source or its column names, as srd017 R9.2 requires."
+  - file: data/war_losses/README.md
+    fingerprint: b0aae4ba83e8328a
+    words: 12
+    reason: "Provenance README naming the source or its column names, as srd017 R9.2 requires."
+  - file: data/war_losses/README.md
+    fingerprint: fc9f9e97f619eaa5
+    words: 8
+    reason: "Provenance README naming the source or its column names, as srd017 R9.2 requires."
+  - file: docs/road-map.yaml
+    fingerprint: 94473608470c57c6
+    words: 9
+    reason: "Names the publisher in a provenance statement."
+  - file: docs/specs/software-requirements/srd017-real-demo-corpus.yaml
+    fingerprint: 94473608470c57c6
+    words: 9
+    reason: "Names the publisher in a provenance statement."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 1ad8e553e0242e33
+    words: 13
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 0ec09a9ffa709935
+    words: 12
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 4bd0c2a65ef38904
+    words: 11
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 97c0bb58d77ec152
+    words: 11
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: b1ae19809e3a658e
+    words: 10
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 158f250491bc7c1f
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 446ae8593e464330
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 535c77d3e954c2e1
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 601c04474899c71f
+    words: 9
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 23f14057b8e0dafc
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 70c853065b30f16b
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: 7541dbbe92762ada
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: evaluation/generated-corpus.yaml
+    fingerprint: b6de201a25397227
+    words: 8
+    reason: "Short common phrase in a machine-generated tasking. Taskings stay public; the reports they derive from do not."
+  - file: magefiles/corpus_adapters.go
+    fingerprint: b3acfaf7bc2be7ed
+    words: 59
+    reason: "ISW's standing disclaimer. The adapter matches it literally to keep it out of retrieval vectors, so the string is functional."
+  - file: magefiles/corpus_adapters.go
+    fingerprint: a8a581057c11bab8
+    words: 15
+    reason: "The templated sentence of the losses tier that the adapter recognizes. Functional and non-expressive."
+  - file: magefiles/corpus_adapters.go
+    fingerprint: b0aae4ba83e8328a
+    words: 12
+    reason: "Dataset column names. Not expression."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: e56935fbad315fc9
+    words: 28
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 6ddd157d542151f9
+    words: 25
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 23c0c99db6299ec0
+    words: 16
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 1788201d2e390b08
+    words: 13
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 76d18141d9c0b1d7
+    words: 12
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: f66e6d3801d70c02
+    words: 12
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 556b23312a858b00
+    words: 11
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 73829752619fd6cb
+    words: 10
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 1eab4d44e8185a96
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 42d6d3a18962e707
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: 8948059cc42117b9
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_adapters_test.go
+    fingerprint: d70ce57cee5a01f3
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_embed_test.go
+    fingerprint: eb8d8ecae21b4695
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_profiles_test.go
+    fingerprint: dfdd7aad6e8c0da6
+    words: 10
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_profiles_test.go
+    fingerprint: eb8d8ecae21b4695
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_slice_test.go
+    fingerprint: b0aae4ba83e8328a
+    words: 12
+    reason: "Dataset column names. Not expression."
+  - file: magefiles/corpus_slice_test.go
+    fingerprint: 19e6954c41e9a1a3
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/corpus_slice_test.go
+    fingerprint: eb8d8ecae21b4695
+    words: 8
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: magefiles/document_serving_test.go
+    fingerprint: dfdd7aad6e8c0da6
+    words: 10
+    reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."

@@ -1,0 +1,279 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd014-evaluation
+title: Evaluation Methodology over Labeled Taskings
+
+role_realization_decision:
+  current_actor: evaluation harness
+  implemented_responsibility: Run the existing turn over a labeled-tasking corpus and compute retrieval recall, citation coverage, and first-draft time against declared thresholds.
+  canonical_role_sub_role: Critic / Output Evaluator -- it evaluates the mesh's output and asserts nothing about how the mesh produces it.
+  retained_or_proposed_name: No new agent. The harness is a Go test-plane artifact alongside the existing integration targets, not a profile on the runtime.
+  authority_boundary: The harness drives the turn through its ordinary request boundary and reads its ordinary responses. It holds no authority to alter the turn, the corpus, or any agent, and its measurements SHALL NOT depend on instrumentation that changes the path under measurement.
+  evidence: [docs/VISION.yaml success_criteria, srd014 R1-R6]
+  migration_impact: None. rel13.0 changes no agent, profile, or machine.
+
+document_type_decision: |
+  This unit is a numbered SRD rather than a test suite, and the choice is
+  recorded here because the epic left it to the author.
+
+  The test-suite format (docs/constitutions/design.yaml, test_suite) requires a
+  `traces` list of use case IDs, and its test cases trace to SRD R-items and AC
+  IDs. Release rel13.0 has no use case yet -- use cases and test suites for the
+  Cohere releases are the downstream epic -- so a test suite written now would
+  trace to nothing and would break the corpus invariant that every test suite
+  traces its use case. The road map already defers it, recording that the
+  rel13.0 test suite and evaluation corpus are authored when the release is
+  scheduled.
+
+  The content is also SRD-shaped rather than test-shaped. What rel13.0 needs
+  specified is what a metric means, what the corpus must contain, which
+  thresholds count as passing, and what the resulting numbers may be claimed to
+  support. Those are normative statements, not inputs and expected outputs. The
+  test suite that eventually validates this SRD's acceptance criteria is
+  test-rel13.0, authored with the rel13.0 use case.
+
+context: |
+  The VISION states four numbers: retrieval surfaces at least ninety percent of
+  the documents an analyst would find, every assertion carries a citation, a
+  first draft arrives in under ninety minutes against a half-day baseline, and
+  at least ninety-five percent of briefs conform to the template. Three of those
+  are properties of the turn that no single run demonstrates. A demonstration
+  answers one tasking well; a claim about recall is a claim about a population.
+
+  rel13.0 is where the claims become measurements. A harness runs the existing
+  turn over a corpus of taskings whose relevant documents are labeled in advance,
+  computes each metric against a declared definition, and reports the result
+  against a declared threshold. It changes nothing about the turn -- that is the
+  point, since a measurement that alters the path it measures is not a
+  measurement of the shipped system.
+
+  Two of the metrics need Rerank isolated rather than merely present. The recall
+  claim is specifically that Rerank lifts documents embedding retrieval left
+  below the cutoff (ARCHITECTURE design decision 8), and the only way to show
+  that is to run the same taskings with the rerank passes on and off and report
+  both. A single number with Rerank in the path proves the system works; the pair
+  proves Rerank is why.
+
+  The corpus is synthetic and clearly fictional by design, which the VISION
+  records as a risk. That does not make the numbers meaningless -- the method is
+  what transfers to a real corpus -- but it does mean this SRD has to say what
+  the numbers support and what they do not, in the specification rather than in a
+  footnote someone drops when the slide is made.
+
+problem: |
+  Turning the VISION's four numbers into measurements needs three things
+  specified, and each has a way of going quietly wrong.
+
+  The metrics need definitions with unambiguous denominators. Recall against
+  what set, measured at which point in the cascade? Citation coverage over what
+  unit -- and who decides where one assertion ends and the next begins, given
+  that a coverage number computed over a segmentation nobody declared can be
+  moved by changing the segmentation? First-draft time from which event to which
+  event, and does it include the human edit the VISION requires?
+
+  The corpus needs a schema, because a labeled relevant set assembled after
+  seeing what the system retrieved is not a labeled relevant set. Labeling has to
+  be independent of the runs it scores.
+
+  And the claim needs bounding. A synthetic corpus with designed taskings will
+  produce good numbers, and reporting them without stating that they are
+  demonstration figures over a fictional corpus would misrepresent a proof of
+  concept as an operational result. The VISION already commits to stating the
+  distinction openly; this SRD is where that commitment becomes a requirement
+  rather than an intention.
+
+goals:
+  - G1: Define the labeled-tasking corpus and its relevant-set schema, with labeling independent of the runs it scores.
+  - G2: Define retrieval recall against the labeled relevant set, measured with and without the rerank passes so Rerank's contribution is isolated rather than assumed.
+  - G3: Define citation coverage over a declared, deterministic assertion segmentation, so the denominator is not an argument.
+  - G4: Define first-draft time end to end against the half-day baseline, separating the system's contribution from the analyst's edit.
+  - G5: Constrain the harness to drive the shipped turn without altering it, and to produce reproducible, inspectable results.
+  - G6: Bound what the resulting numbers may be claimed to support, given a synthetic corpus.
+
+requirements:
+  R1:
+    title: Labeled-tasking corpus
+    items:
+      - R1.1: The evaluation corpus SHALL consist of taskings, each paired with a labeled relevant set naming the corpus documents an experienced analyst would identify as relevant to that tasking.
+      - R1.2: The relevant set SHALL be labeled independently of any evaluation run, and SHALL NOT be derived, adjusted, or extended from what the system retrieved.
+      - R1.3: The corpus SHALL span the retrieval conditions the criteria depend on -- taskings whose relevant documents sit across multiple sources, taskings at more than one clearance level, and taskings whose relevant set includes documents embedding retrieval ranks below the cutoff.
+      - R1.4: The corpus and its labels SHALL be versioned, so a reported number names the corpus version it was measured over.
+      - R1.5: The corpus SHALL be clearly fictional by construction, containing no real classified, personal, or operational content.
+  R2:
+    title: Retrieval recall
+    items:
+      - R2.1: Retrieval recall SHALL be the fraction of a tasking's labeled relevant documents appearing in the document set passed to Command, averaged over the corpus.
+      - R2.2: Recall SHALL be measured at the top-N handed to composition rather than at any earlier candidate set, because that is the set the brief can draw on.
+      - R2.3: The evaluation SHALL report recall twice over the same taskings and at the same N -- under the rerank order and under the retrieval (cosine) order truncated to that N -- so the pair isolates ordering; a comparison against the untrimmed set measures the trim, not the rerank.
+      - R2.7: The evaluation SHALL also report recall over the untrimmed fan-out, labeled as the retrieval boundary for the configuration, so a miss the boundary never returned is distinguishable from one the trim dropped.
+      - R2.8: Beside each at-N figure the evaluation SHALL report the ceiling-normalised recall, the figure divided by min(N, relevant)/relevant per tasking, so a labeled set larger than N reads against what N makes achievable.
+      - R2.4: The reported configuration SHALL name N, the retrieval branches enabled, and the clearance level each run executed at, since recall is meaningless without them.
+      - R2.5: The recall threshold SHALL be at least ninety percent with Rerank in the path, and the evaluation SHALL report pass or fail against it rather than the number alone.
+      # The input_type asymmetry (search_query on the turn, search_document on
+      # the corpus) degrades recall without failing anything if either side is
+      # miswired: both calls return 200 and well-formed vectors (GH-228). This
+      # evaluation is the only instrument that sees the loss, so the condition
+      # is named here rather than assumed caught elsewhere.
+      - R2.6: The evaluation SHALL be treated as the detection instrument for embedding input_type miswiring, and a recall regression investigation SHALL include the input_type configuration among its suspects.
+  R3:
+    title: Citation coverage
+    items:
+      - R3.1: Citation coverage SHALL be the fraction of a brief's assertions carrying a citation that resolves to a document in the composition set, averaged over the generated briefs.
+      - R3.2: The assertion segmentation rule SHALL be declared and deterministic, so the denominator is reproducible and a coverage number cannot be moved by re-segmenting.
+      - R3.3: A citation that does not resolve to a document in the composition set SHALL count against coverage rather than being discarded from the denominator (srd009 R4.4).
+      - R3.4: Coverage SHALL be computed from the structured citation metadata srd009 R4 surfaces, never from scraping the answer text, so the measurement uses the same evidence the interface does.
+      - R3.5: The coverage threshold SHALL be complete coverage, and any brief falling short SHALL be reported individually rather than absorbed into an average.
+  R4:
+    title: First-draft time
+    items:
+      - R4.1: First-draft time SHALL be measured end to end from tasking submission to a draft a reviewer accepts.
+      - R4.2: The measurement SHALL separate the system segment -- tasking submission to the brief surfaced to the analyst -- from the analyst's edit segment, and SHALL report both alongside the total.
+      - R4.3: The total SHALL be compared against the half-day baseline, and that baseline SHALL be recorded as a stated assumption about current practice rather than a figure this harness measured.
+      - R4.4: The first-draft-time threshold SHALL be under ninety minutes total, reported as pass or fail against the recorded baseline.
+      - R4.5: Export time SHALL be excluded from first-draft time, because export runs after approval and off the drafting path (srd013 R4.2).
+  R5:
+    title: Harness constraints
+    items:
+      - R5.1: The harness SHALL drive the shipped turn through its ordinary request boundary and read its ordinary responses; it SHALL NOT modify any agent, profile, machine, or prompt to obtain a measurement.
+      - R5.2: rel13.0 SHALL introduce no turn change. The harness and its corpus SHALL be the release's only additions, and the harness SHALL be the only Go this release contributes.
+      - R5.3: A run SHALL emit per-tasking results alongside the aggregates, so a number is inspectable down to the tasking that produced it rather than presented only as a mean.
+      - R5.4: A run SHALL record the corpus version, the configuration of R2.4, and the model identities used, so a reported result is reproducible and two results are comparable only when those match.
+      - R5.5: A failed or errored tasking SHALL be reported as such and SHALL NOT be silently dropped from a denominator, because dropping failures inflates every metric computed over the remainder.
+  R6:
+    title: Scope of the claim
+    items:
+      - R6.1: Every reported figure SHALL be labeled as measured over a synthetic, clearly fictional corpus, in the evaluation output itself rather than only in accompanying prose.
+      - R6.2: The evaluation SHALL be described as evidence that the method measures what it claims to measure, and SHALL NOT be described as an operational performance result.
+      - R6.3: The evaluation SHALL NOT be used to support a claim about clearance isolation or template conformance; those criteria are proven by the srd010 access-control test and the srd012 conformance check respectively, which are population checks rather than sampled measurements.
+      - R6.4: A threshold met over this corpus SHALL be stated as met over this corpus, so re-running the method against a customer corpus is the step that produces a customer claim.
+
+  R7:
+    title: Generated-reference labeling
+    items:
+      - R7.1: The evaluation MAY carry a second, generated labeled corpus built backwards from ground truth -- reference documents sampled from the retrieval corpus, a report composed from those references alone, and a tasking derived from the report -- with the sampled references standing as the tasking's relevant set.
+      - R7.2: The tasking SHALL be derived from the generated report rather than from the raw references, so a tasking cannot be answerable from a subset and every reference stays load-bearing.
+      - R7.3: A generated tasking SHALL NOT contain a document identifier, a metadata literal, or text that names its references directly, and generation SHALL reject a tasking that leaks them.
+      - R7.4: The generated corpus SHALL be its own versioned file carrying generator provenance -- model identity, prompt version, and the retrieval-corpus version it sampled -- and SHALL NOT be merged into the analyst-labeled corpus; a reported number names which corpus and version produced it, and the two denominators are never combined.
+      - R7.5: Each generated set SHALL record the minimum clearance its references require, and a run over that set SHALL execute at or above that level, or report the set as unreachable rather than scoring it.
+      - R7.6: Generation SHALL complete before any evaluation run over the generated corpus and SHALL NOT be adjusted toward what the system retrieved, so the R1.2 independence holds by construction rather than by discipline.
+  R8:
+    title: In-demo evaluation command
+    items:
+      - R8.1: The chat interface MAY expose an /eval command that runs a demo-sized slice of the evaluation from the chat window and reports retrieval recall in the conversation itself.
+      - R8.2: The command SHALL drive the shipped turn through the same ordinary request boundary the harness uses, and SHALL introduce no agent, profile, machine, or prompt to obtain its measurement.
+      - R8.3: The command's report SHALL name the corpus and version, the slice size, and the clearance it ran at, and SHALL carry the R6.1 synthetic-corpus label in the reported message itself.
+      - R8.4: Over the same taskings and configuration, the command's per-tasking recall SHALL agree with the harness; a disagreement is a defect in one of them, never a second metric.
+
+non_goals:
+  - Author the corpus content, the taskings, or their labels; the schema and the method are specified here and the corpus is built when rel13.0 is scheduled.
+  - Measure clearance isolation or template conformance; R6.3 assigns both elsewhere.
+  - Benchmark the Cohere models against other providers; the evaluation measures this system over this corpus.
+  - Tune retrieval, rerank, or composition to improve a metric; the harness measures the shipped configuration and changing it to move a number is the failure this SRD exists to prevent.
+  - Define the rel13.0 test suite; test-rel13.0 is authored with the rel13.0 use case in the downstream epic.
+  - Establish the half-day baseline empirically; R4.3 records it as a stated assumption.
+  - Define Go package APIs for the harness; the constraints are behavioral.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: The corpus pairs each tasking with a relevant set labeled independently of any run, spans multi-source, multi-clearance, and below-cutoff retrieval conditions, is versioned so a number names the corpus it came from, and is clearly fictional by construction.
+    traces: [R1.1, R1.2, R1.3, R1.4, R1.5]
+  - id: AC2
+    criterion: Recall is defined against the labeled relevant set at the top-N passed to Command, reported both with and without the rerank passes over the same taskings so Rerank's contribution is a measured difference, qualified by N, branches, and clearance, and reported as pass or fail against the ninety percent threshold, and a recall regression names the embedding input_type configuration among its suspects. This is the retrieval-recall criterion as measured evidence.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5, R2.6, R2.7, R2.8]
+  - id: AC3
+    criterion: Citation coverage is computed from the srd009 R4 structured metadata over a declared deterministic assertion segmentation, counts unresolvable citations against coverage rather than dropping them, and reports any short brief individually against a complete-coverage threshold.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5]
+  - id: AC4
+    criterion: First-draft time runs from tasking submission to an accepted draft, separates and reports the system and analyst-edit segments alongside the total, compares against a half-day baseline recorded as a stated assumption rather than a measured figure, excludes export time, and reports pass or fail against ninety minutes. This is the first-draft-time criterion as measured evidence and the rel13.0 tracer.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5]
+  - id: AC5
+    criterion: The harness drives the shipped turn through its ordinary boundary without modifying any agent, profile, machine, or prompt, adds no turn change and is the release's only Go, emits per-tasking results alongside aggregates, records corpus version and run configuration for reproducibility, and reports failed taskings rather than dropping them from a denominator.
+    traces: [R5.1, R5.2, R5.3, R5.4, R5.5]
+  - id: AC6
+    criterion: Every figure is labeled in the output as measured over a synthetic corpus, the evaluation is described as method evidence rather than an operational result, it is not used to support the clearance-isolation or template-conformance criteria, and a met threshold is stated as met over this corpus.
+    traces: [R6.1, R6.2, R6.3, R6.4]
+  - id: AC7
+    criterion: The generated corpus is built backwards from sampled references through a report to a derived tasking, leaks no reference identifiers, lives in its own versioned file with generator provenance, records per-set minimum clearance, and is complete before any run it is scored against, so labeling independence holds by construction.
+    traces: [R7.1, R7.2, R7.3, R7.4, R7.5, R7.6]
+  - id: AC8
+    criterion: The /eval command runs a demo-sized slice through the shipped request boundary without adding any agent, profile, machine, or prompt, reports corpus, version, slice, clearance, and the synthetic-corpus label in the message itself, and agrees with the harness over the same taskings.
+    traces: [R8.1, R8.2, R8.3, R8.4]
+
+depends_on:
+  # R2 measures the reranked top-N srd009 R5 produces, and R3 reads the
+  # structured citation metadata srd009 R4 surfaces. The evaluation observes
+  # both contracts and changes neither.
+  - srd_id: srd009-cohere-provider
+    symbols_used: [R4, R5]
+  # R2.3 compares the rerank order and the cosine order at one N (GH-576):
+  # the without-rerank shape composes the fan-out order untrimmed, and the
+  # harness derives both the boundary (R2.7) and the same-N truncation from
+  # that one run. R2.3 toggles the rerank passes srd011 adds across both branches, and R2.4
+  # reports which branches a run had enabled.
+  - srd_id: srd011-osint-search-cascade-rerank
+    symbols_used: [R3, R4]
+  # R6.3 assigns the clearance-isolation criterion to the srd010 access-control
+  # test rather than to this sampled evaluation.
+  - srd_id: srd010-clearance-gated-retrieval
+    symbols_used: [R5]
+  # R6.3 likewise assigns template conformance to the srd012 check, which runs
+  # on every brief rather than on a sample.
+  - srd_id: srd012-brief-markdown-conformance
+    symbols_used: [R3, R5]
+
+implementation_status:
+  retired:
+    - >-
+      The labeled-tasking corpus authored ahead of this release named documents
+      of the synthetic Sable Strait corpus, which rel10.5 retired (srd017 R9.1).
+      Labels naming documents that no longer exist measure nothing, so they were
+      removed with the corpus rather than left to look like evidence. R1 is
+      unchanged and rel13.0 authors the labels over the Ukraine corpus, before
+      any evaluation run, as R1.2 requires (GH-284).
+  implemented:
+    - >-
+      R1: the labeled-tasking corpus at testdata/evaluation/taskings.yaml. Ten
+      taskings over the rel10.4 Sable Strait documents, each paired with a
+      relevant set labeled before any harness existed, spanning four clearance
+      levels with more than one source type on nine of the ten, four sets larger
+      than the composition top-N, and the obliquely written documents marked. It
+      names its own version and the retrieval corpus version it was labeled
+      over, records its labeling provenance and amendment rule, and identifies
+      itself as synthetic in the artifact.
+    - >-
+      R1.3's below-cutoff condition, measured rather than declared. The probe in
+      mage integration:corpusBuild seeds a collection from the chunk store,
+      embeds each labeled tasking at the identity the store was seeded under,
+      and queries at the declared top-N. Over the shipped corpus every one of
+      the ten taskings has labeled relevant documents outside the top-5, and six
+      of them lose a document from a labeled set that would have fit inside it,
+      which is retrieval ranking a relevant document out rather than a set too
+      large to fit. The probe reads labels and never writes them: a rank
+      recorded into the corpus would be a label derived from a run, which R1.2
+      forbids.
+  planned:
+    - >-
+      rel13.0 (Evaluation and first-draft-time proof): a Go evaluation harness
+      over the existing turn computing retrieval recall with and without Rerank,
+      citation coverage, and first-draft time against their thresholds (R2
+      through R6). The tracer runs the evaluation over the labeled taskings and
+      reports the three metrics against the half-day baseline.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: Turn the VISION's numbers into measurements with defined denominators and a bounded claim"] --> Goals["Goals: Evaluation Methodology over Labeled Taskings"]
+      Goals --> R1["R1: Labeled-tasking corpus"]
+      Goals --> R2["R2: Retrieval recall"]
+      Goals --> R3["R3: Citation coverage"]
+      Goals --> R4["R4: First-draft time"]
+      Goals --> R5["R5: Harness constraints"]
+      Goals --> R6["R6: Scope of the claim"]
+      R1 --> AC1["AC1: labels independent of runs, versioned, fictional"]
+      R2 --> AC2["AC2: recall with and without Rerank, measured at the top-N"]
+      R3 --> AC3["AC3: coverage over a declared segmentation, from structured citations"]
+      R4 --> AC4["AC4: system and edit segments against the half-day baseline (rel13.0)"]
+      R5 --> AC5["AC5: measures the shipped turn, changes nothing, drops nothing"]
+      R6 --> AC6["AC6: demonstration figures over a synthetic corpus, stated as such"]
+    ```

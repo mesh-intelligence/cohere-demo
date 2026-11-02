@@ -1,0 +1,246 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+rest:
+  version: v1
+  auth:
+    # The kube API is reached through a loopback kubectl-proxy sidecar that adds
+    # the service-account bearer token, so the observer itself needs no
+    # credential — the declarative runtime carries no credential resolver
+    # (GH-1302).
+    none: {type: none}
+  limits:
+    control:
+      timeout: 5s
+      read_timeout: 5s
+      max_request_bytes: 16384
+      max_response_bytes: 65536
+      redirect: {mode: none}
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports:
+          - ${OBSERVER_CONTROL_PORT:-18201}
+        allow_public_listener: true
+    kube_client:
+      timeout: ${OBSERVER_KUBE_TIMEOUT:-5s}
+      read_timeout: ${OBSERVER_KUBE_TIMEOUT:-5s}
+      max_request_bytes: 0
+      max_response_bytes: 2097152
+      redirect: {mode: none}
+      # The client reaches the kube API only through the loopback kubectl-proxy
+      # sidecar over http, never the API server directly (GH-1302).
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+    agent_monitor_client:
+      timeout: ${OBSERVER_AGENT_TIMEOUT:-3s}
+      read_timeout: ${OBSERVER_AGENT_TIMEOUT:-3s}
+      max_request_bytes: 0
+      max_response_bytes: 1048576
+      redirect: {mode: none}
+      # The fan-in dials a discovered pod address, so the host cannot be an
+      # allowlist. The port is what configuration bounds: each pod publishes its
+      # own monitor port as a label, and this allowlist authorizes the result, so
+      # a relabelled pod cannot redirect the observer at an arbitrary port
+      # (srd028 R14.7). The set mirrors the chart's per-component monitor ports;
+      # a port changed in values.yaml must be changed here too.
+      network:
+        schemes: [http]
+        ports:
+          - 18082  # chatbot
+          - 18087  # rag-server
+          - 18092  # applier
+          - 18102  # provisioning-workflow-orchestrator
+          - 18112  # creator
+          - 18122  # exporter
+          - 18192  # collector
+          - 18202  # observer
+
+  servers:
+    observer_control:
+      address: ${OBSERVER_BIND_HOST:-127.0.0.1}:${OBSERVER_CONTROL_PORT:-18201}
+      limits_ref: control
+      queue: {name: observer_control, capacity: 8, timeout: 100ms}
+      shutdown: {timeout: 5s, drain_policy: drain_then_stop}
+      endpoints:
+        health: {method: GET, path: /api/lifecycle/health, binding: health}
+
+  clients:
+    kube_api:
+      # KUBE_API_URL points at the loopback kubectl-proxy sidecar in the cluster;
+      # the default keeps a local run pointed at the same loopback contract. The
+      # sidecar supplies the bearer token, so this client authenticates with none
+      # (GH-1302).
+      base_url: ${KUBE_API_URL:-http://127.0.0.1:8001}
+      auth_ref: none
+      limits_ref: kube_client
+      operations:
+        list_pods:
+          method: GET
+          path: /api/v1/namespaces/${OBSERVER_NAMESPACE:-default}/pods
+          params:
+            query:
+              # Agent pods, not every pod in the release (srd008 R1.1). The
+              # release selector alone also matches the infrastructure the mesh
+              # runs on -- the Dolt and Chroma StatefulSets -- which serve no
+              # monitor surface, so the fan-in reported them as permanently
+              # unreachable agents. Requiring the monitor-port label every agent
+              # publishes selects exactly the pods that have a monitor surface to
+              # read. The requirement is composed here rather than added to
+              # OBSERVER_LABEL_SELECTOR because the Deployment, Service, and pod
+              # metrics queries share that value and carry no such label
+              # (GH-1474).
+              labelSelector: ${OBSERVER_LABEL_SELECTOR:-app.kubernetes.io/instance=chatbot-mesh},monitorPort
+            body_source: none
+          success: {status: [200], signal: PodsDiscovered}
+          response:
+            output:
+              pods: $.items
+          side_effects:
+            - kind: external_api
+              target: kubernetes.pods.list
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        list_deployments:
+          method: GET
+          path: /apis/apps/v1/namespaces/${OBSERVER_NAMESPACE:-default}/deployments
+          params:
+            query:
+              labelSelector: ${OBSERVER_LABEL_SELECTOR:-app.kubernetes.io/instance=chatbot-mesh}
+            body_source: none
+          success: {status: [200], signal: DeploymentsListed}
+          response:
+            output:
+              deployments: $.items
+          side_effects:
+            - kind: external_api
+              target: kubernetes.deployments.list
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        list_services:
+          method: GET
+          path: /api/v1/namespaces/${OBSERVER_NAMESPACE:-default}/services
+          params:
+            query:
+              labelSelector: ${OBSERVER_LABEL_SELECTOR:-app.kubernetes.io/instance=chatbot-mesh}
+            body_source: none
+          success: {status: [200], signal: ServicesListed}
+          response:
+            output:
+              services: $.items
+          side_effects:
+            - kind: external_api
+              target: kubernetes.services.list
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        list_pod_metrics:
+          method: GET
+          path: /apis/metrics.k8s.io/v1beta1/namespaces/${OBSERVER_NAMESPACE:-default}/pods
+          params:
+            query:
+              labelSelector: ${OBSERVER_LABEL_SELECTOR:-app.kubernetes.io/instance=chatbot-mesh}
+            body_source: none
+          success: {status: [200], signal: MetricsPolled}
+          response:
+            output:
+              pod_metrics: $.items
+          side_effects:
+            - kind: external_api
+              target: kubernetes.podmetrics.list
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+    agent_monitor:
+      # Every operation selects its own target from the discovered pod, so this
+      # configured base_url is never dialed; it stays a non-routable loopback so
+      # a missing selector fails closed instead of reaching a real service.
+      base_url: http://127.0.0.1:1
+      auth_ref: none
+      limits_ref: agent_monitor_client
+      # One operation per monitor endpoint, each a single GET, because a REST
+      # dispatch performs at most one request (srd028 R5.8). The machine's
+      # for_each expands each operation over the discovered pods, so iteration
+      # stays visible in MachineSpec (srd028 R1.5). Each pod's address and
+      # monitor port come from the pod object the iterator binds as `pod`
+      # (srd028 R14.6, R14.7). No operation declares response.output: the whole
+      # monitor payload is already the Result output's body, which the join
+      # exposes per item as result.structured_output.body.
+      operations:
+        read_agent_machine:
+          method: GET
+          path: /monitor/machine
+          base_url_source: command_state
+          base_url_host_selector: $from(pod).body.status.podIP
+          base_url_port_selector: $from(pod).body.metadata.labels.monitorPort
+          base_url_scheme: http
+          params:
+            body_source: none
+          success: {status: [200], signal: AgentMonitorRead}
+          side_effects:
+            - kind: external_api
+              target: agent.monitor
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        read_agent_state:
+          method: GET
+          path: /monitor/state
+          base_url_source: command_state
+          base_url_host_selector: $from(pod).body.status.podIP
+          base_url_port_selector: $from(pod).body.metadata.labels.monitorPort
+          base_url_scheme: http
+          params:
+            body_source: none
+          success: {status: [200], signal: AgentMonitorRead}
+          side_effects:
+            - kind: external_api
+              target: agent.monitor
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        read_agent_tools:
+          method: GET
+          path: /monitor/tools
+          base_url_source: command_state
+          base_url_host_selector: $from(pod).body.status.podIP
+          base_url_port_selector: $from(pod).body.metadata.labels.monitorPort
+          base_url_scheme: http
+          params:
+            body_source: none
+          success: {status: [200], signal: AgentMonitorRead}
+          side_effects:
+            - kind: external_api
+              target: agent.monitor
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        read_agent_events:
+          method: GET
+          path: /monitor/events
+          base_url_source: command_state
+          base_url_host_selector: $from(pod).body.status.podIP
+          base_url_port_selector: $from(pod).body.metadata.labels.monitorPort
+          base_url_scheme: http
+          params:
+            body_source: none
+          success: {status: [200], signal: AgentMonitorRead}
+          side_effects:
+            - kind: external_api
+              target: agent.monitor
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop

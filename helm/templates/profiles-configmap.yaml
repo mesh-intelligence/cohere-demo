@@ -1,0 +1,202 @@
+{{/* Copyright (c) 2026 Mesh Intelligence Inc. */}}
+{{/* SPDX-License-Identifier: MIT-0 */}}
+{{- $fullname := include "chatbot-mesh.fullname" . -}}
+{{/*
+One profiles ConfigMap per agent root, plus one for the applications subtree,
+rather than a single object every pod mounts (GH-311). The shared object had
+crossed three quarters of the 1 MiB ConfigMap limit during rel11.5, and most
+of it was declarations only one agent reads; splitting the projection returns
+each object to a fraction of the limit and lets a workload roll only when its
+own profiles change. Membership is derived from the staged tree, so a new
+agent gets its own object without editing this template; the completeness
+check in TestStagedProfilesFitTheConfigMapLimit asserts every staged key is
+served by exactly one object.
+
+The per-file special cases carry over from the shared object: the served UI
+bundles stay out (they travel as the agents' own UI ConfigMaps, GH-131), the
+applier exec declarations are rewritten to the installed release's
+coordinates (GH-484, guarded by TestApplierExecArgsCarryNoBakedReleaseCoordinate),
+and the chatbot's co-generated keys override its packaged files (srd003 R2).
+*/}}
+{{- $groups := dict -}}
+{{- /* The chatbot group renders whether or not a packaging step staged the
+      profiles tree, because its co-generated keys come from values rather
+      than files and an unstaged render (helm template on the raw chart) must
+      still carry them for the tests that read the co-generation alone. */}}
+{{- $_ := set $groups "chatbot" true -}}
+{{- range $path, $_ := .Files.Glob "profiles/**" }}
+{{- $rel := $path | trimPrefix "profiles/" }}
+{{- $parts := splitList "/" $rel }}
+{{- if eq (first $parts) "agents" }}
+{{- $_ := set $groups (index $parts 1) true }}
+{{- else }}
+{{- $_ := set $groups "applications" true }}
+{{- end }}
+{{- end }}
+{{- /* A group whose verbatim profiles travel outside the release keeps its
+      object here for the keys the release still decides, so the projection has
+      something to name (GH-785). */}}
+{{- range $group, $_ := (.Values.profiles.external | default dict) }}
+{{- $_ := set $groups $group true }}
+{{- end }}
+{{- $cogen := splitList " " (include "chatbot-mesh.cogeneratedProfileKeys" .) }}
+{{- $rewritten := splitList " " (include "chatbot-mesh.renderedProfileKeys" .) }}
+{{- range $group, $_ := $groups }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-profiles-{{ $group }}
+  labels:
+    {{- include "chatbot-mesh.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: profiles
+    chatbot-mesh/profiles-group: {{ $group }}
+{{- /* A group whose verbatim profiles were provisioned outside the release
+      carries only what the release decides here (GH-785): its co-generated
+      keys, and the keys below that are rewritten from a packaged file. */}}
+{{- $external := index (($.Values.profiles.external | default dict)) $group | default dict }}
+data:
+  {{- range $path, $_ := $.Files.Glob "profiles/**" }}
+  {{- $rel := $path | trimPrefix "profiles/" }}
+  {{- $member := false }}
+  {{- if eq $group "applications" }}
+  {{- $member = hasPrefix "applications/" $rel }}
+  {{- else }}
+  {{- $member = hasPrefix (printf "agents/%s/" $group) $rel }}
+  {{- end }}
+  {{- $key := $rel | replace "/" "__" }}
+  {{- if and $member (not (has $key $cogen)) (not (hasPrefix "agents__chatbot__ui__app__dist__" $key))
+             (or (not $external.configMap) (has $key $rewritten)) }}
+  {{ $key }}: |-
+  {{- if eq $key "applications__chatbot-mesh__applier__exec-declarations.yaml" }}
+    {{- /* Rewrite the applier exec args' placeholder coordinates to the installed
+          release so an applier installed under any release name targets its own
+          release, namespace, and chatbot Deployment rather than a baked
+          chatbot-mesh/default (GH-484). The deployment token is replaced before
+          the bare release token because it contains it. Each helm subcommand
+          carrying the release is listed separately, so an exec word added with
+          a subcommand absent here keeps the placeholder and reads another
+          release; TestApplierExecArgsCarryNoBakedReleaseCoordinate scans every
+          rendered argv for that (GH-217). */}}
+    {{- $exec := $.Files.Get $path }}
+    {{- $exec = $exec | replace "deployment/chatbot-mesh-chatbot" (printf "deployment/%s-chatbot" $fullname) }}
+    {{- $exec = $exec | replace "upgrade, chatbot-mesh," (printf "upgrade, %s," $.Release.Name) }}
+    {{- $exec = $exec | replace "rollback, chatbot-mesh]" (printf "rollback, %s]" $.Release.Name) }}
+    {{- $exec = $exec | replace "get, values, chatbot-mesh," (printf "get, values, %s," $.Release.Name) }}
+    {{- $exec = $exec | replace "--namespace, default," (printf "--namespace, %s," $.Release.Namespace) }}
+    {{- $exec | nindent 4 }}
+  {{- else if eq $key "agents__chatbot__embed-rest.yaml" }}
+    {{- /* The query embedding's model follows the tier with declare_query_model
+          (request-declarations.yaml below): the identity the question embeds
+          at is the identity the per-RAG comparison declares (srd002 R3.3). */}}
+    {{- $embedRest := $.Files.Get $path }}
+    {{- if not $.Values.cohere.enabled }}
+    {{- $embedRest = $embedRest | replace "${COHERE_EMBED_MODEL:-embed-v4.0}" "${CHATBOT_EMBEDDING_MODEL:-qwen3-embedding:8b}" }}
+    {{- end }}
+    {{- /* The endpoint follows the tier too, as literal allow arguments
+          (srd058 R1.6, _embed-rest.tpl). */}}
+    {{- $allow := include "chatbot-mesh.chatbotEmbedAllowArgs" $ | replace ", " "\n      " }}
+    {{- $embedRest = $embedRest | replace "      body_source: command_state\n" (printf "      body_source: command_state\n      %s\n" $allow) }}
+    {{- $embedRest | nindent 4 }}
+  {{- else if eq $key "agents__corpus-ingest__embed-rest.yaml" }}
+    {{- /* The document embedding's endpoint follows the child's embedder
+          library, as literal allow arguments (srd058 R1.6, _embed-rest.tpl). */}}
+    {{- $embedRest := $.Files.Get $path }}
+    {{- with include "chatbot-mesh.ingestEmbedAllowArgs" $ }}
+    {{- $embedRest = $embedRest | replace "id_selector: $.path, " (printf "id_selector: $.path, %s, " .) }}
+    {{- end }}
+    {{- $embedRest | nindent 4 }}
+  {{- else }}
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+{{- if eq $group "chatbot" }}
+  # Co-generated from .Values.ragUnits (srd003 R2), overriding the packaged keys so
+  # the chatbot REST allowlist, runtime topology data, and deployed RAG objects
+  # cannot drift. The source-count-independent machine and fan-out declarations
+  # are packaged verbatim rather than rendered from this list.
+  agents__chatbot__rest.yaml: |-
+    {{- include "chatbot-mesh.chatbotRest" $ | nindent 4 }}
+  agents__chatbot__monitor-rest.yaml: |-
+    {{- include "chatbot-mesh.chatbotMonitorRest" $ | nindent 4 }}
+  agents__chatbot__provider-rest.yaml: |-
+    {{- include "chatbot-mesh.chatbotProviderRest" $ | nindent 4 }}
+  agents__chatbot__ui__ui.yaml: |-
+    {{- include "chatbot-mesh.chatbotUI" $ | nindent 4 }}
+  agents__chatbot__request-topology-declarations.yaml: |-
+    {{- include "chatbot-mesh.chatbotTopology" $ | nindent 4 }}
+  {{- /* The turn itself is tier-selected (srd009 R6.3). Both machines and both
+        chat-LLM vocabularies are committed files -- the pre-provider pair is
+        staged beside the closure as a recorded tier variant (see
+        provenance/application-closure.yaml) -- and packaging projects one pair
+        under the canonical keys, so request-profile.yaml names one machine
+        whichever tier is deployed.
+
+        A rendered variant of one machine would not do: with the provider off
+        the turn has no rerank cascade, no Command composition, and no citation
+        chain, because cohere_rerank_rag and invoke_cohere_command bind a client the
+        deployment does not declare and a registered word whose rest_ref is
+        undefined is refused at load. The difference is shape, not a value.
+
+        declare_query_model lives in the verbatim declarations and reads the
+        Cohere identity; on the Ollama tier it is rewritten to the reference the
+        co-generated embed_query request body reads, or srd002 R3.3 excludes
+        every source from every turn. */}}
+  agents__chatbot__request-machine.yaml: |-
+{{- if $.Values.cohere.enabled }}
+    {{- $.Files.Get "profiles/agents/chatbot/request-machine.yaml" | nindent 4 }}
+{{- else }}
+    {{- $.Files.Get "profiles/agents/chatbot/request-machine-ollama.yaml" | nindent 4 }}
+{{- end }}
+  agents__chatbot__request-tools.yaml: |-
+{{- if $.Values.cohere.enabled }}
+    {{- $.Files.Get "profiles/agents/chatbot/request-tools.yaml" | nindent 4 }}
+{{- else }}
+    {{- $.Files.Get "profiles/agents/chatbot/request-tools-ollama.yaml" | nindent 4 }}
+{{- end }}
+  agents__chatbot__request-declarations.yaml: |-
+    {{- $decl := $.Files.Get "profiles/agents/chatbot/request-declarations.yaml" }}
+{{- if not $.Values.cohere.enabled }}
+    {{- $decl = $decl | replace "${COHERE_EMBED_MODEL:-embed-v4.0}" "${CHATBOT_EMBEDDING_MODEL:-qwen3-embedding:8b}" }}
+  {{- /* The classifier pair rides the same rewrite (srd009 R6.3): a deployment
+        without the Cohere provider runs source and tier selection on the local
+        model, byte-identical to the pre-GH-425 declarations. */}}
+    {{- $decl = $decl | replace "${COHERE_CLASSIFIER_MODEL:-command-r7b-12-2024}" "${CHATBOT_TIER_MODEL:-qwen2.5:3b}" }}
+  {{- /* The provider itself is not rewritten: the chatbot binds its providers
+        library root to Ollama (chatbot-mesh.chatProviderArgs, srd058 R2.2). The
+        endpoint, models, and response profile are word config, not dialect, so
+        they still follow the tier here. */}}
+    {{- $decl = $decl | replace "provider_url: \"${COHERE_BASE_URL:-https://api.cohere.com}\"" "provider_url: \"${OLLAMA_URL:-http://localhost:11434}\"" }}
+    {{- $decl = $decl | replace "response_profile: cohere" "response_profile: qwen" }}
+{{- end }}
+    {{- $decl | nindent 4 }}
+  {{- /* The search-branch toggle (srd011 R6.1), the same rewrite mechanism as
+        the embed model above: check_osint_enabled compares two declared
+        literals, and a disabled deployment renders the left operand unequal so
+        the machine takes the retrieval-only leg. The rendered network policy
+        in the co-generated rest.yaml removes the external host as well (R6.2),
+        so the skip and the capability removal come from one values flag. */}}
+  agents__chatbot__request-osint-declarations.yaml: |-
+    {{- $osintDecl := $.Files.Get "profiles/agents/chatbot/request-osint-declarations.yaml" }}
+{{- if not $.Values.osint.enabled }}
+    {{- $osintDecl = $osintDecl | replace "left: osint-branch-enabled" "left: osint-branch-disabled" }}
+{{- end }}
+  {{- /* The cascade-mode operand (srd011 R6.4), the same rewrite: a
+        single_fusion deployment renders check_cascade_mode's left operand
+        unequal, the Cohere machine's per-branch passes take the skip legs,
+        and the one fusion still re-scores the union. */}}
+{{- if eq $.Values.osint.cascade "single_fusion" }}
+    {{- $osintDecl = $osintDecl | replace "left: cascade-three-pass" "left: cascade-single-fusion" }}
+{{- end }}
+    {{- $osintDecl | nindent 4 }}
+{{- end }}
+{{- if eq $group "applications" }}
+  # Co-generated from .Values.ragUnits and the collector toggle (srd003 R2): the
+  # monitor_proxy upstreams and the fleet UI's monitored agents come from the one
+  # list that renders the RAG objects, so the served UI names exactly the agents
+  # the proxy reaches.
+  applications__chatbot-mesh__observer__monitor-rest.yaml: |-
+    {{- include "chatbot-mesh.observerMonitorRest" $ | nindent 4 }}
+{{- end }}
+{{- end }}

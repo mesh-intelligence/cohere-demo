@@ -1,0 +1,95 @@
+direction: down
+
+vars: {
+  d2-config: {
+    theme-id: 0
+    pad: 10
+  }
+}
+
+classes: {
+  svc: {
+    style: {
+      border-radius: 8
+      fill: "#f6f8fb"
+      stroke: "#7a8699"
+      font-size: 15
+    }
+  }
+}
+
+analyst: Analyst {
+  shape: person
+  style.font-size: 15
+  near: top-left
+}
+
+boundary: Application boundary — Kubernetes {
+  style: {
+    fill: "#fbfcfe"
+    stroke: "#3d70b8"
+    stroke-dash: 4
+    border-radius: 10
+    font-size: 16
+    bold: true
+  }
+
+  chatbot: Assistant\nchat and workflows {
+    class: svc
+  }
+  exporter: PDF\nexport {
+    class: svc
+  }
+  rag: Chunk Retrieval\nClearance Filtering {
+    class: svc
+  }
+  chroma: Document store\n(Chroma DB) {
+    shape: cylinder
+    style: {
+      fill: "#fdf6e9"
+      stroke: "#b08a3e"
+      font-size: 15
+    }
+  }
+  observer: Monitoring\ntraces {
+    class: svc
+  }
+
+  chatbot -> rag: search
+  rag -> chroma: filter/read
+  chatbot -> exporter: brief
+  chatbot -> observer: emits traces {
+    style.stroke-dash: 3
+  }
+}
+
+pdf: INTSUM PDF {
+  shape: page
+  near: bottom-left
+  style: {
+    fill: "#eef6ef"
+    stroke: "#2f7d4f"
+    font-size: 15
+  }
+}
+
+cohere: Cohere models\nEmbed 4 · Rerank 3.5\nCommand A · Command R7B {
+  style: {
+    border-radius: 8
+    fill: "#f1eafc"
+    stroke: "#7d33f2"
+    font-size: 15
+    bold: true
+  }
+}
+
+(* -> *)[*].style.stroke: "#7a8699"
+
+boundary.exporter -> pdf: renders
+analyst -> pdf: reads
+analyst -> boundary.chatbot: tasking
+boundary.chatbot -> cohere: embed · rerank ·\ncompose · judge {
+  style.stroke: "#7d33f2"
+  style.font-color: "#4b2d91"
+  style.font-size: 14
+}

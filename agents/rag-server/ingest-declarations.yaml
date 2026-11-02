@@ -1,0 +1,370 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The scratch-ingest vocabulary (GH-459): the retrieval tier owns its
+# collection, so harvested web material enters the corpus here, through a
+# request-scoped machine, never by a peer writing the store directly. The
+# clearance floor is this tier's law: every ingested record is tagged
+# unclassified at the lowest rank with the weakest Admiralty grading, from
+# declared templates the request cannot influence -- harvested material can
+# not claim a clearance, whatever the caller sends.
+kind: tool-declaration
+schema_version: 1
+unit: rag-server-ingest-declarations
+imports:
+  - ingest-declarations-types.yaml
+tools:
+  - name: rag_resolve_ingest
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Resolve (get or create) the corpus collection for a scratch ingest.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects:
+      - {kind: external_api, state: collection_upserted, target: chroma.collection}
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: Create-or-get may create an empty collection; deleting it could destroy a pre-existing collection with the same trusted name.
+    config:
+      rest_ref: chroma
+      operation: rag_resolve_ingest_collection
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CollectionReady, message: builtin.Message<rag-server-ingest-declarations-types.RagResolveIngestOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_ingest_ids
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: word
+    description: Render the batch's record ids as one JSON array.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: IngestIdsMarshalled
+      stages:
+        - name: render
+          init: render_each
+          config:
+            items: $from(seed).body.rows
+            item_template: '{{ json id }}'
+            separator: ','
+            signal: Rendered
+        - name: wrap
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"ids": [{{ rendered }}]}'
+            signal: Wrapped
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: IngestIdsMarshalled, message: builtin.Message<rag-server-ingest-declarations-types.MarshalIngestIdsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_ingest_documents
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: word
+    description: Render the batch's document texts as one JSON array.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: IngestDocumentsMarshalled
+      stages:
+        - name: render
+          init: render_each
+          config:
+            items: $from(seed).body.rows
+            item_template: '{{ json text }}'
+            separator: ','
+            signal: Rendered
+        - name: wrap
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"documents": [{{ rendered }}]}'
+            signal: Wrapped
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: IngestDocumentsMarshalled, message: builtin.Message<rag-server-ingest-declarations-types.MarshalIngestDocumentsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_ingest_embeddings
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: word
+    description: Render the batch's embedding vectors as one JSON array.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: IngestEmbeddingsMarshalled
+      stages:
+        - name: render
+          init: render_each
+          config:
+            items: $from(seed).body.rows
+            item_template: '{{ json embedding }}'
+            separator: ','
+            signal: Rendered
+        - name: wrap
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"embeddings": [{{ rendered }}]}'
+            signal: Wrapped
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: IngestEmbeddingsMarshalled, message: builtin.Message<rag-server-ingest-declarations-types.MarshalIngestEmbeddingsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_ingest_metadatas
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: word
+    description: Render the floor metadata every harvested record wears.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: IngestMetadatasMarshalled
+      stages:
+        - name: render
+          init: render_each
+          config:
+            items: $from(seed).body.rows
+            item_template: '{"chunk_id": {{ json id }}, "corpus": "web-harvest", "corpus_version": "live", "synthetic": false, "source_path": {{ json url }}, "source_id": {{ json url }}, "source_type": "web_harvest", "clearance": "unclassified", "clearance_rank": 0, "admiralty_source_reliability": "F", "admiralty_information_credibility": "6", "keywords": {{ json title }}}'
+            separator: ','
+            signal: Rendered
+        - name: wrap
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"metadatas": [{{ rendered }}]}'
+            signal: Wrapped
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: IngestMetadatasMarshalled, message: builtin.Message<rag-server-ingest-declarations-types.MarshalIngestMetadatasOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_add_payload
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: word
+    description: Merge the four marshalled columns and validate the add payload.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: AddPayloadComposed
+      stages:
+        - name: merge
+          init: compose
+          config:
+            inputs:
+              ids: $from(marshal_ingest_ids).body.ids
+              documents: $from(marshal_ingest_documents).body.documents
+              embeddings: $from(marshal_ingest_embeddings).body.embeddings
+              metadatas: $from(marshal_ingest_metadatas).body.metadatas
+            template: '{"ids": {{ json ids }}, "documents": {{ json documents }}, "embeddings": {{ json embeddings }}, "metadatas": {{ json metadatas }}}'
+            signal: Merged
+        - name: validate
+          init: parse_structured
+          config:
+            source: $.output
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids, documents, embeddings, metadatas]
+              properties:
+                ids: {type: array, items: {type: string}}
+                documents: {type: array, items: {type: string}}
+                embeddings: {type: array}
+                metadatas: {type: array}
+            parsed: AddPayloadComposed
+            unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: AddPayloadComposed, message: builtin.Message<rag-server-ingest-declarations-types.ComposeAddPayloadOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_add_records
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Add the harvested batch to the corpus collection.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects:
+      - {kind: external_api, state: records_added, target: chroma.records}
+    reversibility:
+      classification: compensatable
+    undo:
+      strategy: compensating_action
+      description: Delete the receipt-recorded IDs from the trusted Chroma collection.
+      payload: boundary_compensation
+      captures: [collection, ids, operation]
+    config:
+      rest_ref: chroma
+      operation: rag_add_ingest_records
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RecordsAdded, message: builtin.Message<rag-server-ingest-declarations-types.RagAddRecordsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_ingest_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the ingested ids as the HTTP reply.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: IngestResponseComposed
+      inputs:
+        ids: $from(compose_add_payload).body.ids
+      template: '{"ingested_ids": {{ json ids }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: IngestResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_purge_records
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Drop every web-harvest row from the corpus collection.
+    problem: See the file header (GH-648).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects:
+      - {kind: external_api, state: records_deleted, target: chroma.records}
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo: {strategy: noop, description: "Scratch rows; recovery is re-harvest, the seed's own precedent."}
+    config:
+      rest_ref: chroma
+      operation: rag_purge_harvest_records
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RecordsPurged, message: builtin.Message<rag-server-ingest-declarations-types.RagPurgeRecordsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_purge_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the purge receipt as the HTTP reply.
+    problem: See the file header (GH-648).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: PurgeResponseComposed
+      template: '{"purged": true}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: PurgeResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

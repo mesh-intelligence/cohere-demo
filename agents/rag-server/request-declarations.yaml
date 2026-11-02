@@ -1,0 +1,596 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: rag-server-request-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - request-declarations-types.yaml
+tools:
+  - name: rag_resolve
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Create-or-get the served collection and carry the query vector forward.
+    problem: Single-hop threading means the resolved collection id and the query vector must ride together into the query word.
+    goals:
+      - Create-or-get the plain served collection with no server-side embedding function.
+      - Resolve the returned collection id for the query path.
+      - Carry the caller-supplied query vector forward from the seeded request body.
+    requirements:
+      input:
+        - The query vector is selected from the seeded request body output.
+      output:
+        - Output includes the mapped collection id and the carried query vector.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not configure a server-side embedding function.
+      - Does not accept runtime method, URL, host, or auth overrides.
+    output:
+      description: Mapped Chroma collection id with the carried query vector.
+    side_effects:
+      - kind: external_api
+        target: chroma.collection
+        state: collection_upserted
+    # Irreversible, and deliberately stronger than the transport-level reversible/noop the operation declares: the two describe different things.
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: Create-or-get may create an empty collection; deleting it could destroy a pre-existing collection with the same trusted name.
+    config:
+      rest_ref: chroma
+      operation: rag_resolve_collection
+    signature:
+      input: builtin.Message<rag-server-request-declarations-types.RagResolveInput>
+      emits:
+        - {signal: CollectionReady, message: builtin.Message<rag-server-request-declarations-types.RagResolveOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_resolve_faceted
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Create-or-get the served collection and carry the query vector and the caller's facet constraints forward.
+    problem: |
+      A faceted query carries two more values than a plain one -- the metadata
+      facet constraint and the keyword -- and the query word that binds them
+      runs after the clearance words, so they must ride the resolve's carry the
+      way the vector and the level do.
+    goals:
+      - Create-or-get the plain served collection with no server-side embedding function.
+      - Resolve the returned collection id for the query path.
+      - Carry the query vector, the requested level, and the facet constraints forward from the seeded request body.
+    requirements:
+      input:
+        - The query vector and facet constraints are selected from the seeded request body output.
+      output:
+        - Output includes the mapped collection id and carries the vector, level, facet constraint, and keyword.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not configure a server-side embedding function.
+      - Does not interpret, widen, or drop the facet constraints it carries.
+    output:
+      description: Mapped Chroma collection id with the carried query vector and facet constraints.
+    side_effects:
+      - kind: external_api
+        target: chroma.collection
+        state: collection_upserted
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: Create-or-get may create an empty collection; deleting it could destroy a pre-existing collection with the same trusted name.
+    config:
+      rest_ref: chroma
+      operation: rag_resolve_collection_faceted
+    signature:
+      input: builtin.Message<rag-server-request-declarations-types.RagResolveFacetedInput>
+      emits:
+        - {signal: CollectionReady, message: builtin.Message<rag-server-request-declarations-types.RagResolveFacetedOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_clearance_windows
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Declare the ordered clearance set as one at-or-below window per level.
+    problem: |
+      "At or below" has to be decidable without arithmetic in the machine. Rendering
+      the ordered set as a window per level turns the comparison into a lookup, and
+      a lookup that misses is a refusal rather than a wrong answer.
+    goals:
+      - Declare the totally ordered clearance set as trusted profile configuration.
+      - Carry each level's at-or-below window so the filter is read rather than computed.
+    requirements:
+      input:
+        - The level set is trusted profile configuration, not request or model input.
+      output:
+        - Output carries one item per declared level, each with its level and its at-or-below window.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not read the requested level or decide which window applies.
+    output:
+      description: The declared ordered clearance set as at-or-below windows.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring the level set changes no external state.}
+    config:
+      signal: ClearanceWindowsDeclared
+      inputs: {}
+      # The same ordered set corpus/corpus.yaml declares for the build side
+      # (srd010 R1.1, srd015 R6.2). The build writes the tag; this reads it.
+      template: |
+        {
+          "names": ["unclassified", "restricted", "confidential", "secret"],
+          "items": [
+            {"level": "unclassified", "at_or_below": ["unclassified"]},
+            {"level": "restricted",   "at_or_below": ["unclassified", "restricted"]},
+            {"level": "confidential", "at_or_below": ["unclassified", "restricted", "confidential"]},
+            {"level": "secret",       "at_or_below": ["unclassified", "restricted", "confidential", "secret"]}
+          ]
+        }
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceWindowsDeclared, message: builtin.Message<rag-server-request-declarations-types.DeclareClearanceWindowsOutput>}
+  - name: declare_requested_clearance
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Put the requested level into command state as a one-element candidate array.
+    problem: The window lookup matches candidate names against the declared set, and the request carries one level rather than a list.
+    goals:
+      - Read the level the request carried, unmodified.
+      - Present it in the shape the window lookup consumes.
+    requirements:
+      input:
+        - The level comes from the carried request body and from nowhere else.
+      output:
+        - names holds exactly the level the request carried.
+      errors:
+        - Rendering is deterministic; an absent level renders as an unmatchable name.
+    non_goals:
+      - Does not validate the level, widen it, or substitute a default for it.
+    output:
+      description: The requested level as a candidate array.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring the requested level changes no external state.}
+    config:
+      signal: RequestedClearanceDeclared
+      inputs:
+        level: $from(rag_resolve).body.carried.max_clearance
+      # json rather than bare interpolation: a level carrying a quote would
+      # otherwise close the string and render malformed JSON.
+      template: '{"names": [{{ json level }}]}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RequestedClearanceDeclared, message: builtin.Message<rag-server-request-declarations-types.DeclareRequestedClearanceOutput>}
+  - name: resolve_clearance_window
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Resolve the requested level to its declared at-or-below window.
+    problem: |
+      A level the declared set does not carry must not reach the query. Membership
+      is the whole check, so an absent, misspelled, or invented level matches
+      nothing and the empty outcome refuses rather than defaulting.
+    goals:
+      - Match the requested level against the declared ordered set.
+      - Return the trusted window copied from the declaration, never from the request.
+    requirements:
+      input:
+        - Candidates are the requested level; the vocabulary is the declared level set.
+      output:
+        - matched holds the one declared window entry, or the outcome is a refusal.
+      errors:
+        - A level outside the declared set emits ClearanceRefused.
+    non_goals:
+      - Does not copy any field from the request except the name used for the membership check.
+      - Does not widen the window or fall back to a default level.
+    output:
+      description: The matched declared window entry.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Resolving a window changes no external state.}
+    config:
+      candidates: $from(declare_requested_clearance).body.names
+      vocabulary: $from(declare_clearance_windows).body.items
+      match_field: level
+      all_matched: ClearanceResolved
+      # Both non-matching outcomes refuse.
+      partial: ClearanceRefused
+      empty: ClearanceRefused
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceResolved, message: builtin.Message<rag-server-request-declarations-types.ResolveClearanceWindowOutput>}
+        - {signal: ClearanceRefused, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_clearance_window
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the one resolved window entry as an object the later words address by field.
+    problem: |
+      The window lookup answers with an array, and command-state selectors walk
+      maps only -- there is no index step. Rendering the single entry as a JSON
+      object puts its level and its allowed set back on addressable paths, which
+      is what lets the filter and the response read them by name.
+    goals:
+      - Turn the one resolved entry into an object carrying the enforced level and its allowed set.
+      - Preserve the declared values exactly; render is a reshaping and not a decision.
+    requirements:
+      input:
+        - The entry comes from the resolved window and carries the declared level and its at-or-below set.
+      output:
+        - Output is an object with the enforced level and the allowed levels.
+      errors:
+        - Rendering is deterministic.
+    non_goals:
+      - Does not choose, widen, or reorder the window.
+    output:
+      description: The resolved window as an addressable object.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a window changes no external state.}
+    config:
+      # selected rather than matched: matched carries the names that matched and selected carries the declaration entries behind them, and the window lives on the entry.
+      items: $from(resolve_clearance_window).body.selected
+      # The lookup matches one candidate, so this renders one entry and the separator never appears.
+      item_template: '{"level": {{ json level }}, "allowed": {{ json at_or_below }}}'
+      separator: ""
+      signal: ClearanceWindowRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceWindowRendered, message: builtin.Message<rag-server-request-declarations-types.RenderClearanceWindowOutput>}
+  - name: compose_clearance_filter
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the Chroma metadata where-filter from the resolved window.
+    problem: The filter must be an object the vector store evaluates before the search, not a string the agent interprets after it.
+    goals:
+      - Render the at-or-below window as a Chroma where document over the clearance metadata field.
+      - Keep the filter a typed map so the query binds it through the single-token passthrough.
+    requirements:
+      input:
+        - The window comes from the resolved declaration, never from the request.
+      output:
+        - where is a Chroma metadata filter restricting the searched set to the window.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not issue the query or read results.
+      - Does not filter, redact, or reorder anything after retrieval, which srd010 R2.3 forbids.
+    output:
+      description: The Chroma where document for this request's clearance.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Composing a filter changes no external state.}
+    config:
+      signal: ClearanceFilterComposed
+      inputs:
+        allowed: $from(render_clearance_window).body.allowed
+      # The metadata key is the one both write paths tag with (srd010 R1.5):
+      # the corpus-ingest wrapper and the rel10.4 store seed.
+      template: '{"where": {"clearance": {"$in": {{ json allowed }}}}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceFilterComposed, message: builtin.Message<rag-server-request-declarations-types.ComposeClearanceFilterOutput>}
+  - name: compose_faceted_query_filter
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the faceted query's metadata filter as the caller's facet constraint conjoined with the resolved clearance window.
+    problem: |
+      A faceted query carries two constraints that must both hold -- the facets
+      the analyst selected and the window the requester is cleared to see --
+      and the second cannot be dropped, widened, or applied after the search.
+      Conjoining them here is what keeps a facet a narrowing of retrieval
+      rather than a path around its enforcement (srd016 R4.2, R4.3).
+    goals:
+      - Conjoin the caller's facet constraint with the at-or-below clearance window.
+      - Keep the result a typed map so the query binds it through the single-token passthrough.
+    requirements:
+      input:
+        - The window comes from the resolved declaration; the caller supplies only the other operand.
+      output:
+        - where is a Chroma metadata filter holding both constraints.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not issue the query or interpret results.
+      - Does not filter, redact, or reorder anything after retrieval, which srd010 R2.3 forbids.
+    output:
+      description: The Chroma where document for this faceted query.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Composing a filter changes no external state.}
+    config:
+      signal: FacetedFilterComposed
+      inputs:
+        allowed: $from(render_clearance_window).body.allowed
+        facet_where: $from(rag_resolve).body.carried.facet_where
+      # Both operands are always present, the same doctrine as compose_document_filter: the store rejects an $and carrying an empty operand, so the faceted endpoint requires a non-empty facet constraint rather than defaulting one to {}.
+      template: '{"where": {"$and": [{"clearance": {"$in": {{ json allowed }}}}, {{ json facet_where }}]}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FacetedFilterComposed, message: builtin.Message<rag-server-request-declarations-types.ComposeFacetedQueryFilterOutput>}
+  - name: rag_query
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Query the resolved collection with the caller-supplied vector, restricted to the resolved clearance window.
+    problem: |
+      Chroma retrieval uses a client-supplied query vector threaded from the earlier
+      words, and the clearance window has to reach the store as a filter it evaluates
+      before the search rather than as something the agent applies to the results.
+    goals:
+      - Address the collection id and query vector by the word that produced them.
+      - Bind the resolved clearance window as the query's metadata filter.
+      - Return the retrieved chunk ids, documents, and distances.
+    requirements:
+      input:
+        - Collection id and query vector come from the resolve word; the filter comes from the clearance words.
+      output:
+        - Output includes the retrieved chunk ids, documents, and distances, and carries the enforced level.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not author the query vector.
+      - Does not author, widen, or omit the clearance filter.
+      - Does not accept runtime method, URL, host, or auth overrides.
+    output:
+      description: Mapped Chroma query result.
+    side_effects:
+      - kind: external_api
+        target: chroma.query
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Querying a collection does not mutate state.
+    config:
+      rest_ref: chroma
+      operation: rag_query
+    signature:
+      input: builtin.Message<rag-server-request-declarations-types.RagQueryInput>
+      emits:
+        - {signal: QueryResponded, message: builtin.Message<rag-server-request-declarations-types.RagQueryOutput>}
+        - {signal: QueryRejected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_query_faceted
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Query the resolved collection with the caller-supplied vector, restricted to the conjoined clearance-and-facet filter and the keyword document constraint.
+    problem: |
+      A faceted retrieval must reach the store as constraints it evaluates with
+      the search -- the conjoined metadata filter and the keyword document
+      filter -- rather than as anything the agent applies to results it already
+      holds (srd010 R2.3, srd016 R4.2).
+    goals:
+      - Address the collection id, query vector, and keyword by the words that carried them.
+      - Bind the conjoined clearance-and-facet filter as the query's metadata filter.
+      - Bind the keyword as the store's document filter.
+      - Return the retrieved chunk ids, documents, distances, and metadatas.
+    requirements:
+      input:
+        - Collection id, vector, and keyword come from the resolve word; the filter comes from the faceted compose.
+      output:
+        - Output includes the retrieved chunk ids, documents, distances, and metadatas, and carries the enforced level.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not author the query vector or the facet constraints.
+      - Does not author, widen, or omit the clearance filter.
+      - Does not accept runtime method, URL, host, or auth overrides.
+    output:
+      description: Mapped Chroma query result.
+    side_effects:
+      - kind: external_api
+        target: chroma.query
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Querying a collection does not mutate state.
+    config:
+      rest_ref: chroma
+      operation: rag_query_faceted
+    signature:
+      input: builtin.Message<rag-server-request-declarations-types.RagQueryFacetedInput>
+      emits:
+        - {signal: QueryResponded, message: builtin.Message<rag-server-request-declarations-types.RagQueryFacetedOutput>}
+        - {signal: QueryRejected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_resolve_documents
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Create-or-get the document collection and carry the read's identifiers, filter, and requested level forward.
+    problem: |
+      The document collection is not the retrieval collection. The retrieval
+      collection holds the embed selection under real vectors and the document
+      collection holds every envelope and chunk version addressed by identifier,
+      so a word that resolves one cannot resolve the other (srd017 R8.1, R8.3).
+    goals:
+      - Resolve the document collection the deployment serves.
+      - Carry the requested level, the identifiers, and the caller's filter to the words that follow.
+    requirements:
+      input:
+        - The collection name comes from deployment configuration, never from the request.
+      output:
+        - Output carries the collection id and the seeded read parameters.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not read any record.
+      - Does not accept runtime method, URL, host, or auth overrides.
+    output:
+      description: The resolved document collection and the carried read parameters.
+    side_effects:
+      - kind: external_api
+        target: chroma.collection
+        state: collection_upserted
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: Create-or-get may create an empty collection; deleting it could destroy a pre-existing collection with the same trusted name.
+    config:
+      rest_ref: chroma
+      operation: rag_resolve_document_collection
+    signature:
+      input: builtin.Message<rag-server-request-declarations-types.RagResolveDocumentsInput>
+      emits:
+        - {signal: CollectionReady, message: builtin.Message<rag-server-request-declarations-types.RagResolveDocumentsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_document_filter
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the read's metadata filter as the caller's constraint conjoined with the resolved clearance window.
+    problem: |
+      A filter read carries two constraints that must both hold -- what the
+      caller asked for and what the requester is cleared to see -- and the
+      second cannot be dropped, widened, or applied after the read. Conjoining
+      them here is what keeps the serving path behind the same enforcement as
+      retrieval (srd016 R5.3).
+    goals:
+      - Conjoin the caller's constraint with the at-or-below clearance window.
+      - Keep the result a typed map so the read binds it through the single-token passthrough.
+    requirements:
+      input:
+        - The window comes from the resolved declaration; the caller supplies only the other operand.
+      output:
+        - where is a Chroma metadata filter holding both constraints.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not issue the read or interpret results.
+      - Does not filter, redact, or reorder anything after the read.
+    output:
+      description: The Chroma where document for this read.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Composing a filter changes no external state.}
+    config:
+      signal: DocumentFilterComposed
+      inputs:
+        allowed: $from(render_clearance_window).body.allowed
+        document_filter: $from(rag_resolve_documents).body.carried.document_filter
+      # Both operands are always present, which is what makes this a plain conjunction rather than a conditional the compose word cannot express.
+      template: '{"where": {"$and": [{"clearance": {"$in": {{ json allowed }}}}, {{ json document_filter }}]}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentFilterComposed, message: builtin.Message<rag-server-request-declarations-types.ComposeDocumentFilterOutput>}
+  - name: rag_get_documents_by_ids
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Read the named records from the document collection under the clearance window.
+    problem: |
+      A citation names a record identifier, and the analyst needs the record.
+      The clearance window has to reach the store beside the identifiers rather
+      than being applied to what comes back, so an identifier the requester is
+      not cleared for returns nothing rather than returning something the agent
+      then has to withhold.
+    goals:
+      - Read the identifiers the caller supplied from the resolved document collection.
+      - Bind the resolved clearance window as the read's metadata filter.
+      - Return the records with their documents and metadata.
+    requirements:
+      input:
+        - Identifiers come from the request; the filter comes from the clearance words.
+      output:
+        - Output includes the records read and carries the enforced level.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not author, widen, or omit the clearance filter.
+      - Does not accept runtime method, URL, host, or auth overrides.
+    output:
+      description: Mapped Chroma get result.
+    side_effects:
+      - kind: external_api
+        target: chroma.get
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a collection does not mutate state.
+    config:
+      rest_ref: chroma
+      operation: rag_get_by_ids
+    signature:
+      input: builtin.Message<rag-server-request-declarations-types.RagGetDocumentsByIdsInput>
+      emits:
+        - {signal: DocumentsRead, message: builtin.Message<rag-server-request-declarations-types.RagGetDocumentsByIdsOutput>}
+        - {signal: ReadRejected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_get_documents_by_filter
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Read the records matching the composed filter from the document collection.
+    problem: |
+      Listing a document's versions and querying the corpus by facet are both
+      reads with no identifier, and an empty identifier list is not an absent
+      restriction -- the store reads it as zero identifiers and returns nothing.
+      A filter read is therefore its own boundary rather than the identifier
+      read with a field omitted.
+    goals:
+      - Read the records matching the conjoined caller and clearance filter.
+      - Return the records with their documents and metadata.
+    requirements:
+      input:
+        - The filter comes from the compose word, which conjoins the caller's constraint with the clearance window.
+      output:
+        - Output includes the records read and carries the enforced level.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not author, widen, or omit the clearance operand of the filter.
+      - Does not accept runtime method, URL, host, or auth overrides.
+    output:
+      description: Mapped Chroma get result.
+    side_effects:
+      - kind: external_api
+        target: chroma.get
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a collection does not mutate state.
+    config:
+      rest_ref: chroma
+      operation: rag_get_by_filter
+    signature:
+      input: builtin.Message<rag-server-request-declarations-types.RagGetDocumentsByFilterInput>
+      emits:
+        - {signal: DocumentsRead, message: builtin.Message<rag-server-request-declarations-types.RagGetDocumentsByFilterOutput>}
+        - {signal: ReadRejected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

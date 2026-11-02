@@ -1,0 +1,105 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel09.9-uc001-baseline-demo
+title: The Baseline Mesh Comes Up From the Repository Root and Answers From the Corpus
+
+summary: |
+  An operator clones this repository and brings the inherited mesh up without
+  renaming a directory or moving a worktree. The demo targets resolve the
+  application composition from the repository root, deploy onto the shared
+  da-platform in the application's own namespace,
+  seed each RAG unit's corpus, and serve a tasking whose answer composes from
+  the retrieved chunks. A verification target reads the composed sources the
+  chat API reports and fails when there are none, so the baseline is asserted
+  rather than eyeballed.
+
+  This release gates the substrate the Cohere lane builds on. Every release
+  from rel00.0 through rel09.0 is implemented, but that evidence arrived with
+  the vendored tree; rel09.9 is where we prove the mesh runs here. It is also
+  the demo's opening act -- the Ollama turn that answers from the corpus while
+  reporting its sources only in server metadata, which rel10.1 replaces with
+  Command's structured citations.
+
+actor: Operator with a fresh clone
+trigger: The operator runs the demo targets from the repository root to reach a seeded mesh that answers a tasking.
+
+flow:
+  - F1: The operator runs mage doctor from the repository root and the toolchain and host resources satisfy ENG01.
+  - F2: mage demo:up brings up the pinned da-platform (platform:up), then app:up resolves the application composition from the repository root, builds the runtime image, deploys the chart into app-cohere-demo through the catalog applier, and serves the chatbot and observer ingresses (GH-788).
+  - F3: mage demo:seed port-forwards each declared RAG unit's in-cluster Chroma, ingests the corpus, and restarts the rag-server so it rebinds the seeded collection.
+  - F4: The operator submits a tasking through the SPA or POST /api/v1/chat.
+  - F5: The chatbot embeds the tasking once, fans out to the RAG units, and composes the answer from the surviving chunks.
+  - F6: mage demo:verify asserts the turn returned 200 and that its composed sources carried retrieved documents, and reports each source with the number of documents it contributed.
+  - F7: mage demo:down removes the application release and its namespace (app:down) and leaves the platform running.
+
+touchpoints:
+  - id: T1
+    target: srd001-rag-server-agent AC1
+    reason: The demo stands up the persistent RAG service that answers the vector-in query behind a machine_request endpoint.
+  - id: T2
+    target: srd001-rag-server-agent AC4
+    reason: demo:seed drives the corpus-ingest loading path, and the collection the rag-server serves must be the one that was seeded.
+  - id: T3
+    target: srd002-chatbot-agent AC1
+    reason: The tasking exercises the request-scoped turn that embeds once, fans out, composes, and answers.
+  - id: T4
+    target: srd002-chatbot-agent AC3
+    reason: The composed partitions the answer prompt is built from are what metadata.sources.composed reports, and what the verification asserts.
+  - id: T5
+    target: srd003-chatbot-deployment AC1
+    reason: One chart deploys the chatbot, the values-driven RAG and Chroma pairs, and the observability wiring the demo brings up.
+  - id: T6
+    target: srd003-chatbot-deployment AC6
+    reason: The demo values wire the LLM tier to the host Ollama, so the embedding and answer models resolve without an external service.
+
+success_criteria:
+  - id: S1
+    criterion: The application composition resolves from the repository root; no directory rename, worktree move, or symlink is required.
+    traces:
+      - srd003-chatbot-deployment AC1
+  - id: S2
+    criterion: mage demo:up exits 0 and both the chatbot and observer ingresses answer 200.
+    traces:
+      - srd003-chatbot-deployment AC1
+      - srd003-chatbot-deployment AC6
+  - id: S3
+    criterion: mage demo:seed reports every RAG unit declared in the demo values as seeded and restarted, and fails when the in-cluster Chroma is unreachable.
+    traces:
+      - srd001-rag-server-agent AC4
+  - id: S4
+    criterion: A tasking returns 200 and at least one composed source carries retrieved documents. Composition alone is not attribution -- a rag-server bound to an empty collection answers the query and composes nothing, so the count of retrieved documents is what separates a corpus answer from model priors.
+    traces:
+      - srd001-rag-server-agent AC2
+      - srd002-chatbot-agent AC1
+      - srd002-chatbot-agent AC3
+  - id: S5
+    criterion: mage demo:verify reports each composed source and its document count on success. On failure it distinguishes an empty composed list from composed sources that retrieved nothing, and names whichever source outcome is populated rather than reporting a bare failure.
+    traces:
+      - srd002-chatbot-agent AC3
+  - id: S6
+    criterion: mage demo:down removes the application release and its namespace, leaves the platform and its other applications running, and exits 0.
+    traces:
+      - srd003-chatbot-deployment AC1
+
+failure_scenarios:
+  - id: E1
+    scenario: The application identity does not match the repository directory name, so every target that loads the manifest fails before doing any work.
+    expected: Rejected; the manifest identity and the repository name agree, and the targets run from the root.
+  - id: E2
+    scenario: The corpus is seeded after demo:up without restarting the rag-server, which holds the collection it bound at startup. The turn still answers 200 and still composes, because the rag-server queries the empty collection and takes part in composition with nothing to contribute.
+    expected: Rejected; demo:seed restarts the rag-server and waits for the rollout, and demo:verify counts retrieved documents rather than composed entries, so this passes only once the corpus is queryable.
+  - id: E3
+    scenario: The verification decides attribution by scraping bracket tokens from the answer text, as the SPA panel does.
+    expected: Rejected; the assertion reads metadata.sources.composed, which the server reports independently of what the answer model chose to write.
+  - id: E4
+    scenario: A demo target's output is piped through head or tail, which masks its exit code and reports a failed run as a pass.
+    expected: Rejected; output is captured and the exit code checked separately.
+
+out_of_scope:
+  - The Cohere provider tier, its citations, and its rerank passes; those enter at rel10.0.
+  - Clearance-gated retrieval, OSINT search, and template conformance.
+  - The sibling declarative-agents checkout that demo.yaml core_root and catalog_root point at, which remains a documented prerequisite.
+  - Corpus content and retrieval quality; this release asserts that sources compose, not how relevant they are.
+
+test_suite_trace: test-rel09.9-baseline-demo
+status: implemented

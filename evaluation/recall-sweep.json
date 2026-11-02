@@ -1,0 +1,17 @@
+[
+  {
+    "retrieval_breadth": "10",
+    "rerank_top_n": "8",
+    "cascade": "three_pass",
+    "corpus": "evaluation-ukraine-2022",
+    "corpus_version": "1.2",
+    "slice": " (first 3 of 10)",
+    "rerank_at_n": 0.2333333333333333,
+    "cosine_at_n": 0.27037037037037037,
+    "ordering_delta": -0.03703703703703706,
+    "retrieval_boundary": 0.27037037037037037,
+    "normalised": 0.2916666666666667,
+    "failed_taskings": 0,
+    "measured_at": "2026-09-08T16:14:34Z"
+  }
+]

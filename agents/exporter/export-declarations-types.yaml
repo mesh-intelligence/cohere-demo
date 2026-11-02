@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of export-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: exporter-export-declarations-types
+types:
+  - name: WriteBriefInput
+    schema:
+      properties:
+        content:
+          description: The approved, analyst-edited brief markdown supplied by the caller.
+          type: string
+        path:
+          description: Workspace-local brief path selected by the trusted request binding.
+          type: string
+      required:
+        - path
+        - content
+      type: object

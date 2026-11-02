@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: cohere-citations-dropped-declarations-types
+types:
+  - name: DriveChatTurnOutput
+    schema:
+      properties:
+        answer:
+          type: string
+        citations:
+          type: array
+        dropped:
+          type: array
+      type: object

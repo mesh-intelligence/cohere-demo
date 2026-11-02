@@ -1,0 +1,9 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# In-cluster tier enabled but no chat model (MeshView.Validate in-cluster branch).
+ollama:
+  enabled: true
+  models:
+    embedding: qwen3-embedding:8b
+    tier: qwen2.5:3b
+    chat: []

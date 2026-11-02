@@ -1,0 +1,172 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel11.5-uc001-intsum-ui
+title: An Analyst Narrows Retrieval by Facet, Reads the Filled INTSUM Form, and Walks a Citation Back to the Report Behind It
+
+summary: |
+  An analyst opens the assistant and sees the tasking on one side and an empty
+  ministry INTSUM form on the other. They set the facets the tasking calls for
+  -- a keyword, a source type, a minimum source rating, and the clearance they
+  hold -- and pose the tasking. The turn narrows retrieval by those facets
+  before the vector search runs, composes a brief from what survived, and the
+  form fills as the answer arrives: the classification banner over the material
+  composed, the bottom line first, the threat activity in sections, the
+  Admiralty table naming each source and how it was graded, and an index of
+  what was cited.
+
+  The analyst then does what the release exists for. They follow a citation.
+  The assertion resolves to the chunk it was computed against, that chunk to
+  the whole report it was cut out of -- classification line and endnote tail
+  included, though the search never indexed either -- and that report to its
+  other chunk-size versions. Where the report was written over other reporting,
+  the walk names that too. Every step applies the clearance the analyst holds,
+  resolved where the request was authenticated rather than where it was
+  composed, so a document above their level is returned by no operation and
+  drawn by no node.
+
+  The same session run at a lower clearance is the other half. The uncleared
+  analyst poses the same tasking, reads a form composed from less, and follows
+  the citations it does carry. The document the cleared analyst opened is not
+  reachable by identifier, not present among the versions, not returned by a
+  metadata query, and not named anywhere in the surface -- and the surface does
+  not report how much it withheld, because a count of what an analyst cannot
+  see maps the corpus they are not cleared to read.
+
+actor: An intelligence analyst posing a tasking and verifying the draft it produced, at two clearance levels
+trigger: The analyst has a tasking and needs a first-draft command-staff brief in the form a reviewer accepts, with every assertion traceable to a report they can open.
+
+flow:
+  - F1: The analyst opens the assistant. The chat route renders as two columns -- the tasking, its facets, and the turn history on one side, the ministry INTSUM form on the other -- while the observability and provisioning routes stay reachable and render as they did before this release.
+  - F2: The form renders its sections from the versioned template artifact the repository carries, so what the analyst sees empty is the same structure the brief will be validated against once rel12.2 adds the check.
+  - F3: The analyst sets the facets. The keyword, source-type, and source-rating vocabularies are read from the corpus the deployment serves rather than written into the application, and the clearance selector carries the level they hold.
+  - F4: The analyst poses the tasking. The chatbot derives the clearance from the authenticated request context, embeds the tasking once, and fans out to the retrieval tier with the facets and the level bound as trusted command state.
+  - F5: The rag-server applies the facets and the clearance as one metadata filter ahead of the vector search, so a document excluded by either was never a candidate rather than a result discarded after ranking.
+  - F6: The brief composes from what survived the filter. The response carries the answer, the structured citations naming chunk identifiers, the Admiralty metadata of each composed source, and the level the turn was enforced at.
+  - F7: The form fills from that response through a declared contract. Every field it shows traces to data the response carried; a section the turn produced nothing for renders empty rather than plausible.
+  - F8: The classification banner marks the highest level among the composed sources, not the level the analyst holds, because the banner marks the document and the reader is not the document.
+  - F9: The Admiralty table names each composed source with its source-reliability letter and information-credibility figure, showing a source the corpus grades as ungraded rather than leaving it blank, and the citation index lists each cited source once with the assertions resting on it however many times the brief cited it.
+  - F10: The surface shows the level the turn was enforced at, read from the response rather than echoed from the selection, and shows nothing about what the filter withheld -- not a count, not an identifier, and no pair of figures from which a count follows by subtraction.
+  - F11: The analyst follows a citation. The request goes to the chatbot boundary where their clearance was established, which reaches the identifier-in read boundary on the retrieval tier, which reads the document collection in the same store retrieval queries. The walk shows the chunk, the whole parent report including the segments the build marked unsearchable, the character span locating the chunk inside it, and the report's other chunk-size versions. A report written over other reporting names what it was derived from.
+  - F12: Repeated citations of one chunk collapse to a single node carrying the assertions that cite it, so the walk shows the sources the brief drew on rather than one node for every time it drew on them.
+  - F13: The analyst re-runs the same tasking at a lower clearance. The form fills from less, and the document the cleared run opened is returned by none of the four read operations -- not by identifier, not among the versions, not by metadata query -- and renders as no node in the walk.
+  - F14: An identifier the analyst is not cleared for is answered as absent rather than refused, because a refusal an analyst can tell apart from a miss confirms that the document exists.
+
+touchpoints:
+  - id: T1
+    target: srd016-intsum-ui AC1
+    reason: The surface is the chat route rendered as two columns rather than a fourth destination, because the form is what one turn produces. The route declarations are cross-checked in two places, since a route present in one and absent from the other renders the default panel instead of failing.
+  - id: T2
+    target: srd016-intsum-ui AC2
+    reason: The template artifact is what makes the form a ministry form rather than a layout, and it is the artifact rel12.2 validates markdown against. Defining it here is what lets that release write a check against something that exists.
+  - id: T3
+    target: srd016-intsum-ui AC3
+    reason: A form that fills from anything but the response is a form that can show a reviewer an assertion the turn never made. Rendering empty rather than plausible is what keeps a degraded turn legible as one.
+  - id: T4
+    target: srd016-intsum-ui AC4
+    reason: The facets are what make retrieval an analyst's instrument rather than a fixed query, and applying them before the vector search is what makes them a narrowing of the candidate set rather than a filter over a ranking that already happened.
+  - id: T5
+    target: srd016-intsum-ui AC5
+    reason: The read boundary is where this release could most easily introduce an access-control failure. Serving through the boundary that establishes clearance, rather than exposing the store to the browser, is what keeps the presentation path behind the same enforcement as retrieval.
+  - id: T6
+    target: srd016-intsum-ui AC6
+    reason: The walk is the release's reason for existing -- rel10.5 built the read API and drew nothing with it. A citation that resolves to a report an analyst can read is what turns attribution from a claim into something a reviewer checks.
+  - id: T7
+    target: srd016-intsum-ui AC7
+    reason: What the surface may not show is as specified as what it must. A withheld count leaks the existence of material the analyst is not cleared to know about, whether it is displayed directly or recoverable from two figures that are.
+  - id: T8
+    target: srd016-intsum-ui AC8
+    reason: A panel is proven by what it renders, not by what its requests returned. The browser tracer at two clearance levels is the evidence, and the bundle reproduction is what keeps the committed interface the one the sources build.
+  - id: T9
+    target: srd010-clearance-gated-retrieval AC2
+    reason: The facets ride the pre-search filter mechanism this criterion established for clearance, and the read boundary applies the same filter to a second path to the same documents. A filter on one path and not the other undoes rel11.0 while appearing to extend it.
+  - id: T10
+    target: srd010-clearance-gated-retrieval AC3
+    reason: The clearance for a document read is derived where the chat turn's is derived, from the authenticated request context. A read path that lets the request name its own level has no enforcement at all, however carefully the retrieval path filters.
+  - id: T11
+    target: srd017-real-demo-corpus AC8
+    reason: The four read operations and the document collection this surface consumes were built by rel10.5 and left undrawn. This release serves them over HTTP and renders them, adding no read semantics of its own.
+  - id: T12
+    target: srd012-brief-markdown-conformance AC2
+    reason: The template artifact defined here is the interface representation of the versioned structural schema this criterion requires. ARCHITECTURE decision 12 records that the two are separate representations and carries the drift risk deliberately.
+
+success_criteria:
+  - id: S1
+    criterion: An analyst poses a faceted tasking against a seeded mesh and the chat route renders two columns in which the INTSUM form fills from the turn and a citation in it walks to the report behind it. All three are required -- a two-column layout whose form never fills, and a form that fills but whose citations open nothing, are each consistent with part of this passing.
+    traces:
+      - srd016-intsum-ui AC1
+      - srd016-intsum-ui AC3
+      - srd016-intsum-ui AC6
+      - srd016-intsum-ui AC8
+  - id: S2
+    criterion: A versioned template artifact declares the ministry form's sections and nothing else, and the form renders from that artifact rather than from a section list held in a component, so the two cannot disagree about what the template contains.
+    traces:
+      - srd016-intsum-ui AC2
+      - srd012-brief-markdown-conformance AC2
+  - id: S3
+    criterion: Every field the form shows traces to data the response carried; a section with no data renders empty; and a degraded, unattributed, or uncomposed turn renders the form's headings without content rather than a brief that says nothing.
+    traces:
+      - srd016-intsum-ui AC3
+  - id: S4
+    criterion: Facets reach retrieval as metadata constraints applied before the vector search, a turn with no facet selected behaves as it did before this release, and no facet raises the clearance level, relaxes the filter, or reaches a source the unfaceted turn could not.
+    traces:
+      - srd016-intsum-ui AC4
+      - srd010-clearance-gated-retrieval AC2
+  - id: S5
+    criterion: The four read operations are served by the retrieval tier over the document collection and reached through the chatbot request boundary, the clearance applied is derived as the chat turn's is and cannot be named by the request, and the browser never reaches the store directly.
+    traces:
+      - srd016-intsum-ui AC5
+      - srd010-clearance-gated-retrieval AC3
+      - srd017-real-demo-corpus AC8
+  - id: S6
+    criterion: A citation resolves to its chunk, to the whole parent report including the segments the build marked unsearchable, and to that report's other chunk-size versions, with the character span locating the chunk inside the report and repeated citations of one chunk collapsed to a single node.
+    traces:
+      - srd016-intsum-ui AC6
+  - id: S7
+    criterion: The same tasking at a lower clearance reaches a document above that level through no read operation and draws it as no node, and an identifier the requester is not cleared for is answered as absent rather than refused.
+    traces:
+      - srd016-intsum-ui AC5
+      - srd016-intsum-ui AC6
+      - srd010-clearance-gated-retrieval AC2
+  - id: S8
+    criterion: The surface shows the level the turn was enforced at as the server reported it, and shows no count, identifier, or content of what the filter withheld, including no pair of displayed figures from which a withheld count follows by subtraction.
+    traces:
+      - srd016-intsum-ui AC7
+      - srd010-clearance-gated-retrieval AC4
+  - id: S9
+    criterion: The evidence is a browser tracer extending the existing interface integration target, running one tasking at two clearance levels and asserting rendered content rather than request status, with the committed interface bundle reproducing from the committed sources in the same change that alters them.
+    traces:
+      - srd016-intsum-ui AC8
+
+failure_scenarios:
+  - id: E1
+    scenario: The browser reads documents from the vector store directly, since the store already speaks HTTP and the read operations are just gets. The interface sends the analyst's clearance along with each request.
+    expected: Rejected; R5.2 and R5.3 route the read through the boundary that established the clearance. A level the browser sends is a level the browser chooses, and an analyst who edits one request reads the corpus. The clearance has to come from the authenticated context, which exists at the chatbot boundary and nowhere the browser can reach.
+  - id: E2
+    scenario: The clearance filter is applied to the document reads in the interface, hiding nodes for documents the analyst is not cleared for, since the walk only ever displays what it fetched.
+    expected: Rejected; R5.1 and R6.5 place the filter on the serving path and require the node to be absent because the fetch returned nothing. Filtering in the interface means the document reached the browser, where it is in the response body whatever the panel drew. The rel10.5 tracer already proves the operations withhold; this release consumes that rather than reimplementing it one layer too late.
+  - id: E3
+    scenario: The clearance line reports how many documents the filter withheld, so the analyst knows to request a higher level when a tasking is returning little.
+    expected: Rejected; R7.2 bars it, extending srd010 R5.3 from the audit record to the screen. An analyst who varies the tasking and reads that count maps the restricted corpus without reading a word of it. R7.3 closes the same route by arithmetic -- a matched total beside a returned total is the withheld count with one subtraction.
+  - id: E4
+    scenario: A section the turn produced nothing for is filled with a standard line so the brief looks complete, since a reviewer expects every section of the ministry form to carry something.
+    expected: Rejected; R3.2 renders empty rather than plausible. A form is what a reviewer trusts; a gaps section reading that there are no gaps because the turn produced none is an assertion the turn never made. An empty section says the turn produced nothing there, which is the fact.
+  - id: E5
+    scenario: The INTSUM form becomes a fourth routed panel, so the analyst switches to it when the brief is ready and the chat panel keeps its full width.
+    expected: Rejected; R1.1 puts the form beside the tasking on the chat route. The form is what one turn produces, and watching it fill is the demonstration. A destination the analyst navigates to after the fact separates the brief from the tasking that produced it and turns a live surface into a report viewer.
+  - id: E6
+    scenario: The form's sections are written into the component that renders them, since a template artifact read at runtime is indirection for a structure that changes rarely.
+    expected: Rejected; R2.4 renders from the artifact. The structure changes rarely and is validated by a different release against a different representation, which is exactly the condition under which two copies drift without anyone noticing. ARCHITECTURE decision 12 already accepts three representations of this template; a fourth living inside a component is the one nobody would think to check.
+  - id: E7
+    scenario: The facets are applied to the retrieved set after the vector search, since the search returns the top candidates and filtering them is simpler than composing a metadata filter.
+    expected: Rejected; R4.2 applies them before the search, as srd010 R2.2 requires of clearance for a stronger reason and this inherits. Filtering after the search means the facets compete with relevance for the top-N -- a tasking whose facet-matching documents rank eleventh returns nothing, and the analyst reads that as an absence of material rather than as a ranking artifact.
+
+out_of_scope:
+  - Validating the composed markdown against the template. This release defines the artifact; the structural check that reads it is rel12.2.
+  - Rendering the brief to PDF, and the LaTeX representation of the template. That is rel14.0.
+  - Editing the filled form. The analyst edit the VISION requires is the input to rel14.0's export; this release renders the form and does not make it editable.
+  - Changing what retrieval returns or how it ranks. The facets narrow the candidate set through the existing filter mechanism and assert nothing about relevance or ordering.
+  - The OSINT search branch and the fusion rerank. Those are rel12.0 and rel12.1, and a document reached through them is outside the corpus this walk resolves against.
+  - Measuring recall, citation coverage, or first-draft time over this surface. rel13.0 owns the evaluation and its labeled taskings.
+
+test_suite_trace: test-rel11.5-intsum-ui
+status: implemented

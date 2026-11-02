@@ -1,0 +1,10 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-selection
+schema_version: 1
+tools:
+  - drive_chat_turn
+  - read_embed_request_log
+  - assert_embed_called_once
+  - read_rag_request_log
+  - assert_rag_untouched

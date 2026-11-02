@@ -1,0 +1,86 @@
+% Copyright (c) 2026 Mesh Intelligence Inc.
+% SPDX-License-Identifier: MIT-0
+%
+% The exported brief's pandoc template (GH-454): a filled military message
+% form. Typewriter face throughout (TeX Gyre Cursor, the image's Courier), a
+% ruled header table, section headings as full-width form-field bars, and
+% classification-style banners top and bottom. Projected beside the profiles
+% (srd013 R6.3): pandoc reads it when md_to_tex converts, and the confined
+% engine only ever sees the brief.tex pandoc wrote into the working
+% directory. Everything here is declared configuration -- no variable in this
+% file is supplied by the document or the request.
+\documentclass[11pt]{article}
+\usepackage[margin=2.1cm,top=1.6cm,bottom=1.8cm]{geometry}
+\usepackage{tgcursor}
+\renewcommand{\familydefault}{\ttdefault}
+\usepackage[T1]{fontenc}
+\usepackage{array}
+\usepackage{longtable,booktabs,calc}
+\usepackage{titlesec}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage[hidelinks]{hyperref}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\raggedright
+
+% Pandoc's list shim, emitted around every tight markdown list.
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+% Pandoc >= 3 wraps figures and quotes in these when present.
+\providecommand{\pandocbounded}[1]{#1}
+
+% Section headings render as the form's field bars: a full-width black bar
+% with the title in white uppercase, the way a message form labels its
+% blocks. Subsections keep a lighter ruled style for anything nested.
+\titleformat{\section}
+  {\normalfont\bfseries}{}{0pt}
+  {\SectionBar}
+\titlespacing*{\section}{0pt}{14pt}{6pt}
+\newcommand{\SectionBar}[1]{%
+  \colorbox{black}{\parbox{\dimexpr\textwidth-2\fboxsep\relax}{%
+    \textcolor{white}{\small\bfseries\MakeUppercase{#1}}}}}
+\titleformat{\subsection}
+  {\normalfont\small\bfseries}{}{0pt}
+  {\MakeUppercase}[\vspace{-4pt}\rule{\textwidth}{0.4pt}]
+\titlespacing*{\subsection}{0pt}{10pt}{4pt}
+
+% The classification-style banner. The demo renders synthetic material, and
+% the banner says so rather than wearing a marking the product has not
+% earned.
+\newcommand{\FormBanner}{%
+  \begin{center}
+    \fbox{\small\bfseries DEMONSTRATION // SYNTHETIC INTELLIGENCE PRODUCT}%
+  \end{center}}
+
+\begin{document}
+
+\FormBanner
+
+% The form header: ruled rows the way a message form opens. The date is the
+% render date; the remaining fields are the demo cell's fixed identity, and a
+% deployment replaces this template to change them (srd013 non-goal).
+\begin{center}
+\begin{tabular}{|p{0.46\textwidth}|p{0.46\textwidth}|}
+\hline
+\multicolumn{2}{|c|}{\rule{0pt}{14pt}\large\bfseries INTELLIGENCE SUMMARY (INTSUM)}\\[2pt]
+\hline
+\rule{0pt}{12pt}FROM: S2, DEMO ANALYSIS CELL & DTG: \MakeUppercase{\today}\\
+\hline
+\rule{0pt}{12pt}TO: COMMAND STAFF & PRECEDENCE: ROUTINE\\
+\hline
+\rule{0pt}{12pt}PREPARED BY: CHATBOT-MESH & MODELS: COHERE\\
+\hline
+\end{tabular}
+\end{center}
+
+\vspace{4pt}
+
+$body$
+
+\vspace{10pt}
+\rule{\textwidth}{0.4pt}
+
+\FormBanner
+
+\end{document}

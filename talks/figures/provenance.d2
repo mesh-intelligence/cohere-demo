@@ -1,0 +1,65 @@
+direction: up
+
+vars: {
+  d2-config: {
+    theme-id: 0
+    pad: 6
+  }
+}
+
+classes: {
+  layer: {
+    style: {stroke: "#7d33f2"; stroke-dash: 4; fill: transparent; border-radius: 10; font-size: 15; font-color: "#4b2d91"}
+  }
+  doc: {
+    shape: page
+    style: {fill: "#fbfcfe"; stroke: "#3d70b8"; font-size: 15}
+  }
+  chunk: {
+    style: {border-radius: 8; fill: "#f6f8fb"; stroke: "#7a8699"; font-size: 14}
+  }
+  sentence: {
+    style: {border-radius: 8; fill: "#eef6ef"; stroke: "#2f7d4f"; font-size: 14}
+  }
+}
+
+(* -> *)[*].style.stroke: "#7a8699"
+
+corpus: Corpus — embedded at seed time · Embed {
+  class: layer
+  docA: HR-22-019\nHUMINT · A1 · SECRET {class: doc}
+  docB: isw-2022-12-16\nOSINT · B2 · UNCLASSIFIED {class: doc}
+  docC: missile-2022-12-16\nSIGINT · B2 · UNCLASSIFIED {class: doc}
+}
+
+retrieved: Retrieved and trimmed · Embed retrieves, Rerank picks the top 8 {
+  class: layer
+  chA: ...crew training will run\napproximately ten weeks...\ninherits A1 · SECRET {class: chunk}
+  chB: ...air defenses shot down\n60 of 76 Russian missiles...\ninherits B2 · UNCLASSIFIED {class: chunk}
+  chC: ...launched 72,\nreported destroyed 60...\ninherits B2 · UNCLASSIFIED {class: chunk}
+}
+
+sections: Cited sentences — each summarizes its chunks · Command A {
+  class: layer
+  s1: Air defences shot down\n60 of 76 missiles on Dec 16. {class: sentence}
+  s2: Liaison reporting confirms the\nPatriot decision — training\nabout ten weeks. {class: sentence}
+}
+
+bluf: BLUF — the summary of the summaries · Command A {
+  class: layer
+  blufline: Russian strike waves pressed Ukraine's grid\nthrough December; air defences held, and a\nPatriot transfer is confirmed. {class: sentence}
+}
+
+corpus.docA -> retrieved.chA: chunked ~900 chars {style.font-size: 13}
+corpus.docB -> retrieved.chB: chunked {style.font-size: 13}
+corpus.docC -> retrieved.chC: chunked {style.font-size: 13}
+retrieved.chB -> sections.s1: cited {style.font-size: 13}
+retrieved.chC -> sections.s1: cited {style.font-size: 13}
+retrieved.chA -> sections.s2: cited {style.font-size: 13}
+sections.s1 -> bluf.blufline: summarized {style.font-size: 13}
+sections.s2 -> bluf.blufline: summarized {style.font-size: 13}
+
+banner: "banner: SECRET\nderived by the machine —\nno model touches it" {
+  style: {stroke: "#b03030"; font-color: "#b03030"; fill: "#fdf3f3"; border-radius: 8; font-size: 14}
+}
+retrieved -> banner: highest marking {style.stroke: "#b03030"; style.stroke-dash: 4; style.font-size: 13; style.font-color: "#b03030"}

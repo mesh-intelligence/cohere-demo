@@ -1,0 +1,103 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+rest:
+  version: v1
+  auth:
+    none:
+      type: none
+  limits:
+    local:
+      timeout: 60s
+      read_timeout: 60s
+      max_request_bytes: 65536
+      max_response_bytes: 262144
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+  clients:
+    subject:
+      # The rig publishes the chatbot's pinned chat address here.
+      base_url: ${SUBJECT_URL:-http://127.0.0.1:1}
+      auth_ref: none
+      limits_ref: local
+      operations:
+        chat_turn:
+          method: POST
+          path: /api/v1/chat
+          params:
+            body_source: none
+          body:
+            message: "Prepare a command-staff brief on what the corpus describes."
+          success: {status: [200], signal: SubjectAnswered}
+          failures:
+            - status: [500]
+              signal: SubjectBroke
+              domain_error_code: command_error
+          response:
+            output:
+              answer: $.answer
+          side_effects:
+            - kind: external_api
+              target: chatbot.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+    cohere_mock:
+      # Every mock records the requests it served and publishes them at
+      # /_mock/log. Reading the count here is what makes the verdict mean the
+      # vector was rejected rather than merely that the turn ended: the Failed
+      # terminal returns command_error whatever the cause, so the response body
+      # cannot separate a rejected vector from a fault that struck earlier.
+      #
+      # The base URL comes from the same variable the subject reads, published
+      # by the rig from the scenario's fixture_env.
+      base_url: ${COHERE_BASE_URL:-http://127.0.0.1:1}
+      auth_ref: none
+      limits_ref: local
+      operations:
+        # The name carries the client because REST operation names are unique
+        # across every client in a profile rather than scoped to the one that
+        # declares them; a bare read_log on both mocks refuses to load.
+        read_embed_log:
+          method: GET
+          path: /_mock/log
+          params:
+            body_source: none
+          success: {status: [200], signal: EmbedLogRead}
+          response:
+            output:
+              count: $.count
+          side_effects:
+            - kind: external_api
+              target: cohere_mock.log
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+    rag0_mock:
+      # Pinned rather than read from an environment reference, matching
+      # cohere-embed: the chatbot's client limits admit only this port, so the
+      # mock stands exactly where the real rag-server stands.
+      base_url: http://127.0.0.1:18085
+      auth_ref: none
+      limits_ref: local
+      operations:
+        read_rag_log:
+          method: GET
+          path: /_mock/log
+          params:
+            body_source: none
+          success: {status: [200], signal: RagLogRead}
+          response:
+            output:
+              count: $.count
+          side_effects:
+            - kind: external_api
+              target: rag0_mock.log
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop

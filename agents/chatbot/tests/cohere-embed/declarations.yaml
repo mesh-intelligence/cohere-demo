@@ -1,0 +1,168 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: cohere-embed-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - declarations-types.yaml
+tools:
+  - name: drive_chat_turn
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Post one tasking to the chatbot the rig started.
+    problem: The unwrap chain must be driven through a real turn rather than exercised word by word.
+    goals:
+      - Post a tasking to the chatbot at the address the rig published.
+    requirements:
+      input:
+        - Tool config fixes the operation; the tasking is literal fixture data.
+      output:
+        - Output reports the answer field of the turn response.
+      errors:
+        - Unreachable or unmapped responses emit CommandError.
+    non_goals:
+      - Does not start or stop the chatbot; the rig owns that.
+      - Does not inspect the vector; the assertion reads the RAG mock's log for that.
+    output:
+      description: The chatbot's turn response.
+    side_effects:
+      - kind: external_api
+        target: chatbot.chat
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A chat turn against mocks changes nothing durable.
+    config:
+      rest_ref: subject
+      operation: chat_turn
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SubjectAnswered, message: builtin.Message<cohere-embed-declarations-types.DriveChatTurnOutput>}
+        - {signal: SubjectBroke, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: read_rag_request_log
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Read the request log the first RAG mock recorded during the turn.
+    problem: |
+      The query vector is not observable in the answer. The RAG mock returns its
+      canned chunk whichever vector arrived, so a nested or serialized vector
+      produces the same 200 and the same composed brief as a flat one. The
+      request body the mock recorded is the only place the shape shows.
+    goals:
+      - Fetch the recorded requests so the assertion can compare the query body.
+    requirements:
+      input:
+        - Tool config fixes the operation; nothing is read from a previous result.
+      output:
+        - Output reports the recorded request array.
+      errors:
+        - An unreachable mock emits CommandError.
+    non_goals:
+      - Does not filter or interpret the log; the capture word does that.
+    output:
+      description: The RAG mock's recorded requests.
+    side_effects:
+      - kind: external_api
+        target: rag0_mock.log
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a log changes no external state.
+    config:
+      rest_ref: rag0_mock
+      operation: read_log
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RagLogRead, message: builtin.Message<cohere-embed-declarations-types.ReadRagRequestLogOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: capture_rag_query_body
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the bodies the RAG mock recorded into one comparable string.
+    problem: Selector paths walk maps only, so a recorded request cannot be indexed out of the log array.
+    goals:
+      - Concatenate every recorded request body in order.
+    requirements:
+      input:
+        - The request array is selected from the read_rag_request_log result.
+      output:
+        - Output is the recorded body text.
+      errors:
+        - A requests selector that does not resolve to an array emits CommandError.
+    non_goals:
+      - Does not parse the body; the assertion compares it whole.
+    output: {description: The recorded request body.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(read_rag_request_log).body.mapped.requests
+      item_template: "{{ body }}"
+      separator: ""
+      signal: RagQueryBodyCaptured
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RagQueryBodyCaptured, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: assert_query_vector_flat
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Compare the recorded RAG query body against the flat vector the mock embedded.
+    problem: |
+      A turn answers 200 whether the query vector arrived flat, nested one level
+      deeper, or serialized as text, because the RAG mock returns its canned
+      chunk regardless. Only an exact comparison separates the three.
+    goals:
+      - Pass only when the body is exactly the flat vector the Cohere mock returned.
+      - Fail when the vector arrived nested, which is what a missing unwrap produces.
+    requirements:
+      input:
+        - The body is read from the captured RAG request log.
+      output:
+        - QueryVectorFlat when the body matches; QueryVectorMalformed otherwise.
+      errors:
+        - An unresolvable or uncoercible body emits CommandError.
+    non_goals:
+      - Does not inspect the answer or the composed brief.
+    output: {description: Comparison outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparing a value changes no external state.}
+    config:
+      left: $from(capture_rag_query_body).$
+      op: eq
+      # The vector mocks/cohere.yaml returns, flat. Without capture_query_vector
+      # the same turn sends [[0.101,0.202,0.303]] and fails this comparison;
+      # with a serialized vector it sends a quoted string and fails it too.
+      #
+      # The clearance rides in the same body (srd010 R3.2). This scenario sends
+      # no X-Analyst-Clearance header, so the level is the lowest declared one --
+      # which makes the fail-closed default observable in the wire body rather
+      # than only in the response metadata.
+      right: '{"max_clearance":"unclassified","n_results":5,"query_embeddings":[0.101,0.202,0.303]}'
+      operand_type: string
+      satisfied: QueryVectorFlat
+      unsatisfied: QueryVectorMalformed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryVectorFlat, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: QueryVectorMalformed, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

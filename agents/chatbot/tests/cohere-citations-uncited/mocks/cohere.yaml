@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Cohere v2 chat endpoint, returning a brief the provider cited
+# nothing for.
+#
+# An empty citations array is a successful composition carrying no attribution,
+# which is a different outcome from one whose citations were all dropped even
+# though both surface no sources. srd009 R4.5 requires the two to stay
+# distinguishable, and the only thing that separates them in the response is
+# whether anything was reported as dropped.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-1
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject."
+            citations: []

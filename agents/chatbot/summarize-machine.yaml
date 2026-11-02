@@ -1,0 +1,47 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-summarize-request
+purpose: |-
+  One request-scoped summarization of the document the chat window holds,
+  served to the /summarize command (GH-448): the seeded document is composed
+  into a summarization prompt and answered by the Cohere Command model. No
+  retrieval, no embedding, no citations -- the workflow exists to show the
+  chat model isolated.
+
+  The document comes from the client because it is the document the analyst
+  is looking at: the retained brief or the retained search results, text the
+  window already holds. Nothing here reaches the corpus, so no clearance
+  resolution runs -- a summarization adds no material the analyst has not
+  already been served.
+initial_state: AwaitingRequest
+budget:
+  # One prompt composition and one provider call under its 60s ceiling.
+  command_timeout: 90s
+  max_iterations: 8
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted summarize endpoint with the document text.}
+  - {name: ComposingPrompt, meaning: The seeded document is being composed into the summarization prompt.}
+  - {name: Summarizing, meaning: The Cohere Command model is summarizing the document.}
+  - {name: ComposingResponse, meaning: The summary is being wrapped for the HTTP reply.}
+  - {name: SummaryServed, meaning: Terminal. The summary is ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. The provider or a boundary word failed., run_status: failed}
+terminal_states:
+  - SummaryServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The summarize endpoint starts a request-scoped run.}
+  - {name: SummaryPromptComposed, trigger: The summarization prompt was composed from the seeded document.}
+  - {name: LLMResponded, trigger: The Command model returned the summary.}
+  - {name: SummaryResponseComposed, trigger: The response body was composed.}
+  - {name: CommandError, trigger: The provider call or a boundary word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: ComposingPrompt, action: compose_summary_prompt}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  - {state: ComposingPrompt, signal: SummaryPromptComposed, next: Summarizing, action: summarize_with_cohere, label: summary_text}
+  - {state: ComposingPrompt, signal: CommandError, next: Failed}
+  - {state: Summarizing, signal: LLMResponded, next: ComposingResponse, action: compose_summary_response, label: summary_response}
+  - {state: Summarizing, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: SummaryResponseComposed, next: SummaryServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

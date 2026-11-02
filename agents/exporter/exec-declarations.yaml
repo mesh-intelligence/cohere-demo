@@ -1,0 +1,206 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Exec tool declarations for the exporter agent (srd013 R2): the rendering
+# toolchain its container carries, bound as agent-core exec tools. Every argv
+# below is fully static (R2.2) -- no brief content, request field, or model
+# output becomes an argument, a flag, or a shell string -- and the document
+# travels between stages as files under ${EXPORTER_WORK_DIR:-/work}/export
+# (R2.3), the same expansion-in-argv shape the applier's exec words use. The
+# document being rendered was composed from retrieved material that includes
+# external search results (srd011 R7.1), which is why the engine runs with
+# shell escape disabled and its file access pinned by configuration: a
+# command or path written INTO the document is inert here (R2.4, R2.5).
+#
+# Each word runs one child process and emits ToolDone on a zero exit and
+# ToolFailed on a non-zero exit; the export machine distinguishes stages by
+# the state it is in.
+kind: tool-declaration
+schema_version: 1
+unit: exporter-exec-declarations
+imports:
+  - exec-declarations-types.yaml
+tools:
+  - name: clean_workspace
+    type: exec
+    binary: rm
+    args: [-rf, "${EXPORTER_WORK_DIR:-/work}/export"]
+    category: boundary
+    visibility: internal
+    description: Remove the request's export working directory and everything in it.
+    problem: |
+      A failed export must leave no .tex, auxiliary file, or partial output
+      behind (srd013 R5.1), and a stale PDF surviving a failed render would
+      be one encode away from returning as a fresh document (R5.2). One fixed
+      recursive remove of the request directory is the rollback.
+    goals:
+      - Remove the export working directory on every failure path.
+      - Emit ToolDone so the machine can terminate in Failed with a clean workspace.
+    requirements:
+      input:
+        - The target path is fixed configuration; nothing selects it.
+      output:
+        - must include exit status and captured output
+      errors:
+        - must emit ToolFailed when the remove fails
+    non_goals:
+      - Does not touch anything outside the export directory; the path is fixed.
+    output:
+      description: rm process result.
+    side_effects:
+      - {kind: child_process, state: mutating, target: rm, description: Removes the request's export working directory.}
+    reversibility:
+      classification: irreversible
+      requires_confirmation: false
+    errors:
+      - {signal: ToolFailed, condition: The directory cannot be removed, message_shape: <captured rm output>, state_after_failure: Temporary files may remain; the run still terminates in Failed.}
+    undo:
+      strategy: noop
+      description: The removed files are this request's temporaries; nothing depends on them after the run.
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ToolDone, message: builtin.Message<exporter-exec-declarations-types.CleanWorkspaceOutput>}
+        - {signal: ToolFailed, message: builtin.Message<builtin.Text>}
+  - name: md_to_tex
+    type: exec
+    binary: pandoc
+    # The template is a declared asset projected beside the profiles (srd013
+    # R6.3, GH-454): pandoc reads it here; the confined engine only sees the
+    # brief.tex pandoc writes. Both expansions are fixed deployment paths.
+    # --shift-heading-level-by promotes the brief's ## headings to LaTeX
+    # sections, which the template renders as the form's field bars.
+    args: [--from, gfm, --to, latex, --standalone, --shift-heading-level-by=-1, "--template=${EXPORTER_PROFILE_DIR:-/profiles}/agents/exporter/brief-template.tex", --output, "${EXPORTER_WORK_DIR:-/work}/export/brief.tex", "${EXPORTER_WORK_DIR:-/work}/export/brief.md"]
+    category: boundary
+    visibility: internal
+    description: Convert the approved brief markdown file to a standalone .tex document.
+    problem: |
+      The ministry document is a PDF and the approved brief is markdown; the
+      conversion must read the document as a file and write a file, so no
+      interpolation path exists between the brief and the command line
+      (srd013 R2.1, R2.3).
+    goals:
+      - Convert the written brief.md to brief.tex under fixed argv.
+      - Emit ToolDone on a clean conversion and ToolFailed when pandoc rejects the input.
+    requirements:
+      input:
+        - must read the markdown from the fixed workspace path
+      output:
+        - must include exit status and captured output
+      errors:
+        - must emit ToolFailed on a non-zero exit
+    non_goals:
+      - Does not re-derive or repair the brief's section structure; it converts the markdown it is given (srd013 R4.3).
+      - Does not render; render_pdf owns the engine.
+    output:
+      description: pandoc process result.
+    side_effects:
+      - {kind: child_process, state: mutating, target: pandoc, description: Writes brief.tex in the export working directory.}
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: The converted .tex is written into the request workspace, which the run removes when it ends.
+    errors:
+      - {signal: ToolFailed, condition: pandoc exits non-zero, message_shape: <captured pandoc output>, state_after_failure: The machine routes to CleaningUp.}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ToolDone, message: builtin.Message<exporter-exec-declarations-types.MdToTexOutput>}
+        - {signal: ToolFailed, message: builtin.Message<builtin.Text>}
+  - name: render_pdf
+    type: exec
+    binary: xelatex
+    # -no-shell-escape is srd013 R2.4: a \write18 or shell-escape construct
+    # written into the .tex -- by the composing model, or by external text
+    # that reached the composition set -- does not execute. The two cnf-lines
+    # are R2.5: openin_any=p and openout_any=p put the engine's own file
+    # access in paranoid mode, so an \input or \openout naming a path outside
+    # the working tree is refused by the engine's kpathsea layer.
+    # -interaction=batchmode keeps the engine from waiting on a terminal, and
+    # -output-directory pins where every artifact lands.
+    args: [-no-shell-escape, -interaction=batchmode, -halt-on-error, -cnf-line, openin_any=p, -cnf-line, openout_any=p, -output-directory, "${EXPORTER_WORK_DIR:-/work}/export", "${EXPORTER_WORK_DIR:-/work}/export/brief.tex"]
+    category: boundary
+    visibility: internal
+    description: Render the converted .tex to PDF with shell escape disabled and file access in paranoid mode.
+    problem: |
+      A LaTeX engine is a programmable system that executes its input: shell
+      escape runs commands the document names and input directives read paths
+      the document names. The brief is composed from untrusted-derived
+      content, so the engine runs with both capabilities pinned off in the
+      declared argv, where a reviewer can see them (srd013 R2.4, R2.5).
+    goals:
+      - Render brief.tex to brief.pdf inside the export working directory.
+      - Emit ToolDone on a clean render and ToolFailed when the engine fails or halts on error.
+    requirements:
+      input:
+        - must read the .tex from the fixed workspace path
+      output:
+        - must include exit status and captured output
+      errors:
+        - must emit ToolFailed on a non-zero exit
+    non_goals:
+      - Does not run with shell escape under any configuration; there is no enabled variant of this word.
+      - Does not read or write outside the working directory and the engine's own template assets.
+    output:
+      description: xelatex process result.
+    side_effects:
+      - {kind: child_process, state: mutating, target: xelatex, description: Writes brief.pdf and auxiliary files in the export working directory.}
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: The rendered PDF is written into the request workspace, which the run removes when it ends.
+    errors:
+      - {signal: ToolFailed, condition: "The engine exits non-zero (error in the document, refused file access, or the halt-on-error stop)", message_shape: <captured engine output>, state_after_failure: The machine routes to CleaningUp; no partial PDF is returned.}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ToolDone, message: builtin.Message<exporter-exec-declarations-types.RenderPdfOutput>}
+        - {signal: ToolFailed, message: builtin.Message<builtin.Text>}
+  - name: encode_pdf
+    type: exec
+    binary: base64
+    # -w0 disables line wrapping, so the captured stdout is one base64 string
+    # the Done mapping returns as the pdf_base64 field. The encode is the
+    # machine's last word before Done because a machine_request response body
+    # maps selectors against the final result only.
+    args: [-w0, "${EXPORTER_WORK_DIR:-/work}/export/brief.pdf"]
+    category: boundary
+    visibility: internal
+    description: Encode the rendered PDF as base64 on stdout for the response mapping.
+    problem: |
+      The endpoint returns the rendered document (srd013 R1.5) and the
+      machine_request response body is JSON mapped from the final word's
+      output; the PDF travels as base64 text captured from the encoder's
+      stdout.
+    goals:
+      - Emit the complete PDF as one unwrapped base64 string.
+      - Emit ToolFailed when the PDF is absent, so a failed render can never be encoded.
+    requirements:
+      input:
+        - must read the PDF from the fixed workspace path
+      output:
+        - must include exit status and the base64 document as the captured output
+      errors:
+        - must emit ToolFailed on a non-zero exit
+    non_goals:
+      - Does not validate the PDF; the render's halt-on-error exit already decided success.
+    output:
+      description: base64 process result whose output field carries the encoded PDF.
+    side_effects:
+      - {kind: child_process, state: read_only, target: base64, description: Reads the rendered PDF; writes nothing.}
+    reversibility:
+      classification: reversible
+      requires_confirmation: false
+    errors:
+      - {signal: ToolFailed, condition: The PDF cannot be read, message_shape: <captured base64 output>, state_after_failure: The machine routes to CleaningUp.}
+    undo:
+      strategy: noop
+      description: Encoding reads a file and changes nothing.
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ToolDone, message: builtin.Message<exporter-exec-declarations-types.EncodePdfOutput>}
+        - {signal: ToolFailed, message: builtin.Message<builtin.Text>}

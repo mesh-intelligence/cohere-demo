@@ -1,0 +1,84 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: cohere-embed-refused-critic
+purpose: |-
+  Critiques the turn's handling of an embedding provider that refuses the call.
+  The mock returns a rate-limit status for the query embedding, which the
+  operation maps to ProviderThrottled, and the machine routes to its own
+  terminal rather than to the generic error path.
+
+  Two facts have to hold together, and the second is why this critic has a probe
+  state. That the turn stopped is visible in its status. That the provider
+  refusal is what stopped it is not: an unreachable RAG server, a malformed
+  profile, or any fault before the fan-out ends the turn the same way, so an
+  outcome-only assertion passes on a run the embedding endpoint never saw.
+
+  The probe settles it through the mock's own script. The embed route is
+  scripted to refuse first and succeed after, and a mock repeats its last
+  response, so the critic's call to that endpoint returns the refusal if the
+  turn never consumed it and the success if it did.
+
+  A turn that answered would mean the refusal did not stop the fan-out, which is
+  the failure this scenario guards: srd002 R3.3 excludes sources whose seeded
+  identity differs from the query vector's, so a turn carrying on past a failed
+  embedding answers from nothing while still returning 200.
+configuration:
+  machine: machine.yaml
+  tools: tools.yaml
+initial_state: Idle
+budget:
+  command_timeout: 2m
+  max_iterations: 10
+states:
+  - name: Idle
+    meaning: Before the chatbot is driven.
+  - name: Checking
+    meaning: The turn has run; its outcome decides whether the provider is probed.
+  - name: Probing
+    meaning: The embedding mock is being asked whether the turn consumed its refusal.
+  - name: Passed
+    run_status: succeeded
+    meaning: Terminal. The provider refused, the turn stopped, and the provider was reached.
+  - name: Failed
+    run_status: failed
+    meaning: Terminal. The turn answered, or it stopped for a reason other than the refusal.
+terminal_states: [Passed, Failed]
+signals:
+  - name: Seed
+    trigger: Loop initialization.
+  - name: SubjectBroke
+    trigger: The chatbot reported a command error, which is the expected outcome here.
+  - name: SubjectAnswered
+    trigger: The chatbot answered, so the refusal did not stop the fan-out.
+  - name: RefusalConsumed
+    trigger: The embedding mock has advanced past its refusal, so the turn called it.
+  - name: RefusalUntouched
+    trigger: The embedding mock still serves its refusal, so the turn stopped for another reason.
+  - name: CommandError
+    trigger: The chatbot or the mock was unreachable, or returned an unmapped status.
+transitions:
+  - state: Idle
+    signal: Seed
+    next: Checking
+    action: drive_chat_turn
+  - state: Checking
+    signal: SubjectBroke
+    next: Probing
+    action: probe_cohere_embed
+  - state: Checking
+    signal: SubjectAnswered
+    next: Failed
+  - state: Checking
+    signal: CommandError
+    next: Failed
+  - state: Probing
+    signal: RefusalConsumed
+    next: Passed
+  - state: Probing
+    signal: RefusalUntouched
+    next: Failed
+  - state: Probing
+    signal: CommandError
+    next: Failed

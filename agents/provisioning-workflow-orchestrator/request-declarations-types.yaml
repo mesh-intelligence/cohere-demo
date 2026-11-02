@@ -1,0 +1,87 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of request-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: provisioning-workflow-orchestrator-request-declarations-types
+types:
+  - name: ReadCreatorRolloutOutput
+    schema:
+      properties:
+        desired:
+          type: integer
+        phase:
+          type: string
+        ready:
+          type: integer
+        revision:
+          type: integer
+      type: object
+  - name: ReadCreatorStateOutput
+    schema:
+      properties:
+        llmChatModel:
+          type: string
+        llmChatModels:
+          type: array
+        llmEmbedModel:
+          type: string
+        llmExternalURL:
+          type: string
+        llmInCluster:
+          type: boolean
+        llmTierModel:
+          type: string
+        llmTopology:
+          type: string
+        paramsChunkCap:
+          type: integer
+        paramsNResults:
+          type: integer
+        paramsTierDefault:
+          type: string
+        rags:
+          type: array
+      type: object
+  - name: RequestIngestInput
+    schema:
+      properties:
+        collection:
+          type: string
+        directory:
+          type: string
+        embedding_model:
+          type: string
+      type: object
+  - name: RequestIngestOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RequestRolloutInput
+    schema:
+      properties:
+        values:
+          type: string
+      type: object
+  - name: RequestRolloutOutput
+    schema:
+      properties:
+        health:
+          type: string
+      type: object
+  - name: RequestRolloutValuesInput
+    schema:
+      properties:
+        values:
+          type: string
+      type: object
+  - name: RequestRolloutValuesOutput
+    schema:
+      properties:
+        health:
+          type: string
+      type: object

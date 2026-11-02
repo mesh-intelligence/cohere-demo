@@ -1,0 +1,55 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: query-clearance-refused-declarations
+imports:
+  - declarations-types.yaml
+tools:
+  - name: drive_rag_query
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Post a query carrying an unrecognized clearance level and map the rag-server's answer.
+    problem: A level outside the declared ordered set must be refused rather than resolved to a default window.
+    goals:
+      - Post a well-formed query whose only defect is a level no declared window carries.
+      - Map the refusal to the signal this scenario passes on.
+    requirements:
+      input:
+        - Tool config fixes the operation; the query vector and the level are literal fixture data.
+      output:
+        - Output reports the refusal's error code and detail.
+      errors:
+        - Unreachable or unmapped responses emit CommandError.
+    non_goals:
+      - Does not start or stop the subject; the rig owns that.
+      - Does not retry with a level the set does carry, which is the retry srd010 R4.3 forbids the caller.
+    output:
+      description: The rag-server's refusal.
+    side_effects:
+      - kind: external_api
+        target: rag_server.query
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A refused query changes nothing.
+    errors:
+      - signal: CommandError
+        condition: The subject is unreachable or returns an unmapped status.
+        state_after_failure: No state changes.
+    config:
+      rest_ref: subject
+      operation: rag_query
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SubjectAnswered, message: builtin.Message<query-clearance-refused-declarations-types.DriveRagQueryOutput>}
+        - {signal: SubjectRejected, message: builtin.Message<builtin.Text>}
+        - {signal: SubjectRefused, message: builtin.Message<builtin.Text>}
+        - {signal: SubjectBroke, message: builtin.Message<builtin.Text>}
+        - {signal: RESTResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

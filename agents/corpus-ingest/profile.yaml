@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: agent-profile
+schema_version: 1
+name: corpus-ingest
+machine: ../knowledge-manager/corpus-ingest/machine.yaml
+tools:
+  - ../knowledge-manager/corpus-ingest/tools.yaml
+tool_declarations:
+  # The narrow units the canonical corpus-ingest profile imports. The llm/all
+  # bundle brought words this profile never selects, which is an unused import.
+  - /opt/agent-core/tools/builtin/parse-response.yaml
+  - /opt/agent-core/tools/builtin/report-parse-error.yaml
+  - /opt/agent-core/tools/builtin/done.yaml
+  - ../knowledge-manager/corpus-ingest/declarations.yaml
+rest_definitions:
+  - corpus-rest.yaml
+  - embed-rest.yaml
+# The provider libraries (srd058 R1.1). providers is the one the catalog's
+# invoke_llm reads its chat dialect from; embedder is the one embed-rest.yaml
+# instantiates its document embedding from. Both default to Ollama; an ingest
+# that embeds at Cohere rebinds embedder alone with --library.
+libraries:
+  providers: /opt/agent-core/tools/providers/ollama
+  embedder: /opt/agent-core/tools/providers/ollama

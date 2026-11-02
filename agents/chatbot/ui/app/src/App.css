@@ -1,0 +1,967 @@
+/* The canonical design tokens, through the ui-kit release dependency (GH-780).
+   TestDesignTokensComeFromTheKitRelease holds the dependency to the pin. */
+@import "@declarative-agents/ui-kit/tokens.css";
+
+.shell {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+.sidebar {
+  width: 220px;
+  flex: 0 0 220px;
+  background: var(--bg-tertiary);
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar-title {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 4px 12px 16px;
+  color: var(--text-primary);
+}
+
+/* The nav items are anchors so a panel can be opened in a new tab or its link
+   copied. The reset keeps them looking like the buttons they replaced. */
+.nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.nav-item:hover { background: var(--bg-secondary); }
+
+.nav-item-active {
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.nav-badge {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 8px;
+}
+
+.nav-item-active .nav-badge { color: #ffffff; border-color: rgba(255, 255, 255, 0.5); }
+
+.content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.placeholder { padding: 32px; color: var(--text-secondary); }
+.placeholder h2 { font-size: 18px; margin-bottom: 8px; color: var(--text-primary); }
+
+/* Chat panel */
+
+/* The chat route as two columns (srd016 R1.1): the tasking side and the
+   ministry form the turn fills. One route, two columns -- the form is what a
+   turn produces, not a destination of its own. */
+.chat-columns {
+  display: grid;
+  grid-template-columns: minmax(380px, 1fr) minmax(320px, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+/* Below the declared width the surface collapses to one scrollable column,
+   the form below the chat and reachable rather than clipped (srd016 R1.4). */
+@media (max-width: 860px) {
+  .chat-columns {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(320px, 60vh) auto;
+    overflow-y: auto;
+    height: auto;
+    max-height: 100%;
+  }
+  .intsum-column {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    overflow-y: visible;
+  }
+  .intsum-empty { margin: 24px auto; }
+}
+
+.intsum-column {
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.intsum-empty {
+  color: var(--text-tertiary);
+  max-width: 320px;
+  margin: 40% auto 0;
+  text-align: center;
+  padding: 0 16px;
+}
+
+/* The ministry form (srd016 R3). The banner spans the top because it marks
+   the document; everything below it is a section with its heading, filled or
+   visibly empty. */
+.intsum-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 20px 24px;
+}
+
+.intsum-banner {
+  position: sticky;
+  top: 0;
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  padding: 0.35rem 0;
+  margin: 0 -20px;
+  background: #7a1f1f;
+  color: #fff;
+}
+
+.intsum-banner-empty {
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-weight: 400;
+  letter-spacing: normal;
+}
+
+/* The structural verdict (srd012 R4.1): a draft is marked as one, a
+   conformant brief states its template version, and neither wording is
+   approval. Sits under the banner because it is a fact about the document. */
+.intsum-conformance {
+  font-size: 0.78rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+}
+
+.intsum-conformance-conformant {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.intsum-conformance-draft {
+  background: #fdf3d7;
+  color: #7a5a00;
+  border: 1px solid #e8cf8a;
+}
+
+.intsum-conformance-draft .intsum-conformance-line { font-weight: 600; }
+
+.intsum-conformance-unchecked {
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+  font-style: italic;
+}
+
+.intsum-conformance-defects {
+  margin: 0.3rem 0 0;
+  padding-left: 1rem;
+}
+
+.intsum-section { font-size: 0.85rem; }
+
+.intsum-heading {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.intsum-section-empty {
+  color: var(--text-tertiary);
+  font-style: italic;
+  font-size: 0.78rem;
+}
+
+.intsum-body { white-space: pre-wrap; line-height: 1.45; }
+
+.intsum-header { display: flex; flex-direction: column; gap: 4px; }
+
+.intsum-header-field { display: flex; gap: 8px; }
+.intsum-header-field dt { min-width: 76px; color: var(--text-secondary); }
+.intsum-header-field dd { flex: 1; }
+
+.intsum-unset { color: var(--text-tertiary); }
+
+.intsum-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.intsum-table th,
+.intsum-table td {
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  padding: 4px 8px 4px 0;
+}
+
+.intsum-table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.intsum-row-ungraded td { color: var(--text-tertiary); }
+
+.intsum-record-id { font-family: var(--font-mono); white-space: nowrap; }
+
+.intsum-assertions {
+  margin: 0;
+  padding-left: 1rem;
+}
+
+.intsum-unmatched {
+  color: var(--text-tertiary);
+  font-size: 0.75rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+
+/* The provenance walk (srd016 R6), living in the form's column. */
+.provenance {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 20px 24px;
+}
+
+.provenance-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.provenance-back {
+  font: inherit;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+.provenance-record { font-family: var(--font-mono); font-size: 0.8rem; }
+
+.provenance-failed { color: #a33; font-size: 0.8rem; }
+
+.provenance-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.provenance-clearance { text-transform: uppercase; letter-spacing: 0.04em; }
+
+.provenance-chunk {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+
+.provenance-document {
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 0.8rem;
+}
+
+.provenance-highlight { background: #ffe9a8; }
+.corpus-chunk-highlight { background: #ffe9a8; }
+
+/* Text a revision changed, tinted when the toggle is on (GH-605). */
+.intsum-revision-new { background: #e3f2e3; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.intsum-changes-toggle {
+  font: inherit; font-size: 11px; margin: 6px 0; padding: 3px 10px;
+  border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 999px;
+  background: transparent; color: var(--text-secondary, #666); cursor: pointer;
+}
+.intsum-changes-toggle-on { background: #e3f2e3; border-color: #8fbf8f; color: #2f6b2f; }
+
+.provenance-link {
+  font: inherit;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.provenance-derived { margin: 0; padding-left: 1rem; font-size: 0.8rem; }
+.provenance-sources { margin-top: 0.6rem; }
+.provenance-sources-heading {
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+.provenance-sources-list { margin: 0; padding-left: 1rem; font-size: 0.78rem; }
+.provenance-source { margin-bottom: 0.25rem; }
+.provenance-source-marker { font-weight: 600; margin-right: 0.35rem; }
+.provenance-source-urls { margin: 0.15rem 0 0; padding-left: 0.9rem; list-style: none; }
+/* The tier obscures the addresses it considers hostile to follow, so they are
+   shown as written and never linked. Wrapping is on because a defanged address
+   carries internal spaces and would otherwise break the column. */
+.provenance-source-url { overflow-wrap: anywhere; opacity: 0.85; }
+.provenance-source-text { opacity: 0.85; }
+
+.provenance-relation { color: var(--text-secondary); }
+
+.provenance-versions { display: flex; flex-direction: column; gap: 6px; }
+
+.provenance-profile {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The facet rows sit with the input for the clearance selector's reason: they
+   apply to the next turn, not to the one on screen. */
+.chat-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+.chat-controls .clearance-select { margin-left: auto; }
+
+.facets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding: 0;
+  font-size: 0.78rem;
+  color: #555;
+}
+
+.facet-keyword {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  width: 10rem;
+}
+
+.facet-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.facet-label { color: #777; }
+
+.facet-chip {
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid #ccc;
+  border-radius: 10px;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+}
+
+.facet-chip-selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.facet-chip:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.empty {
+  color: var(--text-tertiary);
+  max-width: 520px;
+  margin: auto;
+  text-align: center;
+}
+
+.bubble-row { display: flex; }
+.bubble-row-user { justify-content: flex-end; }
+.bubble-row-assistant { justify-content: flex-start; }
+
+.bubble {
+  max-width: 680px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble-user { background: var(--accent); color: #ffffff; }
+.bubble-assistant { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); }
+.bubble-error { background: #fbeaea; color: var(--danger); border: 1px solid var(--danger); }
+.bubble-pending { color: var(--text-tertiary); }
+
+.bubble-meta { margin-top: 8px; }
+
+.sources { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.source-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-secondary);
+}
+
+.citations { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+.citation-chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-secondary);
+}
+
+/* A cited span whose source could not be resolved. Shown rather than hidden so
+   the reader learns why an assertion carries no source, and styled apart from a
+   resolved citation so the two are not read as the same thing. */
+.citation-chip-dropped {
+  border-style: dotted;
+  opacity: 0.7;
+  font-style: italic;
+}
+
+/* An open-source citation from the external search branch (srd011 R7.3). The
+   solid warning-toned border keeps it visibly apart from internal reporting:
+   the one thing this marking exists to prevent is external material reading
+   as cleared internal material (R7.4). */
+.citation-chip-external {
+  border-style: solid;
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+/* The citation index row and badge for an external record on the INTSUM form. */
+.intsum-row-external td { color: var(--warning); }
+
+.intsum-external-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  padding: 0 6px;
+  color: var(--warning);
+}
+
+.degraded {
+  font-size: 12px;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.reason-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.chat-input {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 24px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+/* The box owns the full row; the Send button docks inside it, and the
+   handle lets the analyst pull the box taller (GH-415). */
+.chat-input-box { position: relative; flex: 1; display: flex; }
+
+.chat-input textarea {
+  flex: 1;
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  font: inherit;
+  padding: 10px 88px 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.chat-input textarea:focus { outline: none; border-color: var(--accent); }
+
+.chat-input-box button {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  border: none;
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.chat-input-box button:disabled { background: var(--text-tertiary); cursor: not-allowed; }
+
+/* Observability panel */
+.observability { display: flex; flex-direction: column; height: 100%; }
+
+.turn-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+}
+.turn-bar-empty { color: var(--text-tertiary); }
+.turn-bar-label { font-size: 13px; color: var(--text-secondary); }
+
+.turn-chip {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border-radius: 12px;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.turn-chip-on { background: var(--accent); color: #ffffff; border-color: var(--accent); }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+.event-cmd { color: var(--text-secondary); }
+.event-raw { color: var(--text-secondary); }
+
+/* Trace waterfall (observability v2) */
+.trace-section {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px 16px;
+  background: var(--bg-primary);
+}
+.trace-head { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px; }
+
+.provisioning { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
+.prov-head { display: flex; align-items: center; justify-content: space-between; }
+.prov-hint { color: var(--text-secondary); font-size: 13px; }
+.prov-error {
+  color: var(--danger);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.prov-section {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.prov-section h3 { margin: 0; font-size: 14px; color: var(--text-primary); }
+.prov-rags { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.prov-rag { border: 1px solid var(--border); border-radius: 5px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.prov-rag-head { display: flex; align-items: center; gap: 6px; }
+.prov-rag-name { flex: 1; font-weight: 600; font-family: var(--font-mono); }
+.prov-rag-status { font-size: 11px; color: var(--text-secondary); }
+.prov-rag-remove {
+  border: none;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.prov-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-secondary); }
+.prov-field input {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 7px;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.prov-token { display: flex; gap: 8px; }
+.prov-token input { flex: 1; }
+.prov-btn {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.prov-btn:disabled { opacity: 0.5; cursor: default; }
+.prov-apply { background: var(--accent); border-color: var(--accent); color: #fff; }
+.prov-diff { margin: 0; padding-left: 18px; font-size: 13px; font-family: var(--font-mono); color: var(--text-primary); }
+.prov-rollout { display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: var(--font-mono); }
+
+/* The clearance control sits with the input because it applies to the next
+   turn, not to the one on screen. */
+.clearance-select {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: #555;
+  white-space: nowrap;
+}
+
+.clearance-select select {
+  font: inherit;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+}
+
+/* Reads like the source chips it sits beside, because it is the same kind of
+   fact about the turn: what the server did, reported by the server. */
+.clearance-enforced {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: #555;
+  background: #eef1f4;
+  border-radius: 10px;
+  padding: 0.1rem 0.5rem;
+  margin-top: 0.25rem;
+}
+
+/* The analyst's edit-and-export control (GH-352). */
+.export-panel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e4e8;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.export-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.export-controls button {
+  padding: 4px 12px;
+  border: 1px solid #c9ccd1;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+.export-controls button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.export-submit {
+  font-weight: 600;
+}
+.export-result {
+  font-size: 12px;
+  color: #4a7c59;
+}
+.export-editor {
+  width: 100%;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  border: 1px solid #c9ccd1;
+  border-radius: 4px;
+  padding: 8px;
+  box-sizing: border-box;
+}
+.export-edited-note {
+  font-size: 12px;
+  color: #8a6d1a;
+}
+.export-error {
+  font-size: 12px;
+  color: #a33;
+}
+
+/* A raw-source derivation reference: a provenance fact, not a walkable
+   record (GH-351). */
+.provenance-raw-ref {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #555;
+}
+
+/* The empty-state turn figure (GH-356; command rows GH-467). */
+.turn-figure {
+  margin: 0 auto;
+  max-width: 360px;
+}
+.turn-figure svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.turn-figure figcaption {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #777;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* Reliability floor dropdowns and the withheld-citations report (GH-357). */
+.facet-floor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+  font-size: 12px;
+  color: #555;
+}
+.facet-floor select {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.intsum-floor-dropped {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e0d6b8;
+  background: #fbf7ea;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #6b5d21;
+}
+.intsum-floor-dropped ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.intsum-floor-dropped-count {
+  font-weight: 600;
+}
+
+/* The corpus browser (GH-361). */
+.corpus-panel { max-width: 900px; margin: 0 auto; padding: 16px; }
+.corpus-controls { display: flex; align-items: center; gap: 16px; font-size: 13px; margin-bottom: 12px; }
+.corpus-controls select { font-size: 13px; padding: 2px 4px; }
+.corpus-count { color: #666; font-size: 12px; }
+.corpus-note { color: #777; font-size: 13px; }
+.corpus-error { color: #a33; font-size: 13px; }
+.corpus-list { list-style: none; margin: 0; padding: 0; }
+.corpus-row { border: 1px solid #e2e4e8; border-radius: 4px; margin-bottom: 6px; background: #fff; }
+.corpus-doc-toggle { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; border: none; background: none; padding: 8px 12px; cursor: pointer; }
+.corpus-doc-id { font-family: ui-monospace, monospace; font-size: 13px; color: #1a3d7c; }
+.corpus-doc-meta { font-size: 11.5px; color: #777; }
+.corpus-doc-title { font-size: 12.5px; color: #333; }
+.corpus-detail { border-top: 1px solid #eef0f2; padding: 10px 12px; }
+.corpus-text { white-space: pre-wrap; font-size: 12px; line-height: 1.55; background: #fafbfc; border: 1px solid #eef0f2; border-radius: 4px; padding: 10px; max-height: 320px; overflow-y: auto; }
+.corpus-chunk-unravel { margin-top: 8px; border: 1px solid #c9ccd1; background: #fff; border-radius: 4px; padding: 3px 10px; font-size: 12px; cursor: pointer; color: #2456d6; }
+.corpus-chunks { margin-top: 8px; }
+.corpus-profile-label { font-size: 12px; font-weight: 600; color: #555; margin-top: 6px; }
+.corpus-chunks ul { list-style: none; margin: 4px 0; padding-left: 10px; }
+.corpus-chunk-toggle { border: none; background: none; padding: 2px 0; cursor: pointer; font-family: ui-monospace, monospace; font-size: 12px; color: #2456d6; text-align: left; }
+.corpus-chunk-text { max-height: 200px; }
+
+/* Source-type facet checkboxes (GH-379). */
+.facet-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 10px;
+  font-size: 12px;
+  color: #444;
+  cursor: pointer;
+}
+.facet-check input { cursor: pointer; }
+.facet-check input:disabled { cursor: not-allowed; }
+.facet-check input:disabled + span { opacity: 0.6; }
+
+/* The live turn activity feed (GH-380). */
+.bubble-pending .pending-dots { display: block; }
+.turn-activity {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 11.5px;
+  color: #667;
+  line-height: 1.6;
+}
+.turn-activity .activity-time { color: #99a; font-family: ui-monospace, monospace; font-size: 10.5px; }
+
+/* Inline citation marks in the brief prose (GH-382). */
+.intsum-cited {
+  background: transparent;
+  color: inherit;
+  border-bottom: 1.5px solid #9bb4de;
+}
+.intsum-cited-walkable { cursor: pointer; }
+.intsum-cited-walkable:hover { background: rgba(155, 180, 222, 0.18); }
+/* Cited spans tinted by their sources' classification (GH-722): the banner
+   convention's colors at reading strength — restricted green, confidential
+   blue, secret red. Unclassified spans keep the plain underline above. */
+.intsum-cited-restricted { background: rgba(52, 140, 60, 0.14); border-bottom-color: #5ba364; }
+.intsum-cited-confidential { background: rgba(37, 99, 235, 0.13); border-bottom-color: #6d94e0; }
+.intsum-cited-secret { background: rgba(220, 38, 38, 0.12); border-bottom-color: #d98a8a; }
+.intsum-cited-restricted.intsum-cited-walkable:hover { background: rgba(52, 140, 60, 0.26); }
+.intsum-cited-confidential.intsum-cited-walkable:hover { background: rgba(37, 99, 235, 0.24); }
+.intsum-cited-secret.intsum-cited-walkable:hover { background: rgba(220, 38, 38, 0.22); }
+
+/* The tint legend under the banner, shown only when a classified source
+   composed (GH-722). */
+.intsum-marking-legend {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0 2px;
+}
+.intsum-marking-legend::before {
+  content: "source markings:";
+  font-size: 11px;
+  color: #8a8f98;
+}
+.intsum-marking-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+.intsum-marking-chip-restricted { background: rgba(52, 140, 60, 0.14); border-color: #5ba364; color: #2c6b34; }
+.intsum-marking-chip-confidential { background: rgba(37, 99, 235, 0.13); border-color: #6d94e0; color: #234f9c; }
+.intsum-marking-chip-secret { background: rgba(220, 38, 38, 0.12); border-color: #d98a8a; color: #9c2323; }
+.intsum-cited-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #8a8f98;
+}
+
+/* Cited-versus-composed markers in the evaluation table (GH-381). */
+.intsum-row-uncited td { color: #9aa0a8; }
+.intsum-used { font-size: 11px; }
+
+/* An external surface beside the panels: same row treatment, marked as
+   leaving the page. */
+.nav-item-external { opacity: 0.85; }
+.nav-external-mark { margin-left: 0.35rem; font-size: 0.75em; opacity: 0.7; }
+
+.walk { flex: 1 1 280px; min-width: 260px; }
+
+/* Slash-command palette and /search results (GH-449). */
+.command-palette { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.4rem; }
+.command-chip { font: inherit; font-size: 0.72rem; padding: 0.15rem 0.55rem; border: 1px solid rgba(127,127,127,0.4); border-radius: 999px; background: transparent; cursor: pointer; display: inline-flex; align-items: center; gap: 0.4rem; }
+.command-chip:hover { border-color: var(--accent, #4078c0); }
+.command-models { font-size: 0.62rem; opacity: 0.65; }
+.search-results { margin: 0.4rem 0 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.search-result-head { display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.7rem; font-family: monospace; opacity: 0.8; }
+.search-result-clearance, .search-result-reliability { border: 1px solid rgba(127,127,127,0.4); border-radius: 4px; padding: 0 4px; }
+.search-result-text { font-size: 0.8rem; margin-top: 0.15rem; }
+.search-results-empty { font-size: 0.78rem; font-style: italic; opacity: 0.7; margin-top: 0.3rem; }
+
+/* The previous-chats list under the Chat nav item (GH-509). */
+.chat-history { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 6px 14px; }
+.chat-history-new,
+.chat-history-item { font: inherit; font-size: 0.72rem; text-align: left; padding: 3px 8px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary, #666); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.chat-history-new { color: var(--accent, #4078c0); }
+.chat-history-item:hover,
+.chat-history-new:hover { background: rgba(127, 127, 127, 0.12); }
+.chat-history-row { display: flex; align-items: center; min-width: 0; }
+.chat-history-row .chat-history-item { flex: 1 1 auto; min-width: 0; }
+.chat-history-delete { flex: 0 0 auto; font: inherit; font-size: 0.72rem; line-height: 1; padding: 3px 6px; border: none; border-radius: 4px; background: transparent; color: var(--text-secondary, #666); cursor: pointer; opacity: 0; }
+.chat-history-row:hover .chat-history-delete,
+.chat-history-delete:focus-visible { opacity: 1; }
+.chat-history-delete:hover { background: rgba(127, 127, 127, 0.12); color: #c0504d; }
+
+/* Chat-scoped trace overlay (GH-513). */
+.bubble-trace { font: inherit; font-size: 0.66rem; margin-top: 4px; padding: 1px 8px; border: 1px solid var(--border, #d8dbe0); border-radius: 999px; background: transparent; color: var(--accent, #4078c0); cursor: pointer; }
+.bubble-trace:hover { border-color: var(--accent, #4078c0); }
+
+/* The report language selector (GH-670). */
+.report-language { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 0.74rem; }
+.report-language select { font: inherit; }
+.translate-note { color: var(--text-secondary, #667); font-style: italic; }
+
+/* The aside's Report/Audit tabs (GH-660). */
+.aside-tabs { display: flex; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid var(--border, #e3e5e8); }
+.aside-tab { font: inherit; font-size: 0.78rem; padding: 4px 14px; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; background: none; color: var(--text-secondary, #667); cursor: pointer; }
+.aside-tab:hover { color: var(--text-primary, #223); }
+.aside-tab-active { border-color: var(--border, #e3e5e8); background: var(--bg-secondary, #f4f5f7); color: var(--text-primary, #223); font-weight: 600; }
+.audit-empty { display: flex; flex-direction: column; gap: 8px; }
+.audit-run { font: inherit; font-size: 0.78rem; align-self: flex-start; padding: 4px 14px; border: 1px solid var(--accent, #4078c0); color: var(--accent, #4078c0); background: none; border-radius: 6px; cursor: pointer; }
+.audit-run:hover:enabled { background: var(--accent, #4078c0); color: #fff; }
+.audit-run:disabled { opacity: 0.5; cursor: default; }
+
+/* The audit report table (GH-650). */
+.audit-panel h3 { margin: 14px 0 4px; }
+.audit-summary { font-size: 0.72rem; color: var(--text-secondary, #667); margin-bottom: 6px; }
+.audit-table .audit-sentence { max-width: 260px; }
+.audit-table .audit-reason { max-width: 240px; font-size: 0.72rem; }
+.audit-table .audit-score { text-align: center; font-weight: 600; }
+.audit-table .audit-sources .provenance-link { display: block; }
+.audit-row-weak { background: rgba(224, 92, 0, 0.08); }
+.audit-row-unverifiable { opacity: 0.75; font-style: italic; }
+
+.turn-chip-active { outline: 2px solid var(--accent, #4078c0); }
+.seq-category { flex: none; min-width: 70px; text-align: center; color: #fff; border-radius: 3px; font-size: 0.62rem; padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+
+/* Inline Admiralty grade after a cited span (GH-535). */
+.citation-grade { font-size: 0.62rem; color: #7a8699; margin-left: 1px; letter-spacing: 0.02em; }

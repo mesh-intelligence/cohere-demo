@@ -1,0 +1,189 @@
+{{/* Copyright (c) 2026 Mesh Intelligence Inc. */}}
+{{/* SPDX-License-Identifier: MIT-0 */}}
+{{- if .Values.observer.enabled }}
+{{- $fullname := include "chatbot-mesh.fullname" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    mesh.cohere-demo/role: "Polls every agent's monitor and the cluster inventory, and serves this fleet view."
+  name: {{ $fullname }}-observer
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-observer
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+rules:
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-observer
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-observer
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-observer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-observer
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "chatbot-mesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: observer
+  template:
+    metadata:
+      labels:
+        {{- include "chatbot-mesh.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: observer
+        # The observer's monitor fan-in reads this pod's monitor port from a
+        # label, because a pod's container ports live in an array the
+        # command-state selector grammar cannot address (srd008 R2.1, GH-1319).
+        # The key carries no dot so the dotted selector can reach it. The
+        # observer discovers itself, so it carries the label too.
+        monitorPort: {{ .Values.observer.ports.monitor | quote }}
+    spec:
+      {{- with include "chatbot-mesh.imagePullSecrets" $ }}{{ . | nindent 6 }}{{ end }}
+      serviceAccountName: {{ $fullname }}-observer
+      containers:
+        - name: observer
+          image: {{ include "chatbot-mesh.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--profile"
+            - "{{ .Values.profiles.mountPath }}/applications/chatbot-mesh/observer/profile.yaml"
+            - "--directory"
+            - "{{ .Values.profiles.workMountPath }}"
+            {{- with include "chatbot-mesh.otlpEndpoint" . }}
+            - "--otel-otlp-endpoint"
+            - {{ . | quote }}
+            - "--otel-service-name"
+            - "observer"
+            {{- end }}
+            {{- with include "chatbot-mesh.otlpMetricEndpoint" . }}
+            - "--otel-metric-otlp-endpoint"
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            {{- with include "chatbot-mesh.integrationResourceAttributes" . }}
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: {{ . | quote }}}
+            {{- end }}
+            - {name: OBSERVER_BIND_HOST, value: "0.0.0.0"}
+            - {name: OBSERVER_NAMESPACE, value: {{ .Release.Namespace | quote }}}
+            - {name: OBSERVER_LABEL_SELECTOR, value: {{ printf "app.kubernetes.io/instance=%s" .Release.Name | quote }}}
+            - {name: OBSERVER_POLL_INTERVAL, value: {{ .Values.observer.pollInterval | quote }}}
+            # The kube_api client targets the loopback kubectl-proxy sidecar with
+            # auth_ref none; the sidecar adds the service-account bearer token
+            # (GH-1302).
+            - {name: KUBE_API_URL, value: "http://127.0.0.1:{{ .Values.observer.proxy.port }}"}
+            # The topology's trace source (GH-359): the collector's query
+            # service, reached through the observer's same-origin GET proxy.
+            - {name: OBSERVER_COLLECTOR_QUERY, value: "http://{{ include "chatbot-mesh.fullname" . }}-collector:18193"}
+            - {name: OBSERVER_CHATBOT_MONITOR, value: "http://{{ include "chatbot-mesh.fullname" . }}-chatbot:18082"}
+            - {name: OBSERVER_RAG0_MONITOR, value: "http://{{ include "chatbot-mesh.fullname" . }}-rag0:18087"}
+            - {name: OBSERVER_EXPORTER_MONITOR, value: "http://{{ include "chatbot-mesh.fullname" . }}-exporter:18122"}
+            - {name: OBSERVER_SELF_MONITOR, value: "http://127.0.0.1:18202"}
+            - {name: OBSERVER_COLLECTOR_MONITOR, value: "http://{{ include "chatbot-mesh.fullname" . }}-collector:18192"}
+          ports:
+            - {name: control, containerPort: {{ .Values.observer.ports.control }}}
+            - {name: monitor, containerPort: {{ .Values.observer.ports.monitor }}}
+          readinessProbe:
+            httpGet: {path: /api/lifecycle/health, port: control}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.observer.resources | nindent 12 }}
+          volumeMounts:
+            - {name: profiles, mountPath: {{ .Values.profiles.mountPath }}, readOnly: true}
+            - {name: work, mountPath: {{ .Values.profiles.workMountPath }}}
+        # kubectl-proxy sidecar: holds the pod's service-account token and serves
+        # an unauthenticated read-only proxy on loopback. It rejects write verbs
+        # and needs no RBAC beyond the observer's existing get/list Role, so bearer
+        # auth never enters the declarative runtime (GH-1302).
+        - name: kube-proxy
+          image: {{ printf "%s:%s" .Values.observer.proxy.image.repository .Values.observer.proxy.image.tag | quote }}
+          imagePullPolicy: {{ .Values.observer.proxy.image.pullPolicy }}
+          command: ["kubectl"]
+          args:
+            - "proxy"
+            - "--port={{ .Values.observer.proxy.port }}"
+            - "--address=127.0.0.1"
+            - "--reject-methods=POST,PUT,PATCH,DELETE"
+          resources:
+            {{- toYaml .Values.observer.proxy.resources | nindent 12 }}
+      volumes:
+        {{- include "chatbot-mesh.profilesVolume" (dict "root" $ "groups" (list "applications")) | nindent 8 }}
+        - name: work
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-observer
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+spec:
+  selector:
+    {{- include "chatbot-mesh.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+  ports:
+    - {name: control, port: {{ .Values.observer.ports.control }}, targetPort: control}
+    - {name: monitor, port: {{ .Values.observer.ports.monitor }}, targetPort: monitor}
+{{- if and .Values.ingress.enabled .Values.ingress.expose.observer }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-observer
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: observer
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.observerHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-observer
+                port: {name: monitor}
+{{- end }}
+{{- end }}

@@ -1,0 +1,127 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: cohere-rerank-applied-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - declarations-types.yaml
+tools:
+  - name: drive_chat_turn
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Post one tasking to the chatbot the rig started and map its answer.
+    problem: The Cohere composition tier must be proven against controlled dependencies rather than the live provider.
+    goals:
+      - Post a tasking to the chatbot at the address the rig published.
+      - Map the answer so the assertion can compare it.
+    requirements:
+      input:
+        - Tool config fixes the operation; the tasking is literal fixture data.
+      output:
+        - Output reports the answer field of the turn response.
+      errors:
+        - Unreachable or unmapped responses emit CommandError.
+    non_goals:
+      - Does not start or stop the chatbot; the rig owns that.
+      - Does not inspect which word answered; the assertion does that by comparison.
+    output:
+      description: The chatbot's turn response.
+    side_effects:
+      - kind: external_api
+        target: chatbot.chat
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A chat turn against mocks changes nothing durable.
+    errors:
+      - signal: CommandError
+        condition: The chatbot is unreachable or returns an unmapped status.
+        state_after_failure: No state changes.
+    config:
+      rest_ref: subject
+      operation: chat_turn
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SubjectAnswered, message: builtin.Message<cohere-rerank-applied-declarations-types.DriveChatTurnOutput>}
+        - {signal: SubjectBroke, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_rerank_report
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the rerank outcome and whether the turn answered into one comparable line.
+    problem: |
+      A degraded turn and a reranked one both return 200 with a composed brief
+      over the same chunks, so the answer cannot show which ordering reached
+      Command. Comparing the outcome together with the answer means a turn
+      cannot pass by reporting the right status while failing to answer.
+    goals:
+      - Render the reported outcome and the answer presence in a fixed shape.
+    requirements:
+      input:
+        - The driven turn's mapped fields are selected from command state.
+      output:
+        - Output is the composed report line.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not judge the outcome; the comparison does that.
+    output: {description: Composed rerank report line.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Composition changes no external state.}
+    config:
+      signal: ReportComposed
+      inputs:
+        rerank: $from(drive_chat_turn).body.mapped.rerank
+      template: |-
+        rerank=[{{ rerank }}]
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReportComposed, message: builtin.Message<builtin.Text>}
+  - name: assert_rerank_report
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Require the turn to report the reranked ordering as the one that composed.
+    problem: |
+      srd009 R5.4 requires the response to say which ordering composed, because
+      nothing else does. A turn reporting the wrong outcome answers exactly like
+      one reporting the right one.
+    goals:
+      - Compare the composed report against the outcome this scenario scripts.
+    requirements:
+      input:
+        - The composed report is selected from command state.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not inspect the document ordering itself.
+    output: {description: Rerank report comparison outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $from(compose_rerank_report).$
+      op: eq
+      right: "rerank=[applied]"
+      operand_type: string
+      satisfied: ReportMatched
+      unsatisfied: ReportMismatched
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReportMatched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: ReportMismatched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

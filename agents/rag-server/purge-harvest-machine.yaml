@@ -1,0 +1,38 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chroma-purge-harvest-request
+purpose: |-
+  GH-648: the scratch purge. The where filter is this agent's own floor
+  marker (corpus web-harvest), so seeded rows can never match and the caller
+  supplies no scope.
+initial_state: AwaitingRequest
+budget:
+  command_timeout: 30s
+  max_iterations: 8
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted purge endpoint.}
+  - {name: ResolvingCollection, meaning: The corpus collection is being resolved (get or create) for its id.}
+  - {name: PurgingRecords, meaning: One Chroma delete is dropping every web-harvest row.}
+  - {name: ComposingResponse, meaning: The purge receipt is being wrapped for the HTTP reply.}
+  - {name: PurgeServed, meaning: Terminal. The receipt is ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. A boundary word failed; the store keeps what it holds., run_status: failed}
+terminal_states:
+  - PurgeServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The purge endpoint starts a request-scoped run.}
+  - {name: CollectionReady, trigger: The collection resolved to an id.}
+  - {name: RecordsPurged, trigger: The delete completed.}
+  - {name: PurgeResponseComposed, trigger: The receipt was composed.}
+  - {name: CommandError, trigger: A boundary word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: ResolvingCollection, action: rag_resolve_ingest}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  - {state: ResolvingCollection, signal: CollectionReady, next: PurgingRecords, action: rag_purge_records}
+  - {state: ResolvingCollection, signal: CommandError, next: Failed}
+  - {state: PurgingRecords, signal: RecordsPurged, next: ComposingResponse, action: compose_purge_response, label: purge_response}
+  - {state: PurgingRecords, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: PurgeResponseComposed, next: PurgeServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

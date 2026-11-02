@@ -1,0 +1,468 @@
+// Copyright (c) 2026 Mesh Intelligence Inc.
+// SPDX-License-Identifier: MIT-0
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// The two RAG mocks answer with the same vector shape and differ only in the
+// embedding model they report. rag0's identity does not match the query's, so
+// srd002 R3.3 excludes it; rag1's matches, so it must survive in the same turn.
+const (
+	// The query identity is the Cohere embedding family, because the turn now
+	// embeds there. The foreign identity stays an Ollama model: what the proof
+	// needs is two identities that differ, and keeping the excluded one
+	// recognisably from another provider makes a failure read at a glance.
+	exclusionQueryModel    = "embed-v4.0"
+	exclusionForeignModel  = "nomic-embed-text:v1.5"
+	exclusionExcludedChunk = "rag0 chunk from a foreign embedding space"
+	exclusionKeptChunk     = "rag1 chunk from the query embedding space"
+)
+
+// The shipped ports, and the offset that moves the whole set aside so the proof
+// does not contend with a real Ollama or a running mesh. Every one of these
+// appears in both a client base_url and a network limit, so one replacement
+// keeps the declared authority self-consistent.
+const (
+	portEmbedding = "11434"
+	portRag0      = "18085"
+	portRag1      = "18095"
+	portChat      = "18080"
+	portControl   = "18081"
+	portMonitor   = "18082"
+	// The Cohere mock is not in the shipped profile: the hand-written clients'
+	// authority is the COHERE_BASE_URL/HOST/SCHEME/PORT pair, which the proof
+	// sets together so the allowlist moves with the endpoint (srd009 R1.2,
+	// R1.4), and the library calls' is their allow arguments, which the copy
+	// pins (srd058 R1.6). 18120 is the port the cohere-command scenario already
+	// uses, shifted like the rest.
+	portCohereMock     = "18120"
+	exclusionPortShift = 20000
+)
+
+// exclusionPort shifts a shipped port for this proof's isolated run.
+func exclusionPort(shipped string) string {
+	n, err := strconv.Atoi(shipped)
+	if err != nil {
+		return shipped
+	}
+	return strconv.Itoa(n + exclusionPortShift)
+}
+
+func exclusionAddr(shipped string) string { return "127.0.0.1:" + exclusionPort(shipped) }
+
+func exclusionURL(shipped string) string { return "http://" + exclusionAddr(shipped) }
+
+// generateShiftedChatbotProfile copies the chatbot profile with every shipped
+// port shifted, so the client base_urls and the network limits that pin them
+// move together, and points the provider library calls (the query embedding, the rerank, and
+// the harvest's document embedding) at the Cohere mock.
+func generateShiftedChatbotProfile(applicationRoot, work string) (string, error) {
+	pairs := []string{}
+	for _, p := range []string{portEmbedding, portRag0, portRag1, portChat, portControl, portMonitor} {
+		pairs = append(pairs, p, exclusionPort(p))
+	}
+	dstDir := filepath.Join(work, "chatbot-shifted")
+	profile, err := copyChatbotProfile(applicationRoot, dstDir, strings.NewReplacer(pairs...).Replace)
+	if err != nil {
+		return "", err
+	}
+	if err := pinChatbotProviderEndpoint(dstDir, exclusionURL(portCohereMock)); err != nil {
+		return "", err
+	}
+	return profile, nil
+}
+
+// EmbeddingExclusion proves the exclusion the mapped-400 path cannot catch: two
+// RAG sources answer 200 with the same vector shape, and only their reported
+// embedding-model identities differ (srd002 R3.3, GH-767).
+//
+// The proof reads the composed prompt out of the LLM mock's request log rather
+// than the chat answer. The answer is canned fixture text, so it is the same
+// whichever chunks were composed; the prompt is the only place the exclusion is
+// observable. Asserting the excluded chunk is absent AND the kept chunk is
+// present is what distinguishes a real exclusion from a turn that simply lost
+// both sources.
+func (Integration) EmbeddingExclusion() error {
+	applicationRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	coreRoot := demoCoreRoot(applicationRoot)
+	if !agentCoreAvailable(coreRoot) {
+		fmt.Printf("SKIP integration:embeddingExclusion: agent-core checkout not found at %s\n", coreRoot)
+		return nil
+	}
+	catalogRoot, err := resolveCatalogRoot("chatbot-mesh embedding exclusion", applicationRoot)
+	if err != nil {
+		return err
+	}
+	mockProfile := filepath.Join(catalogRoot, "agents", "mock", "profile.yaml")
+	if _, statErr := os.Stat(mockProfile); statErr != nil {
+		fmt.Printf("SKIP integration:embeddingExclusion: mock profile not found at %s\n", mockProfile)
+		return nil
+	}
+	binary, cleanupAgent, err := buildAgent(coreRoot)
+	if err != nil {
+		return err
+	}
+	defer cleanupAgent()
+
+	work, err := os.MkdirTemp("", "embedding-exclusion")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(work) }()
+
+	// The chatbot's declared ports are a transport-authority boundary, pinned in
+	// both the client base_urls and the network limits (srd002 R6.1), so the
+	// mocks cannot simply be moved aside. A port-shifted profile copy keeps that
+	// boundary intact while freeing the proof from whatever already holds the
+	// shipped ports -- a developer's real Ollama on 11434, most often. Same
+	// device as the rag1 variant this application already generates.
+	chatbotProfile, err := generateShiftedChatbotProfile(applicationRoot, work)
+	if err != nil {
+		return err
+	}
+
+	stops, err := startExclusionMocks(binary, coreRoot, mockProfile, work)
+	defer func() { stopAll(stops) }()
+	if err != nil {
+		return err
+	}
+
+	stopChatbot, err := startDetachedAgentWithEnv(agentLaunch{
+		Binary: binary, ProfilesRoot: applicationRoot, CoreRoot: coreRoot,
+		Profile:   chatbotProfile,
+		TracePath: filepath.Join(work, "chatbot.otel.json"),
+		Workdir:   work,
+		// The endpoint and the allowlist move together, which is what lets the
+		// proof stand a mock where the declared client points. COHERE_EMBED_MODEL
+		// is read by both the embed request body and declare_query_model, so the
+		// identity the turn compares against is the identity it asked for.
+		Env: []string{
+			"COHERE_EMBED_MODEL=" + exclusionQueryModel,
+			"COHERE_BASE_URL=" + exclusionURL(portCohereMock),
+			"COHERE_HOST=127.0.0.1",
+			"COHERE_SCHEME=http",
+			"COHERE_PORT=" + exclusionPort(portCohereMock),
+			// The mock does not verify the bearer. A literal proves the credential
+			// resolves by reference through the declared token_ref; the live target
+			// proves it against the real provider.
+			cohereCredentialEnv + "=exclusion-not-a-real-key",
+		},
+		GracefulWait: 15 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("start chatbot: %w", err)
+	}
+	stops = append(stops, stopChatbot)
+
+	if err := waitHTTPStatus(exclusionURL(portControl)+"/api/lifecycle/health", 200, 30*time.Second); err != nil {
+		return fmt.Errorf("chatbot never became healthy: %w", err)
+	}
+
+	// The turn must still answer: an excluded source degrades the grounding, it
+	// does not fail the turn (srd002 R3.2).
+	resp, status, err := postExclusionChatTurn("what does the corpus say about the rig?")
+	if err != nil {
+		return fmt.Errorf("chat turn: %w", err)
+	}
+	if status != 200 {
+		events, _, _ := requestInference("GET", exclusionURL(portMonitor)+"/monitor/events", "", "read failed turn events")
+		return fmt.Errorf("chat turn status = %d, want 200: error=%q message=%q; events=%s; an excluded source must degrade rather than fail the turn",
+			status, resp.Error, resp.Message, events)
+	}
+	if strings.TrimSpace(resp.Answer) == "" {
+		return fmt.Errorf("chat turn returned an empty answer")
+	}
+
+	if err := assertExclusionMetadata(resp); err != nil {
+		return err
+	}
+
+	prompt, err := composedPromptFromMockLog(exclusionURL(portCohereMock) + "/_mock/log")
+	if err != nil {
+		return err
+	}
+	if strings.Contains(prompt, exclusionExcludedChunk) {
+		return fmt.Errorf("the composed prompt carries the chunk from the mismatched source (%q reported %q against a %q query); srd002 R3.3 excludes it:\n%s",
+			exclusionExcludedChunk, exclusionForeignModel, exclusionQueryModel, prompt)
+	}
+	if !strings.Contains(prompt, exclusionKeptChunk) {
+		return fmt.Errorf("the composed prompt lost the chunk from the matching source; the exclusion must drop only the mismatched one:\n%s", prompt)
+	}
+
+	fmt.Printf("integration:embeddingExclusion passed: %q excluded (reported %s), %q composed (reported %s); metadata reports both outcomes\n",
+		exclusionExcludedChunk, exclusionForeignModel, exclusionKeptChunk, exclusionQueryModel)
+	return nil
+}
+
+// startExclusionMocks stands the three dependencies the chatbot's declared
+// clients reach at their fixed addresses: the embedding and chat provider, and
+// the two RAG servers.
+func startExclusionMocks(binary, coreRoot, mockProfile, work string) ([]func(bool) error, error) {
+	var stops []func(bool) error
+	for _, m := range []struct {
+		name    string
+		address string
+		fixture string
+	}{
+		{name: "llm", address: exclusionAddr(portEmbedding), fixture: exclusionLLMFixture},
+		{name: "cohere", address: exclusionAddr(portCohereMock), fixture: exclusionCohereFixture},
+		{name: "rag0", address: exclusionAddr(portRag0), fixture: fmt.Sprintf(exclusionRagFixture, "rag0-doc-1", exclusionExcludedChunk, exclusionForeignModel)},
+		{name: "rag1", address: exclusionAddr(portRag1), fixture: fmt.Sprintf(exclusionRagFixture, "rag1-doc-1", exclusionKeptChunk, exclusionQueryModel)},
+	} {
+		path := filepath.Join(work, m.name+".yaml")
+		if err := os.WriteFile(path, []byte(m.fixture), 0o644); err != nil {
+			return stops, err
+		}
+		stop, err := startDetachedAgentWithEnv(agentLaunch{
+			Binary: binary, ProfilesRoot: filepath.Dir(mockProfile), CoreRoot: coreRoot,
+			Profile:      mockProfile,
+			TracePath:    filepath.Join(work, m.name+".otel.json"),
+			Workdir:      work,
+			Env:          []string{"MOCK_ADDRESS=" + m.address, "MOCK_FIXTURES=" + path},
+			GracefulWait: 10 * time.Second,
+		})
+		if err != nil {
+			return stops, fmt.Errorf("start %s mock: %w", m.name, err)
+		}
+		stops = append(stops, stop)
+		if err := waitHTTPStatus("http://"+m.address+"/_mock/health", 200, 30*time.Second); err != nil {
+			return stops, fmt.Errorf("%s mock never became healthy: %w", m.name, err)
+		}
+	}
+	return stops, nil
+}
+
+// exclusionResponse is the chat response with its grounding metadata
+// (srd002 R3.2, R3.3).
+type exclusionResponse struct {
+	Answer   string `json:"answer"`
+	Error    string `json:"error"`
+	Message  string `json:"message"`
+	Metadata struct {
+		QueryEmbeddingModel string `json:"query_embedding_model"`
+		Sources             struct {
+			NotSelected            []string              `json:"not_selected"`
+			Composed               []joinedSourceOutcome `json:"composed"`
+			EmbeddingModelExcluded []joinedSourceOutcome `json:"embedding_model_excluded"`
+			QueryFailed            []joinedSourceOutcome `json:"query_failed"`
+		} `json:"sources"`
+	} `json:"metadata"`
+}
+
+// joinedSourceOutcome is one entry of a response source list, in the flat shape
+// the chatbot renders: every list names the source, composed and query_failed
+// carry its signal, and embedding_model_excluded carries the identity the
+// source reported, which is the evidence for the exclusion.
+type joinedSourceOutcome struct {
+	Name           string `json:"name"`
+	Signal         string `json:"signal"`
+	EmbeddingModel string `json:"embedding_model"`
+}
+
+// postExclusionChatTurn posts one turn to the port-shifted chatbot. It does not
+// reuse postChatTurn, which addresses the shipped chat port and reads only the
+// answer.
+func postExclusionChatTurn(message string) (exclusionResponse, int, error) {
+	body, err := json.Marshal(map[string]string{"message": message})
+	if err != nil {
+		return exclusionResponse{}, 0, err
+	}
+	data, status, err := requestInference("POST", exclusionURL(portChat)+"/api/v1/chat", string(body), "chat turn")
+	if err != nil {
+		return exclusionResponse{}, status, err
+	}
+	var resp exclusionResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return exclusionResponse{}, status, fmt.Errorf("decode chat response: %w: %s", err, data)
+	}
+	return resp, status, nil
+}
+
+// assertExclusionMetadata proves the response reports why each source did or did
+// not ground the answer (srd002 R3.2, R3.3). A reader must be able to tell an
+// embedding-model exclusion from a rejected vector and from a failed query
+// without inferring it from a thinner answer.
+func assertExclusionMetadata(resp exclusionResponse) error {
+	sources := resp.Metadata.Sources
+	total := len(sources.NotSelected) + len(sources.Composed) + len(sources.EmbeddingModelExcluded) + len(sources.QueryFailed)
+	if total != 2 {
+		return fmt.Errorf("response metadata reports %d sources, want 2: every declared source is reported once", total)
+	}
+	if resp.Metadata.QueryEmbeddingModel != exclusionQueryModel {
+		return fmt.Errorf("metadata query_embedding_model = %q, want %q", resp.Metadata.QueryEmbeddingModel, exclusionQueryModel)
+	}
+	if len(sources.NotSelected) != 0 {
+		return fmt.Errorf("not_selected = %+v, want empty; both declared sources were selected and queried", sources.NotSelected)
+	}
+	if len(sources.EmbeddingModelExcluded) != 1 {
+		return fmt.Errorf("embedding_model_excluded has %d entries, want 1", len(sources.EmbeddingModelExcluded))
+	}
+	rag0 := sources.EmbeddingModelExcluded[0]
+	if rag0.Name != "rag0" {
+		return fmt.Errorf("embedding-model exclusion names %q, want rag0", rag0.Name)
+	}
+	if rag0.EmbeddingModel != exclusionForeignModel {
+		return fmt.Errorf("rag0 reported embedding model = %q, want %q", rag0.EmbeddingModel, exclusionForeignModel)
+	}
+	if len(sources.Composed) != 1 || sources.Composed[0].Name != "rag1" {
+		return fmt.Errorf("composed sources = %+v, want only rag1", sources.Composed)
+	}
+	if len(sources.QueryFailed) != 0 {
+		return fmt.Errorf("query_failed = %+v, want empty; model mismatch must not be reported as vector rejection or degradation", sources.QueryFailed)
+	}
+	return nil
+}
+
+func stopAll(stops []func(bool) error) {
+	for i := len(stops) - 1; i >= 0; i-- {
+		_ = stops[i](true)
+	}
+}
+
+// composedPromptFromMockLog returns the body of the last POST /v2/chat the
+// subject sent carrying documents. On the Cohere machine Command composes every
+// grounded turn (declare_cohere_tier_choice), and its request carries the
+// retrieved chunks as documents; the source-selection classifier posts to the
+// same route with no documents, so the documents are what mark the answer call.
+func composedPromptFromMockLog(logURL string) (string, error) {
+	data, status, err := requestHTTP("GET", logURL, "")
+	if err != nil {
+		return "", fmt.Errorf("read mock log: %w", err)
+	}
+	if status != 200 {
+		return "", fmt.Errorf("mock log status = %d, want 200: %s", status, data)
+	}
+	var log struct {
+		Requests []struct {
+			Method string `json:"method"`
+			Path   string `json:"path"`
+			Body   string `json:"body"`
+		} `json:"requests"`
+	}
+	if err := json.Unmarshal(data, &log); err != nil {
+		return "", fmt.Errorf("decode mock log: %w", err)
+	}
+	prompt := ""
+	for _, entry := range log.Requests {
+		if entry.Method == "POST" && entry.Path == "/v2/chat" && strings.Contains(entry.Body, `"documents"`) {
+			prompt = entry.Body
+		}
+	}
+	if prompt == "" {
+		return "", fmt.Errorf("the Cohere mock recorded no POST /v2/chat carrying documents; the turn never reached the compose step")
+	}
+	return prompt, nil
+}
+
+const exclusionLLMFixture = `# Embedding and chat provider for the exclusion proof. The embedding response
+# carries only the vector, which is why the query's model identity comes from
+# declare_query_model rather than from this response.
+routes:
+  - method: GET
+    path: /api/tags
+    responses:
+      - status: 200
+        body:
+          models:
+            - name: "qwen2.5:3b"
+            - name: "ornith:9b"
+
+  - method: POST
+    path: /api/embeddings
+    responses:
+      - status: 200
+        body:
+          embedding: [0.11, 0.22, 0.33, 0.44]
+
+  - method: POST
+    path: /api/chat
+    responses:
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: '{"names":["rag0","rag1"]}'
+          eval_count: 4
+          prompt_eval_count: 12
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: '{"tool":"invoke_llm_fast"}'
+          eval_count: 4
+          prompt_eval_count: 12
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: "The corpus describes the scenario critic rig and its mocks."
+          eval_count: 11
+          prompt_eval_count: 42
+`
+
+// exclusionRagFixture answers a query with one chunk and a reported embedding
+// model. Both instances return the same vector shape, so nothing but the
+// reported identity distinguishes them: a 400 would prove nothing here. The
+// chunk carries the metadata row a real chunk does (fixtureChunkMetadata):
+// flatten_chunks zips ids, documents, and metadatas, and the document render
+// reads the clearance, rank, and reliability fields from each row.
+const exclusionRagFixture = `routes:
+  - method: POST
+    path: /api/v1/rag/query
+    responses:
+      - status: 200
+        body:
+          ids: [["%s"]]
+          documents: [["%s"]]
+          metadatas: [[{clearance: unclassified, clearance_rank: 0, admiralty_source_reliability: F, admiralty_information_credibility: "6"}]]
+          distances: [[0.1]]
+          embedding_model: "%s"
+`
+
+// exclusionCohereFixture answers the query embedding and the composition. The
+// vector is short and fixed: this proof is about the identity comparison, not
+// about retrieval, and the RAG mocks return canned chunks regardless of what is
+// queried. The chat route answers Command's compose, which the turn reaches once
+// the compatible source's chunks render; without it the turn ends on a 404 the
+// proof has nothing to say about.
+const exclusionCohereFixture = `# Cohere embeddings for the exclusion proof. The response carries the vector and
+# no model echo, which is why the query's identity comes from
+# declare_query_model rather than from this response.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: exclusion-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: exclusion-chat-1
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "The corpus describes the scenario critic rig and its mocks."
+          usage:
+            billed_units: {input_tokens: 42, output_tokens: 11}
+            tokens: {input_tokens: 42, output_tokens: 11}
+`

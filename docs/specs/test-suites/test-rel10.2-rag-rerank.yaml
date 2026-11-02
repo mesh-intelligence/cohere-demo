@@ -1,0 +1,133 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel10.2-rag-rerank
+title: Test Suite for Release 10.2 RAG Rerank
+release: "10.2"
+
+traces: [rel10.2-uc001-rag-rerank]
+
+preconditions:
+  - The rel10.0 Cohere provider is standing, so the declared client, its credential reference, and its egress allowlist already exist and the rerank operation joins them rather than introducing a second client.
+  - A seeded corpus holding a document that answers the probe tasking well and that vector retrieval ranks below the composition cutoff. Without a known buried document the suite can observe that an ordering changed but not that anything was lifted, which is the difference between a shuffle and a rerank.
+  - The live tiers require COHERE_API_KEY exported by the operator. The credential is operator-supplied and gitignored, read by no code in the repository.
+  - The scenario tiers require no credential and no network; their mocks stand where the declared client points, reached by the environment overrides the scenario supplies.
+  - Host Ollama holds the tier-selector and chat models, so source selection and the fallback composition path are unchanged while the ordering moves.
+
+test_cases:
+  - use_case: rel10.2-uc001-rag-rerank
+    name: The rerank response shape and its candidate addressing are established against the real API
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A live rerank call records what the response carries — how it orders the candidates, and whether it addresses them by their position in the submitted list or by returning their content. This runs before the reordering word is declared, so the mapping is authored against an observed shape. A mock returns whatever shape its fixture declares, so a fixture written from the same reading that produced the declaration confirms the declaration against itself.
+    expected:
+      http_status: 200
+      ordering_shape_recorded: true
+      candidate_addressing_recorded: true
+      addresses_by_index_not_content: true
+      skips_without_credential: true
+      skip_names_variable: COHERE_API_KEY
+    traces:
+      - rel10.2-uc001-rag-rerank S6
+      - srd009-cohere-provider AC5
+
+  - use_case: rel10.2-uc001-rag-rerank
+    name: A buried document is lifted into the composed top-N
+    integration_target: mage integration:cohere
+    status: implemented
+    description: The probe tasking's known-relevant document ranks below the cutoff by embedding similarity and appears in the composed set after the pass. The document is chosen in advance so the assertion is that this document rose, not merely that the order differs — a pass that shuffles and a pass that lifts both change the ordering, and only one of them is the release.
+    expected:
+      http_status: 200
+      buried_document_below_cutoff_pre_rerank: true
+      buried_document_present_in_composed_top_n: true
+      answer_draws_on_the_lifted_document: true
+    traces:
+      - rel10.2-uc001-rag-rerank S1
+      - srd009-cohere-provider AC5
+
+  - use_case: rel10.2-uc001-rag-rerank
+    name: The reordered set is a permutation of the candidate set
+    integration_target: mage integration:cohere
+    status: implemented
+    description: Every document after the pass was returned by the fan-out, and every document the fan-out returned is still present before the top-N is taken. This is the assertion an improved answer hides — a pass that retrieved rather than reordered produces a better brief and a candidate set that grew, and only the set comparison distinguishes them.
+    expected:
+      http_status: 200
+      no_document_added_by_the_pass: true
+      no_document_dropped_before_top_n: true
+      reordered_set_is_a_permutation: true
+    traces:
+      - rel10.2-uc001-rag-rerank S2
+      - srd009-cohere-provider AC5
+
+  - use_case: rel10.2-uc001-rag-rerank
+    name: The composed documents are the declared top-N of the reordered set
+    integration_target: mage integration:cohere
+    status: implemented
+    description: The documents list reaching invoke_cohere_command is the first N entries of the reordered set, and N comes from declared configuration rather than from the provider's response or a model output. A run whose composed count tracks how many results the provider returned has moved the composition budget outside the deployment's control.
+    expected:
+      http_status: 200
+      composed_documents_equal_first_n_of_reordered: true
+      n_read_from_declared_configuration: true
+      n_independent_of_provider_result_count: true
+    traces:
+      - rel10.2-uc001-rag-rerank S3
+      - srd009-cohere-provider AC5
+      - srd009-cohere-provider AC3
+
+  - use_case: rel10.2-uc001-rag-rerank
+    name: A rerank refusal degrades to the pre-rerank order and reports it
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A scripted refusal of the rerank call leaves the turn answering from the order the fan-out produced, and the response records the degradation. The probe is what separates this from a healthy turn — both return 200 with a composed brief, so the scenario asserts the degradation was reported rather than inferring it from an answer that looks ordinary.
+    expected:
+      http_status: 200
+      turn_answers: true
+      composed_order_equals_pre_rerank_order: true
+      degradation_reported_in_metadata: true
+      provider_reached_before_degrading: true
+    traces:
+      - rel10.2-uc001-rag-rerank S4
+      - srd009-cohere-provider AC5
+
+  - use_case: rel10.2-uc001-rag-rerank
+    name: An empty rerank response degrades like a refusal
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A scripted rerank returning an empty ordering takes the same degradation path as a refusal. An empty ordering is a successful call carrying no information, so a machine that treats only the error statuses as degradation composes from an order it never received and reports nothing.
+    expected:
+      http_status: 200
+      turn_answers: true
+      composed_order_equals_pre_rerank_order: true
+      degradation_reported_in_metadata: true
+      empty_ordering_not_treated_as_a_valid_ordering: true
+    traces:
+      - rel10.2-uc001-rag-rerank S4
+      - srd009-cohere-provider AC5
+
+  - use_case: rel10.2-uc001-rag-rerank
+    name: The rerank operation is one shared declaration from the Cohere provider library
+    go_test: go test ./magefiles -run '^TestCohereRerankOperationIsPinned$|^TestChartMovesTheCohereAllowlistWithTheEndpoint$|^TestCascadePassesShareOneRerankOperation$|^TestCohereRerankOperationRejectsARuntimeAuthority$|^TestCohereRerankOperationRejectsAMovedPath$|^TestCohereRerankOperationRejectsAnAbsentDeclaration$'
+    status: implemented
+    description: The chatbot expands the Cohere provider library's rerank fragment once (srd058 R1.3), with fixed method, path, and authority and no runtime-supplied base URL, and every rerank pass references that operation rather than declaring its own. The chart renders the expansion's allow arguments from the same Cohere values as the chat client's allowlist, so an in-boundary endpoint moves both. The checks read the library and the rendered chart and need neither credential nor network, so they run where the live tiers skip.
+    expected:
+      one_rerank_operation_declared: true
+      declared_by_the_cohere_provider_library: true
+      shares_the_cohere_endpoint_and_allowlist: true
+      method_and_path_pinned: true
+      base_url_source_absent: true
+      rag_pass_references_the_shared_operation: true
+    traces:
+      - rel10.2-uc001-rag-rerank S5
+      - srd009-cohere-provider AC1
+
+  - use_case: rel10.2-uc001-rag-rerank
+    name: The disabled provider composes from the pre-rerank order
+    go_test: go test ./magefiles -run '^TestChartOmitsCohereWhenDisabled$'
+    status: implemented
+    description: A render with the provider disabled carries none of the rerank configuration, and a turn on that mesh composes from the order the fan-out produced, exactly as it did before the release. The disabled path reports no degradation, because no pass ran to degrade.
+    expected:
+      disabled_render_carries_no_rerank_configuration: true
+      composed_order_equals_pre_rerank_order: true
+      no_degradation_reported_when_disabled: true
+    traces:
+      - rel10.2-uc001-rag-rerank S7
+      - srd009-cohere-provider AC6

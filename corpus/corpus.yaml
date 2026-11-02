@@ -1,0 +1,161 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The retrieval corpus and the vocabularies its documents are read through.
+# This file is the declared, totally ordered clearance set srd010 R1.1 requires
+# and the corpus version srd015 R6.2 requires a store to name. It also carries
+# the mappings the rel10.5 adapters read -- markings onto levels, tier policy,
+# and Admiralty ratings -- because those are evaluations of sources, and an
+# evaluation belongs where the corpus is defined rather than in build code
+# (srd017 R2.2, R2.4, R2.6).
+#
+# rel10.5 replaced the synthetic Sable Strait corpus with this one (srd017 R9.1).
+id: ukraine-2022
+version: "1.0"
+title: Ukraine 2022 Multi-Source Intelligence Corpus
+
+# Four of the five tiers are real published reporting on the 2022 Russian
+# invasion of Ukraine. One is synthetic. A figure measured over this corpus
+# carries that mixed qualification rather than the uniform synthetic one
+# rel10.4's corpus carried (srd017 R9.4, srd014 R6.1).
+synthetic: false
+synthetic_notice: |
+  This corpus mixes real and invented material and a figure measured over it
+  must say so. Four tiers are real published reporting: daily assessments from
+  the Institute for the Study of War, messages from twelve Telegram news
+  channels, an air-defence record of missile and drone strikes, and daily loss
+  figures from the Ukrainian General Staff. Each tier records its source,
+  licence, and retrieval date in a README beside the data.
+
+  The humint tier is entirely invented. Its sources, its collecting
+  organization, and its classification markings are fictional demonstration
+  labels written over the public rumour stream so that clearance-gated
+  retrieval has classified-looking material to gate. No document in this corpus
+  is, or derives from, actual classified material.
+
+# The clearance levels, ordered lowest to highest. "At or below" is decided by
+# position in this list, so a level pair is any two positions and the lower of
+# a pair is the earlier one. A document whose declared level is absent or not
+# in this list is written at the highest (srd015 R2.5, srd010 R1.3).
+#
+# The set is unchanged from rel10.4. rel10.5 maps real markings onto it rather
+# than extending it, so the level pairs rel11.0 iterates are the same pairs
+# (srd017 R2.1). No tier's material maps to restricted; that level stays
+# declared because the ordered set is application configuration rather than a
+# description of what any one corpus happens to hold.
+clearance_levels:
+  - unclassified
+  - restricted
+  - confidential
+  - secret
+
+# The markings the synthetic tier writes, mapped onto the ordered set above
+# (srd017 R2.2). A marking absent from this table is written at the highest
+# level, so a mapping omission withholds a document rather than exposing one.
+clearance_markings:
+  UNCLASSIFIED//FOUO: unclassified
+  CONFIDENTIAL: confidential
+  SECRET: secret
+  SECRET//NOFORN: secret
+
+# Dissemination caveats, carried as flags beside the level rather than as
+# levels of their own. NOFORN restricts who may receive a secret document and
+# does not make it more classified than secret (srd017 R2.3).
+clearance_caveats:
+  - NOFORN
+
+# The clearance each real tier's material carries as a property of the tier
+# (srd017 R2.4). This material is published, so its level is a fact about where
+# it came from rather than about what it says, and nothing reads a document to
+# decide it. The humint tier is absent here because its documents declare their
+# own markings.
+tier_clearance:
+  osint_assessment: unclassified
+  osint_news: unclassified
+  sigint_event: unclassified
+  sigint_series: unclassified
+
+# The Admiralty rating each real tier carries, source reliability then
+# information credibility (srd017 R2.6). Published reporting is not graded on
+# this scale by whoever published it, and a rating evaluates a source rather
+# than a sentence, so the tier is the unit it is declared at. The humint tier
+# is absent because its reports carry a per-source grade the collector assigned.
+tier_admiralty:
+  # The fallback for a report whose source line carries no grade. F6 is the
+  # scale's own "cannot be judged" on both axes, which is what an ungraded
+  # source is -- inventing a grade for it is what srd015 R2.3 forbids. A report
+  # that does carry a grade keeps it.
+  humint: F6
+  # A research organization with a stated method, reporting it stands behind.
+  osint_assessment: B2
+  # An official release from the service that observed the event.
+  sigint_event: B2
+  # An official release, but one belligerent's count of its opponent's losses,
+  # which is not independently confirmed.
+  sigint_series: B3
+  # Twelve outlets from state media to Western wires, unverified message by
+  # message.
+  osint_news: C3
+
+# Source types the corpus spans, so a tasking's relevant documents sit across
+# sources rather than within one (srd015 R1.2, srd017 R1.1).
+source_types:
+  humint: Source-protected field reporting from the collector's own chain. Synthetic.
+  osint_assessment: Daily written campaign assessments from the Institute for the Study of War.
+  osint_news: Messages from Russian, Ukrainian, and Western news channels on Telegram.
+  sigint_event: Air-defence records of missile and drone strikes, per munition type and night.
+  sigint_series: Daily change in reported Russian personnel and equipment losses.
+
+# The Admiralty System, both axes. Every document rates both, because the
+# ministry form's source-evaluation table is populated from these rows and
+# rel12.2 checks a brief against them rather than against a rating produced at
+# composition time (srd015 R1.4).
+admiralty:
+  source_reliability:
+    A: Completely reliable
+    B: Usually reliable
+    C: Fairly reliable
+    D: Not usually reliable
+    E: Unreliable
+    F: Reliability cannot be judged
+  information_credibility:
+    1: Confirmed by other sources
+    2: Probably true
+    3: Possibly true
+    4: Doubtful
+    5: Improbable
+    6: Truth cannot be judged
+
+# The retrieval conditions the corpus is authored to hold. These are the
+# conditions downstream releases exercise, stated here so a corpus edit that
+# breaks one is a visible change to a declared property rather than a silent
+# regression in a test nobody reads (srd015 R1.3, R1.5; rel10.4-uc001 E9).
+retrieval_conditions:
+  primary_tasking: |
+    Russian strikes on Ukrainian infrastructure in December 2022 and the air
+    defence response to them. Documents bear on it across all five source types
+    and three clearance levels: the strike record counts what was launched and
+    intercepted, the assessments argue about intent and effect, the news
+    channels report the same nights from opposing directions, the loss series
+    tracks the cost, and the synthetic reporting covers the air-defence
+    decisions taken around them. More documents are relevant than the five a
+    turn passes to composition, so the cutoff bites and the documents a rerank
+    recovers exist to be recovered (srd014 R1.3).
+  relevant_to_primary_tasking:
+    - HR-22-019
+    - HR-22-014
+    - missile-2022-12-05
+    - missile-2022-12-16
+    - missile-2022-12-29
+    - missile-2022-12-31
+    - isw-2022-12-16
+    - isw-2022-12-17
+    - isw-2022-12-19
+    - losses-2022-12-17
+  distractors: |
+    The window carries a month of reporting on everything else the war was
+    doing -- mobilization, the Svatove and Kherson axes, security assistance,
+    regime politics, and the daily loss series on days no strike occurred.
+    These are real documents on neighbouring subjects rather than noise, so a
+    retrieval that ranks them above the strike and air-defence reporting has
+    made a mistake a measurement can see.

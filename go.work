@@ -1,0 +1,28 @@
+// Copyright (c) 2026 Mesh Intelligence Inc.
+// SPDX-License-Identifier: MIT-0
+
+// Development workspace. The go.mod pins the declarative-agents modules at an
+// upstream commit; this workspace points the build at the sibling checkout
+// instead, so a change made there is visible here without re-pinning. Build
+// with GOWORK=off to see what the pin alone resolves — that is what CI and a
+// clone without the sibling checkout get.
+//
+// The sibling layout is this repository's documented convention (demo.yaml),
+// and gh-* worktrees sit in the same parent directory, so these relative paths
+// hold from a worktree as well.
+
+go 1.26.3
+
+use (
+	.
+	../declarative-agents/agent-core
+	../declarative-agents/applications/catalog
+)
+
+// agent-core and applications/catalog each replace the magefiles module with a
+// path relative to themselves. Both resolve to the same directory, but Go 1.26
+// compares workspace replacements before resolving them and rejects the pair.
+// A workspace-level replacement overrides both and names that directory once.
+// The magefiles checkout is reached through this replacement rather than a use
+// line: Go refuses to replace a workspace module at all versions.
+replace github.com/mesh-intelligence/declarative-agents/magefiles => ../declarative-agents/magefiles

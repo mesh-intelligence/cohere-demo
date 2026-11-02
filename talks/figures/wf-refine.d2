@@ -1,0 +1,39 @@
+direction: right
+
+vars: {
+  d2-config: {
+    theme-id: 0
+    pad: 6
+  }
+}
+
+classes: {
+  step: {
+    style: {
+      border-radius: 8
+      fill: "#f6f8fb"
+      stroke: "#7a8699"
+      font-size: 19
+    }
+  }
+}
+
+(* -> *)[*].style.stroke: "#7a8699"
+intsum: Cited\nINTSUM {
+  shape: page
+  style: {fill: "#eef6ef"; stroke: "#2f7d4f"; font-size: 19}
+}
+audit: Audit every\ncitation {
+  class: step
+}
+findings: Audit\nfindings {
+  shape: page
+  style: {fill: "#fbfcfe"; stroke: "#3d70b8"; font-size: 19}
+}
+rerun: The whole workflow\nre-runs on the findings {
+  class: step
+}
+intsum -> audit
+audit -> findings: scored 1-10 {style.font-size: 16}
+findings -> rerun: the next prompt {style.font-size: 16}
+rerun -> intsum: a new cited INTSUM {style.stroke-dash: 4; style.font-size: 16}

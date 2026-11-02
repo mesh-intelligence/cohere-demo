@@ -1,0 +1,43 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+unit: mesh-chatbot-provider-rest
+# The request turn's rerank and the harvest's document embedding come from the
+# Cohere provider library the cohere root binds (srd058 R1.3), not from
+# operations hand-written on the cohere client. The three rerank passes share
+# one expansion and differ only in the candidate set parse_candidates
+# publishes (srd011 R4.4); the harvest embeds each web result as a search
+# document inside its for_each.
+#
+# Both chatbot profiles list it: the request machine launches with the parent
+# profile's REST definitions, and each profile declares the words that use
+# both expansions, which the load requires (srd052 R3.1). The chart
+# co-generates it, with the expansions on the Cohere tier and none on the
+# Ollama tier, whose turn never reranks or harvests.
+#
+# The endpoint is the library's own, and also its allowlist (srd058 R1.6): the
+# fragments read no environment, so the chart renders allow_scheme, allow_host,
+# and allow_port from the Cohere values, and a local proof that stands a mock
+# there pins them in its copy (pinChatbotProviderEndpoint).
+expand:
+  - fragment: /opt/cohere/rerank-fragment.yaml
+    args:
+      # The original tasking, not the composed grounding prompt.
+      query_selector: $from(declare_question).body.question
+      documents_selector: $from(parse_candidates).body.documents
+      body_source: command_state
+      model: "${COHERE_RERANK_MODEL:-rerank-v3.5}"
+      # The deployment's composition budget, declared rather than taken from
+      # however many results the provider returns (srd009 R5.3).
+      top_n: ${COHERE_RERANK_TOP_N:-8}
+  - fragment: /opt/cohere/embed-document-fragment.yaml
+    args:
+      input_selector: $from(harvest_result).body.row.snippet
+      # The link names the result; the harvest marshals title, link, and
+      # position from its for_each item, not from the carried fields.
+      id_selector: $from(harvest_result).body.row.link
+      body_source: command_state
+      model: "${COHERE_EMBED_MODEL:-embed-v4.0}"
+rest:
+  version: v1

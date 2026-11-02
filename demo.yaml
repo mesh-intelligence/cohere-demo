@@ -1,0 +1,48 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# chatbot-mesh demo configuration.
+#
+# Every setting is optional and declarative — the magefiles read it here, never
+# from an environment variable. Every key is commented out in the shipped state;
+# uncomment one to override it, and relative paths resolve from this application
+# directory.
+#
+# The DA_* collector and integration variables are a separate injection contract
+# (GH-1251) and are not configured here.
+
+# Catalog source root that owns the reusable agent blocks. Unset, it resolves
+# through the Go toolchain to whatever the build already uses for the
+# applications/catalog module — the sibling checkout under go.work, the module
+# cache under GOWORK=off — falling back to repository discovery. Set it only to
+# point at a catalog the toolchain cannot resolve (GH-110).
+# catalog_root: ../declarative-agents/applications/catalog
+
+# agent-core module the runtime binary and specification-critic tools build
+# from. Unset, it resolves through the Go toolchain the same way catalog_root
+# does. Set it only for a checkout outside the module graph (GH-110).
+# core_root: ../declarative-agents/agent-core
+
+# Chart package output directory for `mage helm:package`.
+# helm_dist: helm/dist
+
+# Specification-critic validator profile the self-governance audit runs. When
+# unset it derives from catalog_root above, so it needs no explicit value here.
+# spec_critic_profile: ../catalog/agents/specification-critic/profile.yaml
+
+# Per-request bound for model calls made directly by integration tracers.
+# This does not bound the canonical Chroma corpus-ingest agent's complete run.
+# inference_timeout: 2m
+
+# Whole-run bound for canonical Chroma corpus ingest, including three or more
+# profile-owned model calls that may each legally take 300 seconds. Defaults to
+# 20m, leaving bounded time for startup, embedding, writes, and verification.
+# chroma_ingest_timeout: 20m
+
+# Chat model used only by `mage integration:chroma`. The canonical corpus-ingest
+# profile keeps its own ornith:9b default for operator runs; the integration
+# selects this smaller bounded evidence model through the declared
+# CORPUS_CHAT_MODEL child contract. Defaults to qwen2.5:3b. GH-1770 kept that
+# pin: a passing ingest's first turn is 492/38, and the Failed release sample
+# was 492/37 at iteration 7 (first read_resource). The ingest machine now
+# retries DocumentResourceDenied the same way it retries DocumentMissing.
+# chroma_integration_chat_model: qwen2.5:3b

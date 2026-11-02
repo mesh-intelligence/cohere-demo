@@ -1,0 +1,339 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel10.5-real-demo-corpus
+title: Test Suite for Release 10.5 Real Multi-Source Demo Corpus
+release: "10.5"
+
+traces: [rel10.5-uc001-real-demo-corpus]
+
+preconditions:
+  - The five source datasets are present at their declared paths. They live outside the repository and are large, so a run without them is skipped rather than reported -- a suite that cannot read the sources can only assert that a build failed.
+  - The corpus manifest declares the window, the per-tier sampling caps, the clearance mapping, the chunk profiles, and the embed selection with its per-tier allocation. Every case that asserts a count reads the expected value from the manifest rather than carrying its own copy, so a manifest change moves the assertion with it.
+  - The declared clearance levels remain a totally ordered set, so the level pairs the two-level cases iterate are enumerable and "at or below" stays decidable.
+  - An observable count of embedding-provider requests over a given phase, as rel10.4 requires for the same reason -- every zero-request and ceiling assertion in this suite is a claim about the client, and a suite that cannot count requests can only observe that a build finished.
+  - A recording stand-in for the embedding client that answers with a fabricated vector, since the ceiling and idempotence cases need request counts without provider spend, and the live-embedding cases require COHERE_API_KEY exported by the operator.
+  - A store built at a known embed selection, and a selection deliberately declared over the ceiling, because the refusal case cannot be produced from a selection that fits.
+  - A seeded pair of collections and a requester whose clearance is below the level of at least one seeded document, since the serving-path enforcement case needs a document the requester must not reach.
+
+test_cases:
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: A build over the declared window produces multi-profile chunks with lineage, and a demo seeded from them answers a windowed tasking
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: The release tracer, end to end. The build runs against no cluster over the five tiers and writes chunk records at every declared profile carrying lineage; the demo seeds both collections from those records and answers the corpus's windowed tasking with a brief composed from retrieved documents. Both halves are asserted for the reason rel10.4 gives -- a store nothing seeds from and an answer whose sources are unexamined are each consistent with half of this passing. The answer is held to the documents its sources composed from rather than to its prose, because a 200 carrying fluent text is what a mesh composing from nothing returns.
+    expected:
+      http_status: 200
+      build_runs_without_a_cluster: true
+      chunk_records_written_at_every_declared_profile: true
+      every_chunk_record_carries_lineage: true
+      demo_seeds_both_collections_from_the_written_records: true
+      windowed_tasking_answers_from_retrieved_documents: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S1
+      - srd017-real-demo-corpus AC1
+      - srd017-real-demo-corpus AC4
+      - srd017-real-demo-corpus AC5
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: The window filter admits its bounds and drops the documents either side
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (a). The window is inclusive at both ends, so a document issued on 2022-07-01 and one issued on 2023-06-30 are converted and a document issued on 2022-06-30 or 2023-07-01 is absent from the store entirely. The per-tier conversion counts follow from the filter and are asserted against the measured values. The boundary days are asserted by name rather than by count, because an off-by-one at one end and a compensating error at the other leaves the totals correct.
+    expected:
+      document_issued_on_the_opening_bound_converted: true
+      document_issued_on_the_closing_bound_converted: true
+      document_issued_the_day_before_the_window_absent: true
+      document_issued_the_day_after_the_window_absent: true
+      humint_reports_converted_across_the_outer_bounds: 27
+      isw_assessments_converted: 30
+      missile_daily_digests_converted: 11
+      loss_daily_deltas_converted: 31
+      filter_reads_the_issued_date_the_source_carries: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S2
+      - srd017-real-demo-corpus AC3
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: All five adapters yield identical top-level metadata keys
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (b). One envelope from each tier, compared field by field. The set of populated top-level metadata keys is identical across all five, so nothing downstream branches on which adapter ran. The assertion is on the set of keys rather than on the values, since the values differ by tier and that is the point.
+    expected:
+      top_level_metadata_keys_identical_across_all_five_tiers: true
+      document_id_populated_on_every_tier: true
+      source_type_populated_on_every_tier: true
+      clearance_populated_on_every_tier: true
+      issued_populated_on_every_tier: true
+      reliability_populated_on_every_tier: true
+      provenance_populated_on_every_tier: true
+      raw_ref_resolves_to_the_source_record: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S3
+      - srd017-real-demo-corpus AC1
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: Only searchable segments are chunked, and the material carried for citation stays out of every vector
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (c). An ISW assessment whose endnote tail is roughly a quarter of its text, a HUMINT report carrying a classification-authority line, and a Telegram message carrying a foreign-agent disclaimer. In each the unsearchable segment is present in the served document and appears in no chunk at any profile. Asserted on both sides -- dropping the material would also pass a chunk-side check while losing the citation apparatus the brief's sources point at.
+    expected:
+      isw_endnote_tail_present_in_the_served_document: true
+      isw_endnote_tail_absent_from_every_chunk: true
+      humint_classification_authority_line_present_in_the_served_document: true
+      humint_classification_authority_line_absent_from_every_chunk: true
+      telegram_disclaimer_present_in_the_served_document: true
+      telegram_disclaimer_absent_from_every_chunk: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S3
+      - srd017-real-demo-corpus AC1
+      - srd017-real-demo-corpus AC4
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: Each profile yields its expected chunk count for a sample document, and medium-900 reproduces the rel10.4 chunker exactly
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (d). One ISW assessment chunked at all three profiles. Atomic yields one chunk per searchable segment, large-1800 yields roughly half what medium-900 yields, and the medium-900 chunk text is compared byte for byte against what the rel10.4 chunker produces for the same input. The byte comparison is the assertion that matters, because a profile that merely resembles the old chunker orphans every vector in the committed store while the identity comparison still passes.
+    expected:
+      atomic_chunk_count_equals_searchable_segment_count: true
+      large_1800_chunk_count_below_medium_900_chunk_count: true
+      medium_900_chunk_text_byte_identical_to_the_rel10_4_chunker: true
+      every_chunk_record_names_its_profile: true
+      profiles_coexist_without_identifier_collision: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S5
+      - srd017-real-demo-corpus AC4
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: Lineage is present on every chunk and internally consistent
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (e). Over the whole store rather than a sample, since a lineage defect on one document is a citation that leads nowhere. Every chunk's position falls within its sibling count, its previous and next references resolve within its own profile, its coarser parent exists in the next larger profile, and its character span lies inside the joined searchable body it was cut from. The first and last chunks of a profile carry absent neighbours rather than references that dangle.
+    expected:
+      every_chunk_carries_a_complete_lineage_block: true
+      position_within_sibling_count_on_every_chunk: true
+      previous_and_next_resolve_within_the_profile: true
+      first_and_last_chunk_neighbours_absent_not_dangling: true
+      coarser_parent_resolves_to_an_existing_chunk: true
+      character_span_within_the_joined_searchable_body: true
+      lineage_absent_from_the_embedded_text: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S6
+      - srd017-real-demo-corpus AC5
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: Cross-tier provenance resolves from a derived document to the reporting it was built from
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (f). A HUMINT report written over the public rumour stream names the Telegram message identifiers it was built from, and each resolves to a message present in the converted slice. A missile daily digest names the source rows it aggregates and each resolves. The relation is carried alongside the identifier, so a consumer can distinguish a document written over another from one aggregating rows.
+    expected:
+      humint_derived_from_resolves_to_a_converted_telegram_message: true
+      missile_digest_derived_from_resolves_to_its_source_rows: true
+      loss_delta_derived_from_resolves_to_its_source_rows: true
+      relation_recorded_alongside_each_identifier: true
+      unresolvable_derived_from_reference_fails_the_build: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S6
+      - srd017-real-demo-corpus AC5
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: The clearance mapping lands each marking on the declared set with NOFORN as a caveat
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (g). The four synthetic markings map to their declared levels, SECRET//NOFORN lands at secret carrying a caveat flag rather than at a fifth level, the four real tiers are unclassified as a property of the tier, and a document with an unrecognized marking is written at the highest declared level. The set of levels in the store after the build equals the declared ordered set, which catches a mapping that invented one.
+    expected:
+      unclassified_fouo_maps_to_unclassified: true
+      confidential_maps_to_confidential: true
+      secret_maps_to_secret: true
+      secret_noforn_maps_to_secret_with_a_caveat_flag: true
+      noforn_not_represented_as_a_fifth_level: true
+      real_tiers_tagged_unclassified_by_tier_policy: true
+      no_document_clearance_decided_by_reading_document_text: true
+      unrecognized_marking_written_at_the_highest_level: true
+      levels_present_in_the_store_within_the_declared_ordered_set: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S4
+      - srd017-real-demo-corpus AC2
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: The sampling cap holds and the embed ceiling refuses an over-budget selection before any request is issued
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (h). Two assertions about bounds that cost money to get wrong. The Telegram tier is sampled to its declared cap and two runs order their envelopes identically, so the selection is reproducible rather than whatever the filesystem returned. Then a deliberately over-ceiling selection is built, and the build fails naming the profile and its count with the embedding client's request count over that build at zero. The request count is the assertion -- a build that embedded what fit and then failed would also report a failure.
+    expected:
+      telegram_sample_at_or_under_the_declared_cap: true
+      two_runs_produce_byte_identical_envelope_ordering: true
+      selection_within_the_ceiling_builds: true
+      over_ceiling_selection_fails_the_build: true
+      failure_names_the_profile_and_its_count: true
+      embedding_requests_during_an_over_ceiling_build: 0
+      no_profile_exceeds_three_thousand_embedded_chunks: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S7
+      - srd017-real-demo-corpus AC3
+      - srd017-real-demo-corpus AC6
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: A widened selection embeds only the chunks it adds, and an unchanged rebuild embeds nothing
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (h), second half. A build at one selection, then a build at a wider one. The second issues requests for the added chunks alone and leaves the vectors already held byte-identical. A third build at the unchanged wider selection issues none. Both are asserted for rel10.4's reason -- a build that recomputed every vector and wrote back identical records would leave the store unchanged while still paying the provider.
+    expected:
+      widened_selection_embeds_only_the_added_chunks: true
+      previously_held_vectors_unchanged_after_widening: true
+      embedding_requests_on_an_unchanged_rebuild: 0
+      skip_decided_per_chunk_profile_and_identity: true
+      store_equality_not_treated_as_sufficient_evidence: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S7
+      - srd017-real-demo-corpus AC6
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: The store co-locates a document's versions, prunes every variant, and rebuilds without writing
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (m), added because no case in the release's original list exercised the store's shape. A document's raw envelope and all its chunk profiles are read back together under its identifier; the index reports chunk and vector counts per profile; removing a document from the sources and rebuilding leaves no profile variant of it behind; and a rebuild over unchanged inputs writes no record at all. The prune assertion is per profile, because a prune keyed on the chunk alone leaves the other profiles' variants for a later seed to load.
+    expected:
+      raw_envelope_and_all_profiles_co_located_under_the_document_id: true
+      index_reports_chunk_and_vector_counts_per_profile: true
+      removing_a_document_prunes_every_profile_variant: true
+      no_orphan_variant_survives_a_rebuild: true
+      rebuild_over_unchanged_inputs_writes_zero_records: true
+      store_legible_as_text_including_lineage: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S8
+      - srd017-real-demo-corpus AC7
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: Both collections seed with the embedding provider uncalled, and a windowed tasking is served at two clearance levels
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (i). The retrieval collection receives the embed selection with its stored vectors; the document collection receives every raw envelope and profile version addressed by identifier; and the embedding client's request count over both seeds is zero, which is the property rel10.4 established and this release extends to a second collection. The same windowed tasking then runs at a cleared and an uncleared level, and the cleared analyst's brief draws on a document the uncleared analyst never had as a candidate.
+    expected:
+      embedding_requests_during_the_retrieval_collection_seed: 0
+      embedding_requests_during_the_document_collection_seed: 0
+      retrieval_collection_holds_the_embed_selection_only: true
+      document_collection_holds_raw_envelopes_and_all_profile_versions: true
+      cleared_analyst_brief_draws_on_the_over_clearance_document: true
+      uncleared_analyst_never_had_it_as_a_candidate: true
+      uncleared_answer_names_it_nowhere: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S9
+      - srd017-real-demo-corpus AC8
+      - srd015-corpus-build AC5
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: A cited chunk identifier resolves to its chunk, its parent document, and that document's other profile versions
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (j). The provenance walk the panel makes, asserted at the read API rather than at the interface. A citation is taken from the served answer, and its chunk identifier resolves through the four read operations -- the chunk with its lineage, the parent document it was cut from, the document's other chunk-size versions, and a metadata query returning it under its clearance, source type, and issued date. The identifier is taken from the answer rather than chosen from the store, because the join being tested is the one between the retrieval path and the presentation path.
+    expected:
+      chunk_identifier_taken_from_the_served_answer: true
+      get_chunk_returns_the_text_and_its_lineage: true
+      get_document_returns_the_parent_the_chunk_was_cut_from: true
+      get_versions_returns_the_other_profile_variants: true
+      list_documents_returns_it_under_clearance_source_type_and_date: true
+      lineage_recoverable_from_the_collection_without_reading_the_store: true
+      derived_from_reachable_where_the_document_carries_it: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S9
+      - srd017-real-demo-corpus AC8
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: An over-clearance document is unreachable through the read API by identifier, by version, and by metadata query
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (k), added because the release's original list tested the serving path's function and not its authority. A requester below a seeded document's level asks for it three ways -- by its document identifier, as a profile version of a document they may see, and through a metadata query wide enough to match it -- and receives it by none. The identifier is supplied directly rather than followed from a citation, because identifiers derive from source and position and a path that is safe only against identifiers the turn already returned is not an access control. This is the case that distinguishes a presentation feature from a second route around the rel11.0 filter.
+    expected:
+      get_document_on_an_over_clearance_document_returns_nothing: true
+      get_chunk_on_an_over_clearance_chunk_returns_nothing: true
+      get_versions_omits_over_clearance_versions_of_a_permitted_document: true
+      list_documents_omits_over_clearance_documents_from_its_results: true
+      identifier_supplied_directly_rather_than_followed_from_a_citation: true
+      enforcement_reads_the_same_level_source_as_the_retrieval_path: true
+      error_serves_less_rather_than_more: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S9
+      - srd017-real-demo-corpus AC8
+      - srd010-clearance-gated-retrieval AC2
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: A record whose publication date cannot be established fails the build with the record named
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (l), added for the fail-loud rule the release's original list left untested. A source record whose date is absent, unparseable, or contradicted by the publication date its own content states fails the build naming the record, rather than being defaulted to a date that places it inside or outside the window by accident. The contradiction leg is not hypothetical -- the ISW dataset carries a record whose title states a publication date three years from its date field -- and a default would admit or drop a document silently either way.
+    expected:
+      record_with_an_absent_date_fails_the_build: true
+      record_with_an_unparseable_date_fails_the_build: true
+      record_whose_content_date_contradicts_its_date_field_fails_the_build: true
+      failure_names_the_offending_record: true
+      no_record_defaulted_to_a_date_it_did_not_carry: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S2
+      - srd017-real-demo-corpus AC1
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: The corpus replacement leaves no Sable Strait reference and keeps the conditions downstream releases exercise
+    integration_target: mage integration:demoCorpus
+    status: implemented
+    description: Case (n), added because the release's original list did not exercise the replacement itself. No live tasking, manifest vocabulary, or tracer names a Sable Strait entity; each real tier records its source, its licence, and the date it was retrieved; the synthetic tier identifies itself and its markings as invented in the artifact; and the corpus still holds material above the lower level of every clearance pair rel11.0 iterates along with relevant material falling below the composition cutoff. The conditions are asserted rather than assumed, because a replacement that answers the tracer's tasking while dropping them leaves rel11.0 and srd014 R1.3 exercising nothing and passing anyway.
+    expected:
+      no_sable_strait_entity_in_a_live_tasking_or_manifest: true
+      every_real_tier_records_source_licence_and_retrieval_date: true
+      synthetic_tier_identified_as_invented_in_the_artifact: true
+      material_above_the_lower_level_of_every_clearance_pair: true
+      relevant_material_falling_below_the_composition_cutoff: true
+      no_real_classified_material_present: true
+      figures_carry_the_mixed_real_and_synthetic_qualification: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S10
+      - srd017-real-demo-corpus AC9
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: The prose-to-tail cut holds against a mistyped entry, and the tier's fixed closing note is carried unsearchable
+    go_test: TestISWTailCutSurvivesAMistypedFirstEntry, TestISWTailCutFallsBackWithoutTheClosingNote, TestISWClosingNoteWithNoTailLeavesTheBodyWhole, TestISWBracketedIndexInsideALinkOpensNoEntry, TestISWClosingNoteIsCarriedUnsearchable, TestISWAssessmentWithoutTheClosingNoteIsUnchanged
+    status: implemented
+    description: Case (o). The two segmentation defects the citation work rests on. The evidence is the fixture cases rather than the dataset-gated one, which skips wherever the source datasets are absent and so proves nothing on a clone; TestISWWindowReconcilesOverTheRealDataset runs the same assertions over all thirty converted assessments when CORPUS_DATA_ROOT names the datasets. One assessment in the window opens its tail with a mistyped scheme, and a cut anchored on a well-formed link admits that entry into the searchable body, where it is chunked and embedded as though it were assessment; the case asserts the cut lands ahead of it and that no searchable segment of any document in the window carries link text. The tier's fixed closing note, written verbatim in most of the window's assessments, is carried unsearchable so the chunks that used to end on it stop resembling each other; the assessments that omit the note are unaffected. A length or ratio check is asserted not to be the mechanism, because a tail short by one entry sits inside the normal spread and passes one.
+    expected:
+      no_searchable_segment_carries_citation_link_text: true
+      the_mistyped_entry_is_carried_in_the_tail_not_the_body: true
+      the_fixed_closing_note_is_unsearchable_where_present: true
+      assessments_without_the_note_segment_unchanged: true
+      documents_outside_the_defect_segment_byte_identically: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S11
+      - srd017-real-demo-corpus AC1
+      - srd017-real-demo-corpus R1.7
+      - srd017-real-demo-corpus R1.8
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: Citation markers resolve to entries on the chunk while the chunk text and its digest stay byte-identical
+    go_test: TestChunkCarriesTheReferencesItsTextCites, TestResolvingReferencesLeavesTextAndDigestUntouched, TestAMarkerInOverlappingChunksResolvesInBoth, TestATierCarryingNoEntriesResolvesNothing, TestISWReferencesSplitOnTheSchemeAndNotOnSeparators, TestISWReferencesCarryEntriesThatNameNoAddress, TestISWReferencesIgnoreABracketedIndexInsideALink, TestISWReferencesReadThreeDigitEntryNumbers, TestISWEnvelopeCarriesTheParsedReferences, TestReferencesAreOmittedFromATierThatCarriesNoTail
+    status: implemented
+    description: Case (p), the assertion the citation work turns on. Every inline marker in an assessment's chunks resolves to an entry parsed from that document's tail; an entry naming a work rather than a link is carried rather than dropped; a bracketed index occurring inside a link does not become an entry; and a marker carried into two chunks by the profile's overlap resolves in both. The digest assertion is what matters and is asserted per record rather than in aggregate, because the build carries a stored vector forward only where the digest is unchanged, so a resolution that touched the text would re-buy every vector the tier holds and break the parent-document match the provenance walk needs, while producing a panel that looks correct. A document whose markers do not reconcile fails the build naming the document and the markers. The evidence is the fixture cases; TestChunkReferencesResolveOverTheRealDataset and TestISWReferencesParseOverTheRealDataset run the same assertions over all thirty converted assessments when CORPUS_DATA_ROOT names the datasets, and are not cited here because a test that skips on a clone proves nothing.
+    expected:
+      every_inline_marker_resolves_to_a_parsed_entry: true
+      chunk_text_byte_identical_to_the_previously_stored_record: true
+      chunk_digest_byte_identical_to_the_previously_stored_record: true
+      no_stored_vector_recomputed_by_the_resolution: true
+      an_entry_naming_a_work_rather_than_a_link_is_carried: true
+      a_bracketed_index_inside_a_link_is_not_an_entry: true
+      a_marker_in_overlapping_chunks_resolves_in_both: true
+      unreconciled_markers_fail_the_build_naming_document_and_markers: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S11
+      - srd017-real-demo-corpus AC10
+
+  - use_case: rel10.5-uc001-real-demo-corpus
+    name: A cited chunk's entries reach the panel through the flat collection metadata, written as the tier wrote them
+    integration_target: mage integration:ui
+    go_test: TestChunkReferencesSurviveTheFlatMetadata, TestAChunkCitingNothingCarriesNoReferencesKey
+    status: implemented
+    description: Case (q). The entries survive the collection's flat metadata the way lineage does, and the panel beside a cited chunk names the sources that chunk's markers cite. They are asserted to be presented as the tier wrote them, obscured links included, because restoring those addresses is a republication decision the build has no standing to make and the corpus writes the obscuring several ways that a text rule would have to guess at. A chunk citing nothing renders as it did before, so the block appears where there is something to show rather than as an empty heading on every chunk.
+    expected:
+      entries_recoverable_from_the_collection_without_rejoining_the_store: true
+      the_panel_names_the_cited_chunks_sources: true
+      addresses_presented_as_the_tier_wrote_them: true
+      a_chunk_without_entries_renders_unchanged: true
+    traces:
+      - rel10.5-uc001-real-demo-corpus S11
+      - srd017-real-demo-corpus AC10

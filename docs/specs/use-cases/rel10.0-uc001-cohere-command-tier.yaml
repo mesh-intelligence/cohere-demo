@@ -1,0 +1,119 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel10.0-uc001-cohere-command-tier
+title: The Cohere Command Tier Composes a Brief While the Ollama Tier Stays Selectable
+
+summary: |
+  An analyst poses a tasking to the running mesh and the turn is composed by
+  Cohere Command. The tier selector reaches the added invoke_cohere_command word
+  through the same $tool indirection it already uses, the declared Cohere client
+  sends the retrieved chunks as a documents list rather than as a concatenated
+  prompt string, and the composed brief returns through the response the SPA
+  already reads. The Ollama chat words remain declared and selectable
+  throughout, and a deployment with the provider disabled serves the turn
+  exactly as it did before.
+
+  This is the first Cohere tool in the mesh, and the release proves the
+  provider path rather than the model's output quality: the transport a
+  security reviewer audits, the tier word a selector reaches, the normalizer
+  that keeps the answer a string, and the degradation that keeps a trial-tier
+  rate limit from failing a demonstration. Attribution remains what rel09.9
+  left it -- the server's own account of composed sources -- because Command's
+  structured citations are rel10.1.
+
+  The release narrows the road map's original rel10.0. That entry bundled the
+  query-embedding repoint with the Command tier, and the repoint requires
+  reseeding every collection with the Cohere embedding family or the srd002 R3.3
+  mismatch exclusion drops every source from every turn. The repoint is rel10.3.
+
+actor: Intelligence analyst posing a tasking to the running mesh
+trigger: The analyst submits a tasking whose difficulty routes the tier selector to the Cohere Command word.
+
+flow:
+  - F1: The analyst submits a tasking through the SPA or POST /api/v1/chat, and the request-scoped turn seeds unchanged.
+  - F2: The turn embeds the tasking once and fans out to the selected rag-server units, unchanged from srd002.
+  - F3: The surviving per-source chunks are rendered in topology order and composed into the answer prompt, unchanged from srd002.
+  - F4: The tier selector classifies the tasking and emits one tool call naming invoke_cohere_command, which parse_tier resolves because the $tool dispatch loops on Answering, so the manifest a dispatchable word is scoped to is the one the selection is validated against.
+  - F5: invoke_cohere_command invokes the declared Cohere chat operation, passing the retrieved chunks as a documents list whose entries carry the identity a citation resolves to, with the credential resolved from the environment by reference.
+  - F6: capture_brief normalizes the REST result to the answer shape compose_response reads, so the brief reaches the response as text rather than as a mapped object.
+  - F7: compose_response emits the answer with the same source metadata the Ollama path produces, and the SPA renders it through the surface rel09.9 left in place.
+  - F8: When the provider refuses the call, the mapped failure signal routes the turn back through Reporting to invoke_llm_fast, which answers over the same composed prompt, and the response records the degradation.
+
+touchpoints:
+  - id: T1
+    target: srd009-cohere-provider AC1
+    reason: The turn reaches Cohere through one declared client whose base URL, credential reference, egress allowlist, method, and path are fixed configuration the machine cannot redirect.
+  - id: T2
+    target: srd009-cohere-provider AC3
+    reason: invoke_cohere_command joins the Answering vocabulary and composes over the retrieved top-N as a documents list, captured into command state for later addressing.
+  - id: T3
+    target: srd009-cohere-provider AC6
+    reason: The provider enters as declared operations, words, and states, leaving the rag-server and chatbot contracts unmodified and the Ollama tier selectable.
+  - id: T4
+    target: srd002-chatbot-agent AC1
+    reason: The turn shape the provider composes into is the unchanged request-scoped machine that embeds once, fans out, and composes.
+  - id: T5
+    target: srd002-chatbot-agent AC2
+    reason: The tier selector reaches the added word through the established $tool contract, with the selector's own contract unchanged.
+  - id: T6
+    target: srd012-brief-markdown-conformance AC1
+    reason: The invoke_cohere_command system prompt composes the brief as ministry-template markdown; the structural conformance check over it remains rel12.2.
+
+success_criteria:
+  - id: S1
+    criterion: A tasking routed to the Cohere tier returns 200 with a non-empty answer, and the turn's span log names invoke_cohere_command as the dispatched answer word. Asserting the answer alone is insufficient -- a turn that silently fell back to Ollama returns a perfectly good answer while proving nothing about the provider.
+    traces:
+      - srd009-cohere-provider AC3
+      - srd002-chatbot-agent AC1
+  - id: S2
+    criterion: The answer field is a string, not a serialized object. The Cohere operation returns a mapped result and compose_response reads the previous result whole, so the composed brief reaches the response only through the normalizer between them.
+    traces:
+      - srd009-cohere-provider AC3
+  - id: S3
+    criterion: The credential resolves from the environment by reference and appears in no profile, machine, prompt, log line, or exported span; egress is refused by the client for any host outside the configured allowlist, rather than by the machine that invoked it; and no model-authored or request-supplied value reaches the base URL, path, credential, or model name.
+    traces:
+      - srd009-cohere-provider AC1
+  - id: S4
+    criterion: A provider transport, authentication, or rate-limit failure surfaces as a distinguishable machine outcome and falls back to the default chat-LLM word, so the turn answers over the same composed prompt rather than failing. The fallback answer still reports the retrieved sources, proving it composed from the same retrieval rather than from an empty prompt.
+    traces:
+      - srd009-cohere-provider AC1
+      - srd009-cohere-provider AC3
+  - id: S5
+    criterion: The Ollama chat words remain declared and selectable after the provider is added, proven by the existing single-turn and degraded-rag scenario critics passing unmodified.
+    traces:
+      - srd009-cohere-provider AC6
+  - id: S6
+    criterion: A deployment with the provider disabled renders and serves the turn as it did before the provider existed, so the addition is switchable configuration rather than a fork of the mesh.
+    traces:
+      - srd009-cohere-provider AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: invoke_cohere_command is declared as an invoke_llm word with a cohere provider, by analogy with the Ollama chat words it sits beside in the vocabulary.
+    expected: Rejected; the runtime accepts only the ollama provider for that word, so the Cohere path is a REST word over the declared client, which is what makes the provider additive configuration rather than a runtime change.
+  - id: E2
+    scenario: The Cohere operation's result is passed to compose_response directly, since the Ollama words reach it the same way.
+    expected: Rejected; the Ollama words emit text and the REST word emits a mapped object, so the response renders an object where the brief belongs. The normalizer is what makes the two paths interchangeable at the response.
+  - id: E3
+    scenario: The egress allowlist is pinned to the hosted endpoint while the base URL stays configurable, on the reasoning that a fixed allowlist is the stronger control.
+    expected: Rejected; the allowlist and the base URL are one configuration point. Pinning only the allowlist makes an in-boundary deployment unreachable, which is the sovereignty property this release exists to keep, and leaves no scenario able to reach a mock.
+  - id: E4
+    scenario: The provider fallback is implemented by repointing the existing Reporting failure transition at the default chat word.
+    expected: Rejected; that transition catches response-composition failures, and repointing it changes shipped behavior. The provider's mapped failure signals are distinct, and their transitions are added alongside.
+  - id: E5
+    scenario: The Cohere word is declared external and left to the machine, on the reasoning that a $tool transition dispatches whatever the selector names.
+    expected: Rejected; a request machine registers the words its transitions name and adds $tool-dispatchable words only if the profile's tool selection lists them, and a dispatchable word is scoped to the manifest of the state the $tool transition targets. Neither is visible in a passing turn, because an unresolvable selection falls back to the default word and answers normally.
+  - id: E6
+    scenario: The turn is proven only against a mock Cohere endpoint, on the reasoning that the machine is what the release changes.
+    expected: Rejected; a mock is evidence about the request the machine constructs, not about the API behaving as the declarations assume. The live tier is what closes that gap, and it skips rather than fails where no credential is available.
+
+out_of_scope:
+  - Structured citation surfacing and the retirement of the bracket-scraping heuristic; that is rel10.1 and srd009 R4.
+  - The rerank pass over the RAG candidates; that is rel10.2 and srd009 R5.
+  - Repointing query embedding to Cohere Embed and reseeding the collections; that is rel10.3 and srd009 R2.
+  - The structural conformance check over the brief's markdown; that is rel12.2 and srd012.
+  - Clearance-gated retrieval, the OSINT search branch, and the cascade's later passes.
+  - Retrieval quality and answer quality. This release asserts that the provider path holds, not that Command answers better than the Ollama tier.
+
+test_suite_trace: test-rel10.0-cohere-command-tier
+status: implemented

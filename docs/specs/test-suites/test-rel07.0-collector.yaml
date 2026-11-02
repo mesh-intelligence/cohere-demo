@@ -1,0 +1,98 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel07.0-collector
+title: Test Suite for Release 07.0 Collector Agent
+release: "07.0"
+
+traces: [rel07.0-uc001-collector-ingress]
+
+preconditions:
+  - agent-core srd042 receiver, await, spool, relay, and stop words are available.
+  - The collector profile exports its process telemetry to file only.
+  - The default production chart routes traces and OTLP metrics to the local collector agent. Integration overlays keep traces on that intake and its declared relay, but export agent metrics directly to the persistent external collector because the collector agent does not relay its metric spool. No contrib metrics gateway or in-cluster Dolt scrape is deployed (GH-1207, GH-1366).
+
+test_cases:
+  - use_case: rel07.0-uc001-collector-ingress
+    name: Collector profile validates in test and relay modes
+    status: implemented
+    description: Both mode overlays load the same profile and every action, signal, declaration, control route, and monitor route validates.
+    expected:
+      test_mode: spool without relay dependency
+      relay_mode: spool precedes relay
+      hidden_transport_policy: false
+    traces: [rel07.0-uc001-collector-ingress S1, rel07.0-uc001-collector-ingress S3, srd007-collector-agent AC1, srd007-collector-agent AC3]
+
+  - use_case: rel07.0-uc001-collector-ingress
+    name: A real client batch reaches stdouttrace spool unchanged
+    integration_target: mage integration:helmSmoke
+    status: implemented
+    description: A real OTLP client exports parent and child spans with full run identity; the spool preserves every identity field.
+    expected:
+      trace_id_match: true
+      span_id_match: true
+      parent_id_match: true
+      service_and_run_identity_match: true
+      complete_ndjson_lines: true
+    traces: [rel07.0-uc001-collector-ingress S2, srd007-collector-agent AC2]
+
+  - use_case: rel07.0-uc001-collector-ingress
+    name: Canned positive-span batch takes the collector filter-to-spool leg
+    integration_target: mage integration:rig
+    go_test: go test ./magefiles -run '^TestCollectorIntakeFilterScenario$'
+    status: implemented
+    description: The hermetic rig launches the shipped collector profile, exports a canned parent/child OTLP batch over gRPC, and requires two attributable stdouttrace spool lines.
+    expected:
+      positive_filter_decision: true
+      spooled_span_count: 2
+      service_identity_preserved: collector-rig-fixture
+    traces: [rel07.0-uc001-collector-ingress S2, srd007-collector-agent AC2]
+
+  - use_case: rel07.0-uc001-collector-ingress
+    name: Collector lifecycle releases receiver control and monitor listeners
+    integration_target: mage integration:rig
+    go_test: go test ./magefiles -run '^TestCollectorLifecycleRebindAndTerminalState$'
+    status: implemented
+    description: The hermetic rig launches the shipped collector profile, verifies monitor reachability, sends lifecycle exit, asserts terminal state succeeded, and rebinds all listener addresses.
+    expected:
+      blocked_await_released: true
+      all_addresses_rebind: true
+      final_monitor_state_bounded: true
+    traces: [rel07.0-uc001-collector-ingress S4, srd007-collector-agent AC4]
+
+  - use_case: rel07.0-uc001-collector-ingress
+    name: Collector process telemetry cannot enter its receiver
+    integration_target: mage integration:helmSmoke
+    status: implemented
+    description: Client spans enter while collector lifecycle and tool spans appear only in the collector file; equivalent relay self-endpoints fail validation.
+    expected:
+      client_batch_received: true
+      collector_batch_received: false
+      equivalent_self_endpoint_rejected: true
+    traces: [rel07.0-uc001-collector-ingress S5, srd007-collector-agent AC5]
+
+  - use_case: rel07.0-uc001-collector-ingress
+    name: Agent mode separates integration metric export from trace intake
+    integration_target: mage integration:helmSmoke
+    go_test: go test ./magefiles -run '^TestCollectorDefaultRenderStaysSelfContained$|^TestCollectorKindOverlayExportsMetricsDirectlyAndTracesLocally$'
+    status: implemented
+    description: Production agents send traces and OTLP metrics to the local collector. The integration overlay keeps traces on that collector and its declared relay while agents export metrics directly to the persistent host collector, preserving evidence without a contrib gateway or in-cluster Dolt Prometheus scrape (GH-1366).
+    expected:
+      trace_ingress: collector_agent
+      production_metric_ingress: collector_agent
+      integration_metric_ingress: persistent_host_collector
+      trace_relay: collector_agent_declared_relay
+      agent_metrics_available: true
+      dolt_metrics_available: false
+      combined_health_required: true
+    traces: [rel07.0-uc001-collector-ingress S6, srd007-collector-agent AC6, srd003-chatbot-deployment AC5]
+
+  - use_case: rel07.0-uc001-collector-ingress
+    name: Persistent evidence survives mesh teardown
+    integration_target: mage integration:observabilityEvidence
+    status: implemented
+    description: After chart and cluster teardown, representative trace ids relayed by the local collector and run-correlated agent metrics exported directly to the persistent host collector remain queryable; Dolt metrics apply only under the opt-in contrib collector (GH-1366).
+    expected:
+      trace_evidence_retained: true
+      metric_evidence_retained: true
+      run_identity_filterable: true
+    traces: [rel07.0-uc001-collector-ingress S6, srd007-collector-agent AC6, srd003-chatbot-deployment AC5]

@@ -1,0 +1,31 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+unit: mesh-chatbot-embed-rest
+# The chatbot's query embedding comes from the provider library the providers
+# root binds (srd058 R4.2), which the chart rebinds with the release tier, so
+# the question embeds at Cohere or Ollama with no edit here. It reads the
+# question from the intake capture (GH-635): the embed runs after source
+# selection, so it reads the declared fields rather than the seed. Its model is the identity declare_query_model declares for the per-RAG
+# comparison (srd002 R3.3); the chart rewrites both together for an Ollama tier.
+# The endpoint is the bound library's own, and also its allowlist (srd058
+# R1.6): the fragment reads no environment, so the chart renders allow_scheme,
+# allow_host, and allow_port for the tier's endpoint, and a local proof that
+# stands a mock there pins them in its copy (pinChatbotProviderEndpoint).
+#
+# Rerank and the harvest's document embedding stay hand-written in rest.yaml.
+# The load refuses a fragment instantiation no transition action runs (srd052
+# R3.1): the Ollama tier's request machine never reranks, and the harvest
+# embeds from a for_each action, which the usedness check does not count.
+expand:
+  - fragment: /opt/providers/embed-query-fragment.yaml
+    args:
+      input_selector: $from(query_embedding).body.carried.input
+      # The fragment's default id selector reads the previous result, which
+      # command_state refuses; the question doubles as the carried id.
+      id_selector: $from(query_embedding).body.carried.input
+      body_source: command_state
+      model: "${COHERE_EMBED_MODEL:-embed-v4.0}"
+rest:
+  version: v1

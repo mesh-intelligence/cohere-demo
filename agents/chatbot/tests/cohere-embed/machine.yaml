@@ -1,0 +1,95 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: cohere-embed-critic
+purpose: |-
+  Critiques the query-embedding chain against isolated mock dependencies. The
+  mock Cohere endpoint returns one embedding row, and the turn passes only when
+  the vector that reached the RAG server is exactly that row, flat.
+
+  The comparison is against the RAG mock's recorded request body rather than
+  against the answer, and that is the whole design. A turn answers 200 whether
+  the vector arrived flat, nested one level deeper, or serialized as text: the
+  RAG mock returns its canned chunk whichever it was, and the Cohere mock
+  composes the same brief over it. An answer assertion here would pass with the
+  unwrap word deleted, which makes it evidence of nothing.
+
+  The drive runs on the way into Reading so its signal decides whether the log
+  is read at all, and each later word runs on the way into the state that
+  consumes its output, for the same reason.
+configuration:
+  machine: machine.yaml
+  tools: tools.yaml
+initial_state: Idle
+budget:
+  command_timeout: 2m
+  max_iterations: 10
+states:
+  - name: Idle
+    meaning: Before the chatbot is driven.
+  - name: Reading
+    meaning: The turn has run; the RAG mock's request log is being read.
+  - name: Capturing
+    meaning: The recorded request bodies are being rendered into one comparable string.
+  - name: Asserting
+    meaning: The recorded query body is being compared against the flat vector.
+  - name: Passed
+    run_status: succeeded
+    meaning: Terminal. The query vector reached the RAG server flat.
+  - name: Failed
+    run_status: failed
+    meaning: Terminal. The turn did not answer, or the vector did not arrive flat.
+terminal_states: [Passed, Failed]
+signals:
+  - name: Seed
+    trigger: Loop initialization.
+  - name: SubjectAnswered
+    trigger: The chatbot returned an answer for the turn.
+  - name: SubjectBroke
+    trigger: The chatbot reported a command error.
+  - name: RagLogRead
+    trigger: The RAG mock returned its recorded requests.
+  - name: RagQueryBodyCaptured
+    trigger: The recorded request bodies were rendered.
+  - name: QueryVectorFlat
+    trigger: The recorded query body is exactly the flat embedding row.
+  - name: QueryVectorMalformed
+    trigger: The recorded query body differs, so the vector arrived nested, serialized, or from another source.
+  - name: CommandError
+    trigger: The chatbot or the mock was unreachable, or a value could not be read.
+transitions:
+  - state: Idle
+    signal: Seed
+    next: Reading
+    action: drive_chat_turn
+  - state: Reading
+    signal: SubjectAnswered
+    next: Capturing
+    action: read_rag_request_log
+  - state: Reading
+    signal: SubjectBroke
+    next: Failed
+  - state: Reading
+    signal: CommandError
+    next: Failed
+  - state: Capturing
+    signal: RagLogRead
+    next: Asserting
+    action: capture_rag_query_body
+  - state: Capturing
+    signal: CommandError
+    next: Failed
+  - state: Asserting
+    signal: RagQueryBodyCaptured
+    next: Asserting
+    action: assert_query_vector_flat
+  - state: Asserting
+    signal: QueryVectorFlat
+    next: Passed
+  - state: Asserting
+    signal: QueryVectorMalformed
+    next: Failed
+  - state: Asserting
+    signal: CommandError
+    next: Failed

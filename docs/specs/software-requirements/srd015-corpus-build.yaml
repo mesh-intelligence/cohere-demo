@@ -1,0 +1,274 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd015-corpus-build
+title: Corpus Build with Cached Embeddings
+
+role_realization_decision:
+  current_actor: corpus build
+  implemented_responsibility: Chunk the synthetic corpus, compute each chunk's embedding once through the declared provider, and write the chunk beside its vector and its metadata to a store the demo seeds from.
+  canonical_role_sub_role: Knowledge Manager / Ontology Manager -- it prepares and structures the corpus the retrieval agents serve, and asserts nothing about how they serve it.
+  retained_or_proposed_name: >-
+    No new agent. The build is an offline target alongside the existing mage
+    targets, not a profile on the runtime. corpus-ingest remains the canonical
+    ingest agent and its machine is unaltered; it still writes the collection on
+    the agent-driven path `mage seed` and `mage integration:chroma` take. The
+    demo seed reads the store and writes the collection directly, which is the
+    seam rel10.4 chose under the R5.5 bound -- a REST-client operation cannot
+    read a local file, so the configured-operation seam does not reach a stored
+    vector, and a new catalog word would need an upstream change.
+  authority_boundary: The build reads corpus documents and writes a store. It holds no authority over any running agent, collection, or cluster, and it SHALL NOT alter the turn, the ingest machine, or the retrieval path it feeds.
+  evidence: [docs/road-map.yaml rel10.4, srd015 R1-R6]
+  migration_impact: >-
+    None to any agent profile or machine. What changes on the demo path is which
+    component writes the collection and where the vector it writes comes from.
+    The records written, the collection identity and dimension rules, and
+    everything the rag-server reports about the collection it serves are
+    unchanged, which is the boundary R5.5 draws.
+
+context: |
+  Before this release the mesh embedded its corpus every time it seeded.
+  corpus-ingest lists the documents, calls the configured embedding operation on
+  each one, and threads the returned vector into the Chroma add. That is the
+  right shape for an ingest agent and the wrong shape for a demonstration: every
+  `demo:up` cycle re-embedded
+  the whole corpus at the provider, so the cost of showing the system scales with
+  how often it is shown, and a demo without a reachable provider cannot start at
+  all.
+
+  It is also the wrong shape for what the plan releases need from the corpus.
+  rel11.0 filters on a clearance tag, rel11.5 selects by keyword and source
+  facets, rel12.2 checks the brief's source-evaluation table against Admiralty
+  ratings, and rel13.0 measures recall against relevant sets labeled over these
+  documents. Every one of those reads metadata that has to be a property of the
+  document, decided when the corpus was authored. Derived at ingest, it would be
+  a property of whatever ran the ingest.
+
+  rel10.4 moves both concerns off the seeding path. An offline build chunks the
+  corpus, embeds each chunk once, and writes the chunk, its vector, and its
+  metadata to a store on disk. Seeding reads that store. The provider is called
+  during the build and not during the demo, and the metadata downstream releases
+  filter and select on travels with the chunk rather than being reconstructed.
+
+  The store holds vectors from more than one embedding family at once, keyed by
+  the model identity that produced them. That is not generality for its own sake:
+  the mesh already runs an Ollama family and a Cohere family, srd002 R3.3 excludes
+  any source whose reported identity differs from the query vector's, and Chroma
+  pins a collection's dimension at creation, so repointing the family is a full
+  reseed. Keying by identity makes the repoint a choice of which stored vectors to
+  seed rather than a rebuild.
+
+problem: |
+  Caching embeddings sounds like a build-time optimization and is not. Three
+  things go wrong if the store is specified as one.
+
+  The first is drift between the vector that was stored and the vector the mesh
+  expects. A stored vector carries no signal about which model produced it, and a
+  collection seeded from vectors of one family while the chatbot embeds queries
+  with another still answers -- with every source excluded by the identity
+  comparison and a fluent brief composed from nothing. This has already happened
+  on the live path once, which is why demo:verify reads the reported identity
+  rather than the composed answer. A store that does not record identity moves
+  that failure earlier and hides it better.
+
+  The second is metadata provenance. A chunk's clearance level is the input to an
+  access control, and the whole argument of srd010 is that the tag comes from a
+  document's declared classification rather than from content something read. A
+  build that infers a clearance from chunk text to fill a required field would
+  satisfy the schema and defeat the release that reads it. The same holds, less
+  dangerously, for the Admiralty rating: a rating a model assigned is not a source
+  evaluation, and rel12.2 checks the brief's table against these rows.
+
+  The third is what the corpus has to contain. Downstream releases do not need
+  documents; they need conditions. rel11.0 needs a document above the lower
+  clearance level or its tracer proves nothing. srd014 R1.3 needs relevant
+  documents that embedding retrieval ranks below the cutoff, or the measured
+  difference Rerank is supposed to make has nowhere to appear. A corpus authored
+  without those conditions in the specification produces a demonstration where
+  every release passes and none of them is exercised.
+
+goals:
+  - G1: Define the synthetic corpus -- its document schema and the retrieval conditions downstream releases depend on -- as a specified artifact rather than as whatever content the build happened to be given.
+  - G2: Define the on-disk chunk record, carrying the chunk beside its vector and the metadata rel11.0, rel11.5, and rel12.2 read, with that metadata declared by the document rather than inferred from it.
+  - G3: Store vectors under their embedding-model identity, so families coexist in one store, a repoint selects rather than rebuilds, and a seeded collection's identity is decidable against what the store wrote.
+  - G4: Define an offline, idempotent build that calls the embedding provider once per chunk and identity, and never writes a partial record.
+  - G5: Seed from the store, so starting the demo costs no provider spend, needs no reachable embedding provider, and changes nothing about how the collection is written or served.
+  - G6: Bound what the store is, keep the evaluation labels out of it, and keep its synthetic nature attached to every figure measured over it.
+
+requirements:
+  R1:
+    title: Synthetic corpus content and schema
+    items:
+      - R1.1: Each corpus document SHALL declare, as front matter separate from its prose body, a source identifier, a source type, a clearance level, an Admiralty source-reliability and information-credibility rating, and keywords.
+      - R1.2: The corpus SHALL span more than one source type -- HUMINT summaries, OSINT extracts, and signals reporting -- so a tasking's relevant documents sit across sources rather than within one.
+      - R1.3: The corpus SHALL span the declared clearance levels (srd010 R1.1) and SHALL hold at least one document above the lowest level for every level pair the rel11.0 access-control assertion iterates, so the withheld document exists rather than being assumed.
+      - R1.4: Every document SHALL carry an Admiralty rating on both axes, because the ministry form's source-evaluation table is populated from these rows and rel12.2 checks the brief against them rather than against a rating produced at composition time.
+      - R1.5: The corpus SHALL be sized so that a retrieval cutoff bites, holding enough documents relevant to a tasking that some of them fall below the top-N a turn passes to composition, which is the condition srd014 R1.3 states and the only one under which the srd009 R5 rerank contribution is measurable rather than asserted.
+      - R1.6: The corpus SHALL be clearly fictional by construction -- invented units, places, and events -- and SHALL contain no real classified, personal, or operational content.
+  R2:
+    title: Chunk records on disk
+    items:
+      - R2.1: The build SHALL chunk each document into retrieval units and SHALL write each chunk as a record in YAML on disk.
+      - R2.2: Each chunk record SHALL carry the chunk text, its vectors, and its metadata -- source identifier, source type, keywords, clearance level, and Admiralty rating -- so the metadata travels with the chunk rather than being rejoined from the document at seed time.
+      - R2.3: Chunk metadata SHALL be copied from the document's declared front matter and SHALL NOT be inferred from chunk content by a model, for the reason srd010 R1.2 gives, that something which reads a document to decide how restricted it is has already read it.
+      - R2.4: Each chunk record SHALL carry an identifier derived from its source document and its position within that document, so a rebuild over an unchanged document yields the same identifier and a reseed overwrites the record rather than adding a second copy of it.
+      - R2.5: A chunk whose source document declares no clearance level, or one outside the declared ordered set, SHALL be written at the highest declared level rather than the lowest (srd010 R1.3), so an authoring omission withholds a document rather than exposing it.
+  R3:
+    title: Vectors keyed by embedding-model identity
+    items:
+      - R3.1: A chunk's vectors SHALL be stored keyed by embedding-model identity, so vectors produced by more than one embedding family coexist on the same chunk record.
+      - R3.2: The identity recorded SHALL be the embedding-model name the rag-server reports in its query response metadata (srd001 R2.3), so the srd002 R3.3 comparison between the query vector's family and the served collection's is decidable against what the store wrote rather than against a separate naming.
+      - R3.3: A build SHALL compute a vector only for a chunk and identity pair the store does not already hold. A build over an unchanged corpus at an unchanged identity SHALL issue zero embedding requests.
+      - R3.4: A change of embedding family SHALL cause the build to compute and store that family's vectors, and SHALL NOT discard, overwrite, or invalidate the vectors already stored under other identities.
+      - R3.5: Each stored identity SHALL record its vector dimension, because Chroma pins a collection's dimension at creation and a family repoint is therefore a full reseed against a dropped collection rather than an append (rel10.3-uc001).
+  R4:
+    title: Offline build pipeline
+    items:
+      - R4.1: The build SHALL run offline, ahead of and independently of any running mesh, cluster, or Chroma instance, so building the store and seeding from it are separable in time and in failure.
+      - R4.2: The build SHALL embed through the same declared Cohere client and embed operation the mesh uses (srd009 R1.1, R1.5, R2.2) rather than through a client of its own, so stored vectors and query vectors come from one declared configuration and one allowlisted egress.
+      - R4.3: The build SHALL be idempotent, so re-running it over an unchanged corpus at an unchanged embedding identity SHALL leave the store unchanged.
+      - R4.4: An embedding failure SHALL fail the build with the failing chunk named, and SHALL NOT write a record whose vector is absent, truncated, or recorded under an identity that did not produce it. A partially embedded store is the condition R3.3 would then read as already held.
+      - R4.5: A build SHALL record the corpus version it read and every embedding identity it wrote, so a store names what produced it.
+  R5:
+    title: Seeding from the store
+    items:
+      - R5.1: Demo seeding SHALL obtain each chunk's vector from the store rather than computing it, selecting the vectors whose recorded identity matches the embedding model the deployed release declares.
+      - R5.2: A seed run against a store holding the deployed identity SHALL issue no embedding-provider request, so starting the demo costs no provider spend and requires no reachable embedding provider.
+      - R5.3: Seeding SHALL write each chunk's stored metadata onto the collection record, so the clearance tag rel11.0 filters on and the facets rel11.5 selects by arrive from the build rather than being derived at ingest.
+      - R5.4: A seed whose store holds no vectors for the deployed embedding identity SHALL fail, naming the identity it wanted and the identities the store holds. It SHALL NOT fall back to computing them, because a silent fallback restores both the spend and the identity drift the store exists to remove.
+      - R5.5: Substituting the stored vector SHALL NOT alter the canonical ingest machine's listing, chunking, or threading behavior (srd001 R4.1), the collection identity and dimension rules a family repoint follows (rel10.3-uc001), or anything the rag-server reports about the collection it serves.
+  R6:
+    title: Store scope and reproducibility
+    items:
+      - R6.1: The store SHALL be a versioned artifact, split by licence verdict (srd017 R9.7) -- tiers whose verdict is publishable are versioned in this repository, and tiers whose verdict is keep-private are versioned in the private data repository and read together with the tracked tiers as one store. A clone of this repository alone SHALL seed and run the demo over the publishable tiers without provider access and without first running a build; a clone with the private data checkout beside it SHALL seed the full corpus the same way.
+      - R6.2: The store SHALL name its corpus version and the identities it holds, so a seeded collection is attributable to the store that produced it and two stores are comparable only when both match.
+      - R6.3: The store SHALL be text a reviewer reads without running anything, so that the chunk, its metadata, and each vector's identity are legible in the file, and a vector is a sequence of numbers rather than an encoded blob.
+      - R6.4: The store SHALL hold the retrieval corpus only. It SHALL NOT carry taskings, labeled relevant sets, or expected answers; the labeled evaluation corpus is srd014 R1 and is built over these documents rather than inside this store.
+      - R6.5: The store and its documents SHALL identify the corpus as synthetic in the artifact itself rather than only in surrounding prose, so a figure measured over it carries the qualification srd014 R6.1 requires wherever the figure is read.
+
+non_goals:
+  - Author the taskings, the labeled relevant sets, or the evaluation harness. srd014 owns the measurement, and rel13.0 builds the labels over these documents.
+  - Enforce clearance. The build writes the tag; the filter that reads it before the vector search is srd010 and rel11.0.
+  - Define the ministry form or its source-evaluation table. The build supplies the Admiralty rows; srd016 and rel11.5 define the form that displays them.
+  - Retrieve, rerank, or compose. The store is an input to the turn and changes no turn behavior, no agent profile, and no machine.
+  - Replace corpus-ingest or alter the canonical ingest machine. The agent keeps its profile, its machine, and the agent-driven seed path; the demo seed writes the collection beside it rather than through it, and R5.5 bounds what that substitution may change.
+  - Fix the chunk size, overlap, or tokenizer as normative values. R2.1 requires chunking; the parameters are build configuration recorded with the store under R4.5.
+  - Decide whether the store is read by a new catalog word, a configured operation, or the seed target itself. The requirements are behavioral, and the seam is an implementation choice rel10.4 makes.
+  - Define Go package or file layout for the build.
+  - Provision an in-boundary Cohere deployment. R4.2 embeds through the declared client whose base URL is srd009 R1.2 configuration.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: The corpus documents declare source identifier, source type, clearance, Admiralty rating on both axes, and keywords as front matter; span multiple source types and the declared clearance levels with a document above the lower level of every pair rel11.0 iterates; hold relevant documents that fall below the composition top-N; and are clearly fictional with no real classified, personal, or operational content.
+    traces: [R1.1, R1.2, R1.3, R1.4, R1.5, R1.6]
+  - id: AC2
+    criterion: Each chunk is written to disk as a YAML record carrying its text, its vectors, and its metadata copied from the document's declared front matter rather than inferred from content, under an identifier derived from source and position so a rebuild overwrites rather than duplicates, with an absent or unrecognized clearance written at the highest declared level.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5]
+  - id: AC3
+    criterion: Vectors are keyed by the embedding-model identity the rag-server reports, more than one family coexists on a chunk record with each identity's dimension recorded, a build at an already-held identity issues zero embedding requests, and a family change adds vectors without discarding those stored under other identities.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5]
+  - id: AC4
+    criterion: The build runs offline against no cluster, embeds through the mesh's own declared Cohere client and operation, leaves an unchanged store when re-run over an unchanged corpus at an unchanged identity, fails with the chunk named rather than writing a partial or misattributed record, and records the corpus version and the identities it wrote.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5]
+  - id: AC5
+    criterion: A demo seeded from the store loads each chunk's stored vector and metadata for the deployed embedding identity, issues no embedding-provider request, writes the clearance and facet metadata onto the collection record, fails with both identities named rather than falling back when the store holds no vectors for the deployed identity, and leaves the ingest machine's listing, chunking, and threading behavior and the collection's identity and dimension rules unchanged. This is the rel10.4 tracer, in which a build produces chunk records carrying vector and metadata, and a demo seeded from them answers a tasking without calling the embedding provider.
+    traces: [R5.1, R5.2, R5.3, R5.4, R5.5]
+  - id: AC6
+    criterion: The store is a versioned artifact split by licence verdict -- publishable tiers in this repository, keep-private tiers in the private data repository, read as one store -- that names its corpus version and held identities, is legible text down to the vector, carries the retrieval corpus alone with taskings and labels left to srd014, and identifies the corpus as synthetic in the artifact rather than only in accompanying prose. A clone of this repository alone seeds the publishable tiers without provider access or a build.
+    traces: [R6.1, R6.2, R6.3, R6.4, R6.5]
+
+depends_on:
+  # R4.2 embeds through the declared Cohere client and its embed operation, and
+  # R3.2 records the identity R2.2 fixes for the mesh. The build observes both
+  # and changes neither.
+  - srd_id: srd009-cohere-provider
+    symbols_used: [R1, R2]
+  # R3.2 records the identity the query response reports, and R5.5 holds the
+  # ingest boundary R4.1 draws between serving and loading.
+  - srd_id: srd001-rag-server-agent
+    symbols_used: [R2, R4]
+  # R2.3 and R2.5 write the clearance tag under the provenance and fail-closed
+  # rules srd010 R1 states, so the filter rel11.0 adds reads a tag that already
+  # means what it has to mean.
+  - srd_id: srd010-clearance-gated-retrieval
+    symbols_used: [R1]
+  # R1.5 supplies the below-cutoff relevant documents srd014 R1.3 requires, and
+  # R6.4 and R6.5 keep the labels out of this store and the synthetic
+  # qualification attached to every figure measured over it.
+  - srd_id: srd014-evaluation
+    symbols_used: [R1, R6]
+
+implementation_status:
+  implemented:
+    - >-
+      R1 through R4 and R6: the synthetic Sable Strait corpus under corpus/ with
+      its declared front matter and the ordered clearance set, and mage
+      corpus:build, which chunks the corpus, embeds each chunk once through the
+      declared client, and writes YAML chunk records carrying the text, the
+      copied metadata, and the vectors keyed by embedding-model identity with
+      each identity's dimension recorded. A rebuild at an already-held identity
+      issues zero requests and leaves the store byte-identical, a second family
+      lands without displacing the first, and an embedding failure names its
+      chunk and writes no partial record. mage integration:corpusBuild is the
+      evidence.
+    - >-
+      R5.1 through R5.4: demo:seed reads the store, selects the vectors recorded
+      under the identity the deployed release declares, writes them with their
+      stored metadata, and calls no embedding provider. A store lacking the
+      deployed identity fails the seed naming both rather than embedding the
+      corpus to recover.
+    - >-
+      R5.5 and the tracer's second half. mage integration:corpusBuild stands two
+      rag-servers and the chatbot over the collection it seeded from the
+      committed records and serves the corpus's primary tasking against them.
+      The identity the store recorded, the identity the collection is served
+      under, and the identity the response reports for its query vector are
+      compared as one value, the embedding-excluded partition is required empty,
+      and the answer is held to the documents its sources composed from rather
+      than to its prose. The turn's single embedding request is counted at a
+      proxy forwarding to the declared provider, which the seed's recording
+      stand-in cannot do because it answers with a fabricated vector.
+    - >-
+      R6.1 over both families and both locations. The store carries the Ollama
+      qwen3-embedding:8b and the Cohere embed-v4.0 over the same records, so a
+      clone seeds either tier without provider access and without first running
+      a build. Each identity records the provider that produced it, and a build
+      at one family copies that provenance forward for the others. Since
+      GH-910, the store is read as the union of the tracked location and the
+      private data checkout (corpus_split.go): publishable tiers tracked here,
+      keep-private tiers versioned in mesh-intelligence/cohere-demo-data, with
+      verdict-routed writes, a duplicate-document refusal, and a full-corpus
+      guard on the targets whose evidence is the whole corpus.
+  retired:
+    - >-
+      The synthetic Sable Strait corpus, the flat chunk store it was written to,
+      and the mage integration:corpusBuild target that traced it, all retired at
+      rel10.5 when the Ukraine corpus replaced it (srd017 R9.1). Nothing this
+      document requires is withdrawn with them: the offline build, the identity
+      keying, the seed that calls no provider, and the metadata copied from
+      declared values rather than inferred from content are all unchanged, and
+      mage integration:demoCorpus traces them over the corpus that replaced it.
+      What is gone is one corpus and the tracer pointed at it.
+  planned:
+    - >-
+      The labeled relevant sets over these documents are authored with rel13.0
+      (srd014 R1), and the clearance filter that reads the tag this build writes
+      is rel11.0 (srd010 R2).
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: Seeding re-embeds every cycle, and the metadata downstream releases read has to be declared by the document rather than derived at ingest"] --> Goals["Goals: Corpus Build with Cached Embeddings"]
+      Goals --> R1["R1: Synthetic corpus content and schema"]
+      Goals --> R2["R2: Chunk records on disk"]
+      Goals --> R3["R3: Vectors keyed by embedding-model identity"]
+      Goals --> R4["R4: Offline build pipeline"]
+      Goals --> R5["R5: Seeding from the store"]
+      Goals --> R6["R6: Store scope and reproducibility"]
+      R1 --> AC1["AC1: multi-source, multi-clearance, Admiralty-rated, below-cutoff, fictional"]
+      R2 --> AC2["AC2: chunk beside vector and declared metadata, stable ids, fail-closed clearance"]
+      R3 --> AC3["AC3: families coexist by identity, re-embed only on change"]
+      R4 --> AC4["AC4: offline, idempotent, one client, no partial record"]
+      R5 --> AC5["AC5: seed from disk, provider uncalled, ingest unchanged (rel10.4 tracer)"]
+      R6 --> AC6["AC6: versioned, legible, corpus only, synthetic on its face"]
+    ```

@@ -1,0 +1,209 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: cohere-embed-malformed-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - declarations-types.yaml
+tools:
+  - name: drive_chat_turn
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Post one tasking to a chatbot whose embedding provider returns two rows for one text.
+    problem: A malformed query vector must stop the turn rather than reach the fan-out.
+    goals:
+      - Post a tasking and report whether the turn broke or answered.
+    requirements:
+      input:
+        - Tool config fixes the operation; the tasking is literal fixture data.
+      output:
+        - Output reports the turn outcome.
+      errors:
+        - An unreachable subject emits CommandError, which is distinct from the subject reporting a command error.
+    non_goals:
+      - Does not inspect the vector; that the turn stopped is the assertion.
+    output:
+      description: The chatbot's turn response.
+    side_effects:
+      - kind: external_api
+        target: chatbot.chat
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A chat turn against mocks changes nothing durable.
+    config:
+      rest_ref: subject
+      operation: chat_turn
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SubjectAnswered, message: builtin.Message<cohere-embed-malformed-declarations-types.DriveChatTurnOutput>}
+        - {signal: SubjectBroke, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: read_embed_request_log
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Read the request log the embedding mock recorded during the turn.
+    problem: |
+      A turn that never reached the provider fails identically to one whose
+      vector was rejected, and the Failed terminal reports command_error for
+      both. The mock's own record of what it served is where the two separate.
+    goals:
+      - Fetch the recorded request count so the assertion can compare it.
+    requirements:
+      input:
+        - Tool config fixes the operation; nothing is read from a previous result.
+      output:
+        - Output reports the recorded request count.
+      errors:
+        - An unreachable mock emits CommandError.
+    non_goals:
+      - Does not interpret the count; the assertion word does that.
+    output:
+      description: The embedding mock's recorded request count.
+    side_effects:
+      - kind: external_api
+        target: cohere_mock.log
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a log changes no external state.
+    config:
+      rest_ref: cohere_mock
+      operation: read_embed_log
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: EmbedLogRead, message: builtin.Message<cohere-embed-malformed-declarations-types.ReadEmbedRequestLogOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: assert_embed_called_once
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Compare the embedding mock's recorded request count against one.
+    problem: |
+      Zero requests means the turn stopped before it embedded, which is a fault
+      this scenario is not about and must not pass as one. More than one means
+      the turn retried, which the machine does not declare and which would make
+      the count an unreliable witness.
+    goals:
+      - Pass only when the turn reached the provider exactly once.
+    requirements:
+      input:
+        - The count is read from the mapped read_embed_request_log output.
+      output:
+        - EmbedCalledOnce when the count is one; EmbedCallCountWrong otherwise.
+      errors:
+        - An unresolvable or uncoercible count emits CommandError.
+    non_goals:
+      - Does not establish where the turn stopped after embedding; the RAG log does that.
+    output: {description: Comparison outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparing a value changes no external state.}
+    config:
+      # One, not "at least one": the turn embeds once and stops, so the chat
+      # route this mock also serves is never reached. A second entry here would
+      # mean the turn continued past the rejection.
+      left: $from(read_embed_request_log).body.mapped.count
+      op: eq
+      right: "1"
+      operand_type: number
+      satisfied: EmbedCalledOnce
+      unsatisfied: EmbedCallCountWrong
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: EmbedCalledOnce, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: EmbedCallCountWrong, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: read_rag_request_log
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Read the request log the first RAG mock recorded during the turn.
+    problem: |
+      Reaching the provider is not the same as stopping there. A fault after the
+      fan-out also leaves one embedding call recorded, and the RAG mock's log is
+      what separates a turn that stopped at the validation word from one that
+      carried past it.
+    goals:
+      - Fetch the recorded request count so the assertion can compare it.
+    requirements:
+      input:
+        - Tool config fixes the operation; nothing is read from a previous result.
+      output:
+        - Output reports the recorded request count.
+      errors:
+        - An unreachable mock emits CommandError.
+    non_goals:
+      - Does not read the recorded bodies; the count is the assertion.
+    output:
+      description: The RAG mock's recorded request count.
+    side_effects:
+      - kind: external_api
+        target: rag0_mock.log
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a log changes no external state.
+    config:
+      rest_ref: rag0_mock
+      operation: read_rag_log
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RagLogRead, message: builtin.Message<cohere-embed-malformed-declarations-types.ReadRagRequestLogOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: assert_rag_untouched
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Compare the RAG mock's recorded request count against zero.
+    problem: |
+      A malformed vector reaching the fan-out is the failure this scenario
+      guards against, and it is silent: the mock answers its canned chunk
+      whatever was queried, so the turn composes a confident brief over a
+      retrieval that meant nothing.
+    goals:
+      - Pass only when no source was queried.
+    requirements:
+      input:
+        - The count is read from the mapped read_rag_request_log output.
+      output:
+        - RagUntouched when the count is zero; RagQueried otherwise.
+      errors:
+        - An unresolvable or uncoercible count emits CommandError.
+    non_goals:
+      - Does not inspect what was queried; that any query happened is the failure.
+    output: {description: Comparison outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparing a value changes no external state.}
+    config:
+      left: $from(read_rag_request_log).body.mapped.count
+      op: eq
+      right: "0"
+      operand_type: number
+      satisfied: RagUntouched
+      unsatisfied: RagQueried
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RagUntouched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: RagQueried, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

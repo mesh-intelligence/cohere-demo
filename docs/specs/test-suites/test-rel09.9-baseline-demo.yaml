@@ -1,0 +1,100 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel09.9-baseline-demo
+title: Test Suite for Release 09.9 Baseline Demo From the Repository Root
+release: "09.9"
+
+traces: [rel09.9-uc001-baseline-demo]
+
+preconditions:
+  - The application manifest identity equals the repository directory name, so the shared composition resolver runs from the root.
+  - A sibling declarative-agents checkout exists and demo.yaml core_root and catalog_root point at it.
+  - Host Ollama holds the embedding and chat models the demo values declare.
+  - The pinned da-platform is running (mage platform:up), and no port-forward holds the integration ports.
+
+test_cases:
+  - use_case: rel09.9-uc001-baseline-demo
+    name: The application composition resolves from the repository root
+    go_test: go test ./magefiles -run '^TestManifestDerivedPackageClosure$'
+    status: implemented
+    description: The shared resolver loads agents/application.yaml with the repository root as the application root and returns a deterministic closure, which it refuses to do when the identity and the directory name disagree.
+    expected:
+      composition_resolves: true
+      identity_matches_root: true
+      closure_deterministic: true
+    traces:
+      - rel09.9-uc001-baseline-demo S1
+      - srd003-chatbot-deployment AC1
+
+  - use_case: rel09.9-uc001-baseline-demo
+    name: The application deploys onto da-platform and serves both ingresses
+    integration_target: mage demo:up
+    status: implemented
+    description: demo:up runs doctor as a preflight, brings up or re-proves the pinned da-platform, and app:up builds the runtime image, deploys the chart with the ci values into app-cohere-demo through the catalog applier, and waits for the chatbot, observer, and telemetry ingresses to answer 200.
+    expected:
+      exit_code: 0
+      chatbot_ingress_status: 200
+      observer_ingress_status: 200
+      pods_running: true
+    traces:
+      - rel09.9-uc001-baseline-demo S2
+      - srd003-chatbot-deployment AC1
+      - srd003-chatbot-deployment AC6
+
+  - use_case: rel09.9-uc001-baseline-demo
+    name: Every declared RAG unit is seeded and rebinds its collection
+    integration_target: mage app:seed
+    status: implemented
+    description: app:seed port-forwards each RAG unit's in-cluster Chroma, ingests the corpus, restarts the rag-server so it rebinds the seeded collection, and tears the forward down. A Chroma it cannot reach fails the target rather than skipping.
+    expected:
+      exit_code: 0
+      units_seeded: all_declared
+      rag_server_restarted: true
+      unreachable_chroma_fails: true
+    traces:
+      - rel09.9-uc001-baseline-demo S3
+      - srd001-rag-server-agent AC4
+
+  - use_case: rel09.9-uc001-baseline-demo
+    name: A tasking returns an answer with composed sources
+    integration_target: mage app:verify
+    status: implemented
+    description: A tasking posted to /api/v1/chat returns 200 and the response metadata reports composed sources carrying retrieved documents, which is the server's own account of which chunks reached the answer prompt.
+    expected:
+      http_status: 200
+      composed_sources_non_empty: true
+      composed_documents_retrieved: true
+      attribution_source: metadata.sources.composed
+    traces:
+      - rel09.9-uc001-baseline-demo S4
+      - srd001-rag-server-agent AC2
+      - srd002-chatbot-agent AC1
+      - srd002-chatbot-agent AC3
+
+  - use_case: rel09.9-uc001-baseline-demo
+    name: The verification fails an unseeded cluster and says why
+    go_test: go test ./magefiles -run '^TestDemoVerifyAcceptsComposedSourcesCarryingDocuments$|^TestDemoVerifyRejectsComposedSourcesThatRetrievedNothing$|^TestDemoVerifyRejectsEmptyComposedAndNamesTheSiblingLists$|^TestDemoVerifyRejectsNonOKStatusWithTheStatusAndBody$|^TestDemoVerifyRejectsUndecodableBody$|^TestDemoVerifyExcerptBoundsAnUnexpectedBody$|^TestDemoVerifyNamesAnUnnamedComposedSourceByIndex$'
+    status: implemented
+    description: The decode-and-assert helper passes a response whose composed sources carry documents; fails one whose composed list is empty; fails one that composed sources which retrieved nothing, the shape an unseeded cluster returns, and points at app:seed; fails a non-200 while carrying the status; and fails a body that does not decode without panicking.
+    expected:
+      composed_response_passes: true
+      empty_composed_fails: true
+      composed_without_documents_fails: true
+      sibling_lists_named: true
+      non_200_carries_status: true
+    traces:
+      - rel09.9-uc001-baseline-demo S5
+      - srd002-chatbot-agent AC3
+
+  - use_case: rel09.9-uc001-baseline-demo
+    name: The application tears down cleanly
+    integration_target: mage demo:down
+    status: implemented
+    description: demo:down (app:down) removes the release and its namespace through the catalog applier, leaving no release for a later run to reuse and mask a broken install, and keeps the platform and the telemetry bucket.
+    expected:
+      exit_code: 0
+      namespace_absent: true
+      platform_running: true
+    traces:
+      - rel09.9-uc001-baseline-demo S6
+      - srd003-chatbot-deployment AC1

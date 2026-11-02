@@ -1,0 +1,34 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Cohere v2 chat endpoint, claiming these behaviors:
+# - POST /v2/chat returns message.content as an ordered block array, which the
+#   compose_brief response mapping reads and capture_brief joins.
+# - message.citations is present and empty here; rel10.1 is what surfaces it.
+# Two content blocks rather than one: the critic compares against their joined
+# text, so a capture word that took the first block and dropped the rest fails.
+# The live target validates these claims against the real provider.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-1
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject. "
+              - type: text
+                text: "GAPS: no reporting addresses timelines."
+            citations: []

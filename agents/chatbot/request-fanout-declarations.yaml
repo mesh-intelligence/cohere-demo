@@ -1,0 +1,2965 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Source-count-independent multi-RAG fan-out. The query result shape is the
+# shared retrieval contract (declarative-agents srd060); this application's
+# clearance_enforced_at rides beside it, and the clearance-bearing operations
+# themselves stay local because clearance is outside the shared fragment.
+kind: tool-declaration
+schema_version: 1
+unit: cohere-chatbot-request-fanout-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - /opt/agent-core/tools/units/types-retrieval.yaml
+  - request-fanout-declarations-types.yaml
+tools:
+  - name: rag_query
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Query the currently bound RAG source with the message vector.
+    problem: The chatbot must fan one embedding out over an ordered runtime topology without one word per source.
+    goals:
+      - Read the selected RAG authority from the trusted for_each item binding.
+      - Return chunks and the source's reported embedding model.
+    requirements:
+      input:
+        - The query embedding and current topology item are selected from command state.
+      output:
+        - Output includes ids, documents, distances, and embedding_model.
+      errors:
+        - A mapped 400 emits QueryRejected; transport and mapping failures emit CommandError.
+    non_goals:
+      - Does not accept a model-authored URL, method, credential, or operation.
+    output:
+      description: Mapped RAG query response.
+    side_effects:
+      - {kind: external_api, target: rag_server.query, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Querying a RAG source does not mutate it.}
+    config:
+      rest_ref: rag
+      operation: query
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryResponded, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.RagQueryOutput>}
+        - {signal: QueryRejected, message: builtin.Message<builtin.Text>}
+        - {signal: ClearanceRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_query_faceted
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Query the currently bound RAG source with the message vector under the analyst's facet constraints.
+    problem: A faceted turn must fan the same embedding out over the same topology while carrying the facets to the boundary that conjoins them under the clearance window (srd016 R4.2).
+    goals:
+      - Read the selected RAG authority from the trusted for_each item binding.
+      - Carry the facet constraint and keyword to the retrieval tier's faceted boundary.
+      - Return chunks, their metadata, and the source's reported embedding model.
+    requirements:
+      input:
+        - The query embedding, facet constraints, and current topology item are selected from command state.
+      output:
+        - Output includes ids, documents, distances, metadatas, and embedding_model.
+      errors:
+        - A mapped 400 emits QueryRejected; transport and mapping failures emit CommandError.
+    non_goals:
+      - Does not accept a model-authored URL, method, credential, or operation.
+      - Does not compose the clearance filter; the retrieval tier conjoins it (srd016 R4.3).
+    output:
+      description: Mapped RAG query response.
+    side_effects:
+      - {kind: external_api, target: rag_server.query, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Querying a RAG source does not mutate it.}
+    config:
+      rest_ref: rag
+      operation: query_faceted
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryResponded, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.RagQueryFacetedOutput>}
+        - {signal: QueryRejected, message: builtin.Message<builtin.Text>}
+        - {signal: ClearanceRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_facets
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether this turn carries retrieval facets.
+    problem: |
+      The plain and faceted fan-outs are different operations against different
+      boundaries, and a machine branches on signals. A turn with no facets must
+      take the plain leg unchanged (srd016 R4.4), so the presence check is a
+      word rather than a field a template branches around.
+    goals:
+      - Send a turn with no facets down the plain query leg it takes today.
+      - Send a turn carrying facets down the faceted leg.
+    requirements:
+      input:
+        - The facets ride the embed carry and are read through the shared query_embedding label.
+      output:
+        - Output is the emptiness outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not validate the facet shape; the chat boundary's schema owns that.
+    output: {description: Facet presence outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $from(query_embedding).body.carried.facets
+      # empty is satisfied by null as well as by an empty object, and an absent facets field seeds the carry as null, so the unfaceted turn -- and any caller predating the facet contract -- lands on the plain leg.
+      op: empty
+      satisfied: FacetsAbsent
+      unsatisfied: FacetsPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FacetsAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: FacetsPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_proposed_tiers
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the source selection proposed collection tiers.
+    problem: With no analyst facets, a selection that proposed tiers takes the faceted leg (GH-694); the machine branches on signals, so the emptiness check is a word.
+    goals:
+      - Route a tierless turn down the plain leg unchanged.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: Tier-proposal outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      left: $from(parsed_selection).body.source_types
+      op: empty
+      satisfied: TiersAbsent
+      unsatisfied: TiersProposed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: TiersAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: TiersProposed, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_proposed_window
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the selection proposed a reporting window.
+    problem: A tier selection may also bound the dates (GH-730).
+    goals:
+      - Route a windowless selection to the plain tier leg.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: Window outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      left: $from(parsed_selection).body.date_from
+      op: empty
+      satisfied: WindowAbsent
+      unsatisfied: WindowProposed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: WindowAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: WindowProposed, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: publish_analyst_facets
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Republish the analyst's facets under the shared retrieval-facets label.
+    problem: Both facet legs feed one faceted query op, so both publish one label (GH-694); the analyst's facets always win.
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: The facet payload.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: AnalystFacetsPublished
+      inputs:
+        facet_where: $from(query_embedding).body.carried.facets.facet_where
+        keyword: $from(query_embedding).body.carried.facets.keyword
+      template: '{"facet_where": {{ json facet_where }}, "keyword": {{ json keyword }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: AnalystFacetsPublished, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.RetrievalFacets>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: publish_proposed_facets
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Render the selection's proposed tiers as the retrieval facet filter.
+    problem: The model proposes tiers, the machine renders and applies the filter (GH-694); the template is declared, so the proposal cannot shape anything but the tier list.
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: The facet payload.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: ProposedFacetsPublished
+      inputs:
+        tiers: $from(parsed_selection).body.source_types
+      template: '{"facet_where": {"source_type": {"$in": {{ json tiers }}}}, "keyword": ""}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposedFacetsPublished, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.RetrievalFacets>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: publish_windowed_facets
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Render the proposed tiers and window as the facet filter.
+    problem: The machine renders the proposed window as the filter (GH-730).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: The facet payload.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: WindowedFacetsPublished
+      inputs:
+        tiers: $from(parsed_selection).body.source_types
+        date_from: $from(parsed_selection).body.date_from
+        date_to: $from(parsed_selection).body.date_to
+      template: '{"facet_where": {"$and": [{"source_type": {"$in": {{ json tiers }}}}, {"date_key": {"$gte": {{ json date_from }}}}, {"date_key": {"$lte": {{ json date_to }}}}]}, "keyword": ""}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: WindowedFacetsPublished, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.RetrievalFacets>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_clearance_refusals
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Separate sources that refused the requester's clearance from sources that failed.
+    problem: |
+      A clearance refusal and a broken boundary both leave a source out of the
+      answer, and only the first means the remaining sources answered correctly.
+      Collapsing them would report an access-control event as an outage, and an
+      outage as an access-control event.
+    goals:
+      - Keep ClearanceRefused distinguishable from QueryRejected and CommandError.
+      - Preserve topology order in both sets.
+    requirements:
+      input:
+        - The failed entries come from the query partition, which has already removed the answered ones.
+      output:
+        - matched contains clearance refusals; unmatched contains rejected and degraded queries.
+      errors:
+        - An unresolved or malformed partition emits CommandError.
+    non_goals:
+      - Does not retry a refused source without the filter, which srd010 R4.3 forbids.
+      - Does not record anything about what the refusing source withheld.
+    output:
+      description: Ordered clearance-refused and otherwise-failed query outcomes.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      items: $from(partition_query_results).body.unmatched
+      field: result.signal
+      op: eq
+      right: ClearanceRefused
+      operand_type: string
+      satisfied: ClearanceRefusalsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceRefusalsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_clearance_refused_sources
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the clearance-refused sources as reportable entries.
+    problem: A reader has to see that a source was withheld for clearance rather than that it broke.
+    goals:
+      - Name the source and the outcome.
+      - Report nothing about what the filter excluded.
+    requirements:
+      input:
+        - Entries come from the clearance partition and carry the topology entry the fan-out iterated.
+      output:
+        - Each entry names the source and the refusal.
+      errors:
+        - Rendering is deterministic.
+    non_goals:
+      # srd010 R5.3.
+      - Does not report the content, the identifiers, or the count of what the filter excluded.
+    output: {description: Rendered clearance-refused source entries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_clearance_refusals).body.matched
+      item_template: '{"name": {{ json input.name }}, "signal": {{ json result.signal }}}'
+      separator: ","
+      signal: ClearanceRefusedSourcesRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceRefusedSourcesRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_query_results
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Separate answered RAG queries from rejected or degraded queries.
+    problem: Only successful REST results contain structured chunks and a reported embedding model.
+    goals:
+      - Preserve topology order in answered and failed sets.
+      - Keep QueryRejected distinguishable from CommandError in the unmatched entries.
+    requirements:
+      input:
+        - The for_each join items are selected through one fixed command-state selector.
+      output:
+        - matched contains QueryResponded items; unmatched contains rejected and degraded items.
+      errors:
+        - An unresolved or malformed join emits CommandError.
+    non_goals:
+      - Does not interpret embedding model identity.
+    output:
+      description: Ordered answered and failed query outcomes.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      items: $from(rag_queries).body.items
+      field: result.signal
+      op: eq
+      right: QueryResponded
+      operand_type: string
+      satisfied: QueryResultsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryResultsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_embedding_models
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Keep answered sources whose reported embedding model matches the query model.
+    problem: A same-width foreign embedding can return 200, so vector acceptance alone does not prove model compatibility.
+    goals:
+      - Exclude model-mismatched sources from grounding.
+      - Preserve the mismatched entries for explicit response metadata.
+    requirements:
+      input:
+        - Answered join entries expose redacted JSON at result.structured_output.
+      output:
+        - matched sources may ground the answer; unmatched sources are embedding-model exclusions.
+      errors:
+        - Missing structured output or model fields emit CommandError.
+    non_goals:
+      - Does not merge, rank, or rewrite chunks.
+    output:
+      description: Ordered model-compatible and model-excluded query results.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      items: $from(partition_query_results).body.matched
+      field: result.structured_output.mapped.embedding_model
+      op: eq
+      right: $from(declare_query_model).body.model
+      operand_type: string
+      satisfied: EmbeddingModelsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: EmbeddingModelsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_grounding
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render model-compatible RAG chunks under their topology names.
+    problem: Grounding must scale with topology size without indexed compose inputs.
+    goals:
+      - Render compatible sources in declared order.
+      - Produce an empty string when no source survives.
+    requirements:
+      input:
+        - The model-compatible partition is selected through one fixed selector.
+      output:
+        - Output is the joined per-source grounding text.
+      errors:
+        - Missing source names or documents emit CommandError.
+    non_goals:
+      - Does not filter, rank, or merge source arrays.
+    output: {description: Joined grounding sections.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_embedding_models).body.matched
+      item_template: |-
+        [{{ input.name }}]
+        {{ json result.structured_output.mapped.documents }}
+      separator: "\n\n"
+      signal: GroundingRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: GroundingRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the question and rendered compatible grounding sections.
+    problem: The answer model needs one fixed prompt independent of the RAG source count.
+    goals:
+      - Preserve the original question.
+      - Include only model-compatible rendered sources.
+    requirements:
+      input:
+        - The question and rendered grounding are selected from command state.
+      output:
+        - Output is the complete grounding prompt.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not call a model or choose sources.
+    output: {description: Grounded answer prompt.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Prompt composition changes no external state.}
+    config:
+      signal: Composed
+      inputs:
+        message: $from(chat_message).body.question
+        # Addressed by label rather than positionally.
+        grounding: $from(render_grounding).$
+      template: |
+        A user asked the following question:
+
+        {{ message }}
+
+        The following corpus chunks were retrieved to ground the answer. Each item
+        is a document; cite the retrieved chunk when you use it. The chunks are
+        grouped by the RAG source they came from.
+
+        {{ grounding }}
+
+        Answer the user's question using only these retrieved chunks. If the chunks
+        do not contain the answer, say so plainly and do not speculate.
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: Composed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The three words below shape the model-compatible partition into the documents list the Cohere chat operation sends (srd009 R3.2).
+  - name: flatten_chunks
+    type: builtin
+    init: flat_map
+    visibility: internal
+    category: response
+    description: Flatten each compatible source's parallel id and chunk arrays into one row per retrieved chunk.
+    problem: |
+      The rag-server returns chunks as parallel id and document arrays, and
+      Command cites the documents it is given. One document per source can only
+      be cited as that source, never the passage that carried the assertion
+      (srd009 R4.2).
+    goals:
+      - Zip each source's record ids with its chunk texts, in source and element order.
+      - Carry the source name onto every row, so a chunk citation still names the unit that served it.
+      - Produce no rows for a source that matched but retrieved nothing.
+    requirements:
+      input:
+        - The model-compatible partition is selected through one fixed selector.
+        - The id and chunk paths address the first query's arrays, which is the shape the rag-server returns.
+      output:
+        - Output is one row per retrieved chunk carrying its id, its text, and its source name.
+      errors:
+        - A selector that does not resolve, an element field that is not an array, or parallel arrays of differing length emit CommandError.
+    non_goals:
+      - Does not filter, rank, merge, or retrieve.
+      - Does not decide which chunks are composed from; it changes their granularity, not their membership.
+    output:
+      description: One row per retrieved chunk, with the row count.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Flattening reads prior state and changes no external state.}
+    config:
+      items: $from(partition_embedding_models).body.matched
+      # Ids and chunks arrive as one list per query and the fan-out sends one query, so the first element of each is this source's chunk set.
+      element_fields: {id: result.structured_output.mapped.ids.0, text: result.structured_output.mapped.documents.0, metadata: result.structured_output.mapped.metadatas.0}
+      carry_fields: {source: input.name}
+      signal: ChunksFlattened
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ChunksFlattened, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.FlattenChunksOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The revision re-grounding (GH-604). A revision turn retrieves on the note, so
+  - name: check_prior_sources
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Decide whether this turn carries the record ids the prior brief cited.
+    problem: A revision turn that names the prior brief's cited records can re-ground its carried claims;
+    goals:
+      - Branch on the carried prior record ids being present and non-empty, and nothing else.
+    requirements:
+      input:
+        - The ids are read from the intake carry under the shared query_embedding label.
+      output:
+        - PriorSourcesPresent when ids ride the request, PriorSourcesAbsent otherwise.
+      errors:
+        - An unresolved carry emits CommandError;
+    non_goals:
+      - Does not validate, read, or trust the ids;
+    output: {description: Predicate outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A comparison changes nothing.}
+    config:
+      left: $from(query_embedding).body.carried.prior_record_ids
+      op: empty
+      satisfied: PriorSourcesAbsent
+      unsatisfied: PriorSourcesPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: PriorSourcesAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: PriorSourcesPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_prior_read_request
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Publish the prior brief's cited record ids as the read request the document read binds.
+    problem: The identifier-in read (srd016 R5.2) takes its ids from the read-request label the document machine publishes;
+    goals:
+      - Emit a JSON object whose record_ids field is the carried id list, unchanged.
+    requirements:
+      input:
+        - The ids come from the intake carry.
+      output:
+        - A JSON object with a record_ids array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not choose which units are read;
+    output: {description: The read request.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: PriorReadDeclared
+      inputs:
+        record_ids: $from(query_embedding).body.carried.prior_record_ids
+      template: '{"record_ids": {{ json record_ids }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: PriorReadDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.DeclarePriorReadRequestOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_prior_reads
+    type: builtin
+    init: partition
+    visibility: internal
+    category: word
+    description: Keep the units whose read answered with records.
+    problem: A unit that refused the level, rejected the read, or failed carries no record arrays, and flattening it would fail the whole re-grounding rather than drop one unit's account.
+    goals:
+      - Split the joined reads on the DocumentsRead outcome.
+    requirements:
+      input:
+        - The joined reads are selected through the prior_reads label.
+      output:
+        - matched holds the units that read;
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not report refused units;
+    output: {description: The partitioned reads.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(prior_reads).body.items
+      field: result.signal
+      op: eq
+      right: DocumentsRead
+      operand_type: string
+      satisfied: PriorReadsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: PriorReadsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: flatten_prior_chunks
+    type: builtin
+    init: flat_map
+    visibility: internal
+    category: response
+    description: Flatten each unit's read into one row per record, in the shape flatten_chunks produces.
+    problem: The read returns flat id, document, and metadata arrays per unit, where the query returns one nested set per query;
+    goals:
+      - Zip each unit's record ids with its texts and metadata rows, in unit and element order.
+    requirements:
+      input:
+        - The units that read are selected through one fixed selector.
+      output:
+        - One row per record carrying its id, text, metadata, and source.
+      errors:
+        - A field that is not an array, or parallel arrays of differing length, emit CommandError.
+    non_goals:
+      - Does not deduplicate against the note's rows;
+    output:
+      description: One row per read record, with the row count.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Flattening reads prior state and changes no external state.}
+    config:
+      items: $from(partition_prior_reads).body.matched
+      element_fields: {id: result.structured_output.mapped.ids, text: result.structured_output.mapped.documents, metadata: result.structured_output.mapped.metadatas}
+      carry_fields: {source: input.name}
+      signal: PriorChunksFlattened
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: PriorChunksFlattened, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.FlattenPriorChunksOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_new_prior_ids
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Find the cited record ids the note's own retrieval did not already return.
+    problem: A record both retrieved by the note and carried from the prior brief would reach Command twice, and the provider refuses a documents array with a repeated id.
+    goals:
+      - Match the carried ids against the ids of the note's rows.
+    requirements:
+      input:
+        - The carried ids are the candidates;
+      output:
+        - unmatched lists the ids the note did not retrieve.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not read records;
+    output: {description: The matched and unmatched ids.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      candidates: $from(declare_prior_read_request).body.record_ids
+      vocabulary: $from(flatten_chunks).body.items
+      match_field: id
+      all_matched: PriorIdsAlreadyRetrieved
+      partial: NewPriorIdsFound
+      empty: NewPriorIdsFound
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: PriorIdsAlreadyRetrieved, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: NewPriorIdsFound, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_new_prior_rows
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Select one read row for each cited id the note did not retrieve.
+    problem: The read rows may hold an id twice when two units carry the same record, and only the ids the note missed should join its rows.
+    goals:
+      - Keep the first read row for each new id, in the carried order.
+    requirements:
+      input:
+        - The new ids are the candidates;
+      output:
+        - selected holds the rows to join, at most one per id.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not reorder by relevance;
+    output: {description: The selected rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      candidates: $from(select_new_prior_ids).body.unmatched
+      vocabulary: $from(flatten_prior_chunks).body.items
+      match_field: id
+      all_matched: NewPriorRowsSelected
+      partial: NewPriorRowsSelected
+      empty: NoPriorRowsRead
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: NoPriorRowsRead, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: NewPriorRowsSelected, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_joined_rows
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the rows being joined as a comma-separated run of row objects.
+    problem: The union of two row lists is textual concatenation of two rendered runs, the same way the RAG and search documents join (compose_documents_augmented).
+    goals:
+      - Render each row with its id, text, metadata, and source, unchanged.
+    requirements:
+      input:
+        - The rows are selected through the joined_rows label every row-selection word publishes under -- the carried records (GH-604) or one proposed query's (GH-611).
+      output:
+        - Comma-separated JSON row objects.
+      errors:
+        - Selector and render failures emit CommandError.
+    non_goals:
+      - Does not wrap the run in an array;
+    output: {description: The rendered rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(joined_rows).body.selected
+      item_template: '{"id": {{ json id }}, "text": {{ json text }}, "metadata": {{ json metadata }}, "source": {{ json source }}}'
+      separator: ","
+      signal: JoinedRowsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: JoinedRowsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_note_chunks
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Decide whether the note's own retrieval produced any rows.
+    problem: The union joins two rendered runs with a comma, and an empty first run would leave the array starting with one.
+    goals:
+      - Branch on whether the turn holds any rows yet.
+    requirements:
+      input:
+        - The rows are read from the flatten_chunks label, which holds the flattened rows or an earlier join.
+      output:
+        - NoteChunksAbsent at zero rows, NoteChunksPresent otherwise.
+      errors:
+        - An unresolved count emits CommandError.
+    non_goals:
+      - Does not judge the rows.
+    output: {description: Predicate outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A comparison changes nothing.}
+    config:
+      left: $from(flatten_chunks).body.items
+      op: empty
+      satisfied: NoteChunksAbsent
+      unsatisfied: NoteChunksPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: NoteChunksAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: NoteChunksPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_note_rows
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the note's own rows as a comma-separated run of row objects.
+    problem: The note's rows lead the union, so the rerank sees what the instruction asked for first and the carried records after it.
+    goals:
+      - Render each row with its id, text, metadata, and source, unchanged.
+    requirements:
+      input:
+        - The rows are selected from flatten_chunks.
+      output:
+        - Comma-separated JSON row objects.
+      errors:
+        - Selector and render failures emit CommandError.
+    non_goals:
+      - Does not wrap the run in an array;
+    output: {description: The rendered rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(flatten_chunks).body.items
+      item_template: '{"id": {{ json id }}, "text": {{ json text }}, "metadata": {{ json metadata }}, "source": {{ json source }}}'
+      separator: ","
+      signal: NoteRowsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: NoteRowsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_chunk_union
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the note's rows and the carried rows as one row array.
+    problem: Membership was decided by the selection words;
+    goals:
+      - Keep the note's rows first and the carried rows after them.
+    requirements:
+      input:
+        - Both rendered runs are selected from command state;
+      output:
+        - A JSON object with an items array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not reorder or validate the rows.
+    output: {description: The joined rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: ChunkUnionComposed
+      inputs:
+        note: $from(render_note_rows).$
+        joined: $from(render_joined_rows).$
+      template: '{"items": [{{ note }},{{ joined }}]}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ChunkUnionComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_joined_chunks
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the joined rows alone as the row array when the turn holds no rows yet.
+    problem: A revision whose instruction retrieved nothing still carries the prior brief's claims, and those keep their sources only if the carried records reach Command.
+    goals:
+      - Emit the carried rows in the same object shape the union uses.
+    requirements:
+      input:
+        - The rendered carried run is selected from command state.
+      output:
+        - A JSON object with an items array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not reorder or validate the rows.
+    output: {description: The carried rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: ChunkUnionComposed
+      inputs:
+        joined: $from(render_joined_rows).$
+      template: '{"items": [{{ joined }}]}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ChunkUnionComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_chunk_union
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: response
+    description: Parse the joined rows into the object every chunk reader selects items from.
+    problem: The rerank, the unranked render, and the fused marshalling all read $from(flatten_chunks).body.items;
+    goals:
+      - Validate the joined rows against the row shape and publish them.
+    requirements:
+      input:
+        - The joined text is selected through the chunk_union_text label both compose words publish under.
+      output:
+        - An object with an items array of row objects.
+      errors:
+        - Text that does not parse emits ParseFailed and the turn fails rather than read a malformed row set.
+    non_goals:
+      - Does not deduplicate or reorder.
+    output: {description: The parsed rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      source: $from(chunk_union_text).$
+      schema:
+        type: object
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              properties:
+                id: {type: string}
+                text: {type: string}
+                metadata: {}
+                source: {type: string}
+              required: [id, text, source]
+        required: [items]
+      parsed: ChunkUnionParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ChunkUnionParsed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ParseChunkUnionOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The revision's agentic search (GH-611). A revision re-grounded on its
+  - name: check_revision_search
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Decide whether this turn is a revision, which is the only turn that searches on its own proposals.
+    problem: Agentic search belongs to revision, where accuracy outweighs latency;
+    goals:
+      - Branch on the carried prior brief's presence, the same predicate check_revision_requested uses.
+    requirements:
+      input:
+        - The prior brief is read from the intake carry.
+      output:
+        - RevisionSearchRequested for a revision, RevisionSearchSkipped otherwise.
+      errors:
+        - An unresolved carry emits CommandError;
+    non_goals:
+      - Does not judge the brief or the instruction.
+    output: {description: Predicate outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      left: $from(query_embedding).body.carried.prior_brief
+      op: empty
+      satisfied: RevisionSearchSkipped
+      unsatisfied: RevisionSearchRequested
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RevisionSearchSkipped, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: RevisionSearchRequested, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_propose_searches_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: "Compose the message the search proposal reads: the revision instruction and the prior brief."
+    problem: The model proposes what the revision needs and the brief lacks, so it has to see both.
+    goals:
+      - Carry the instruction and the prior brief verbatim.
+    requirements:
+      input:
+        - The instruction is the declared question;
+      output:
+        - The proposal prompt text.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not propose queries;
+    output: {description: The proposal prompt.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: SearchProposalComposed
+      inputs:
+        instruction: $from(declare_question).body.question
+        prior_brief: $from(query_embedding).body.carried.prior_brief
+      template: |-
+        Revision instruction:
+        {{ instruction }}
+
+        Prior brief:
+        {{ prior_brief }}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchProposalComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: propose_searches_via_tool
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Ask Command, in one forced tool call, for the retrieval queries the revision needs.
+    problem: A revision's own retrieval embeds the instruction alone, so what the brief refers to without the reporting behind it is never fetched;
+    goals:
+      - Return the tool call whose arguments carry one to three queries.
+    requirements:
+      input:
+        - The prompt is the composed proposal message.
+      output:
+        - The provider's tool calls.
+      errors:
+        - Authentication, throttling, and availability failures emit their provider signals;
+    non_goals:
+      - Does not retrieve;
+    output: {description: The provider's tool calls.}
+    side_effects:
+      - kind: external_api
+        target: cohere.chat
+        state: read_only
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A read changes no external state.}
+    config:
+      rest_ref: cohere_agentic
+      operation: propose_searches_tool
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ProposeSearchesViaToolOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: project_proposed_searches
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Project the proposal tool call's arguments, which the parse reads as JSON.
+    problem: The provider returns the arguments as a JSON string inside the tool call;
+    goals:
+      - Emit the one call's arguments string.
+    requirements:
+      input:
+        - The tool calls are selected from the proposal word.
+      output:
+        - The arguments JSON text.
+      errors:
+        - Selector and render failures emit CommandError.
+    non_goals:
+      - Does not validate the queries;
+    output: {description: The arguments text.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(propose_searches_via_tool).body.mapped.tool_calls
+      item_template: '{{ function.arguments }}'
+      separator: ""
+      signal: ProposalArgumentsProjected
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalArgumentsProjected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_proposed_searches
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: response
+    description: "Validate the proposed searches: the declared fields first, second, and third."
+    problem: Selectors path into maps only, so the proposals arrive as named fields rather than an array, and each pass reads its own field (GH-611).
+    goals:
+      - Accept a first query, and optionally a second and a third, and nothing else.
+    requirements:
+      input:
+        - The projected arguments text.
+      output:
+        - An object whose first, second, and third fields hold the proposed searches.
+      errors:
+        - A proposal outside the schema emits ParseFailed and the turn composes without the search.
+    non_goals:
+      - Does not rewrite or filter the queries.
+    output: {description: The parsed proposal.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      source: $from(project_proposed_searches).$
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          first: {type: string}
+          second: {type: string}
+          third: {type: string}
+        required: [first]
+      parsed: ProposedSearchesParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposedSearchesParsed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ParseProposedSearchesOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: search_proposed_query
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Run one proposed query through the mesh's own search surface at the requester's clearance.
+    problem: A pass must embed its query and read every declared unit, and the /search surface already does exactly that -- one embed, one fan over the declared topology, the clearance and identity partitions -- so the pass runs it rather than restating it (GH-611).
+    goals:
+      - Post the pass's query to the declared self search endpoint with the requester's clearance level.
+      - Return the search's rows in the row shape the union renders.
+    requirements:
+      input:
+        - The query is read from the proposal_query label the pass's selection publishes under.
+        - The clearance level rides the request header from the shared analyst_clearance label, so the search sees exactly the caller's level (srd010 R3.2).
+      output:
+        - Output holds the search's rows under mapped.results.
+      errors:
+        - A failed search emits CommandError; the pass abandons itself and the turn keeps its rows.
+    non_goals:
+      - Does not choose which units are read; the search surface fans over the declared topology itself.
+      - Does not deduplicate; the following selection does.
+    output: {description: The search's rows.}
+    side_effects:
+      - kind: external_api
+        target: chatbot.search
+        state: read_only
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A read changes no external state.}
+    config:
+      rest_ref: chatbot_self
+      operation: search_proposed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalSearched, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.SearchProposedQueryOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_proposal_1
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Decide whether the first proposed search exists.
+    problem: Command proposes one to three searches as the declared fields first, second, and third, and a field it did not fill must skip its pass rather than search for nothing.
+    goals:
+      - Branch on the first field being present and non-empty, and nothing else.
+    requirements:
+      input:
+        - The field is read from the parsed proposal.
+      output:
+        - ProposalPresent when the field carries a query, ProposalAbsent when it is empty.
+      errors:
+        - An absent field does not resolve and emits CommandError, which the machine routes exactly as ProposalAbsent.
+    non_goals:
+      - Does not validate the query text.
+    output: {description: Predicate outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A comparison changes nothing.}
+    config:
+      left: $from(parse_proposed_searches).body.first
+      op: empty
+      satisfied: ProposalAbsent
+      unsatisfied: ProposalPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: ProposalPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_proposal_1
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Publish the first proposed search as the query the self search reads.
+    problem: The one self-search operation reads its query through the proposal_query label, so each pass publishes its own field there rather than declaring an operation per field.
+    goals:
+      - Publish the first field as the text the search operation's mapping selects whole.
+    requirements:
+      input:
+        - The field is read from the parsed proposal.
+      output:
+        - Output is the proposed search text.
+      errors:
+        - An unresolved field emits CommandError.
+    non_goals:
+      - Does not alter the query text.
+    output: {description: The query object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: ProposalQuerySelected
+      inputs:
+        query: $from(parse_proposed_searches).body.first
+      template: '{{ query }}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalQuerySelected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_proposal_2
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Decide whether the second proposed search exists.
+    problem: Command proposes one to three searches as the declared fields first, second, and third, and a field it did not fill must skip its pass rather than search for nothing.
+    goals:
+      - Branch on the second field being present and non-empty, and nothing else.
+    requirements:
+      input:
+        - The field is read from the parsed proposal.
+      output:
+        - ProposalPresent when the field carries a query, ProposalAbsent when it is empty.
+      errors:
+        - An absent field does not resolve and emits CommandError, which the machine routes exactly as ProposalAbsent.
+    non_goals:
+      - Does not validate the query text.
+    output: {description: Predicate outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A comparison changes nothing.}
+    config:
+      left: $from(parse_proposed_searches).body.second
+      op: empty
+      satisfied: ProposalAbsent
+      unsatisfied: ProposalPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: ProposalPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_proposal_2
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Publish the second proposed search as the query the self search reads.
+    problem: The one self-search operation reads its query through the proposal_query label, so each pass publishes its own field there rather than declaring an operation per field.
+    goals:
+      - Publish the second field as the text the search operation's mapping selects whole.
+    requirements:
+      input:
+        - The field is read from the parsed proposal.
+      output:
+        - Output is the proposed search text.
+      errors:
+        - An unresolved field emits CommandError.
+    non_goals:
+      - Does not alter the query text.
+    output: {description: The query object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: ProposalQuerySelected
+      inputs:
+        query: $from(parse_proposed_searches).body.second
+      template: '{{ query }}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalQuerySelected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_proposal_3
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Decide whether the third proposed search exists.
+    problem: Command proposes one to three searches as the declared fields first, second, and third, and a field it did not fill must skip its pass rather than search for nothing.
+    goals:
+      - Branch on the third field being present and non-empty, and nothing else.
+    requirements:
+      input:
+        - The field is read from the parsed proposal.
+      output:
+        - ProposalPresent when the field carries a query, ProposalAbsent when it is empty.
+      errors:
+        - An absent field does not resolve and emits CommandError, which the machine routes exactly as ProposalAbsent.
+    non_goals:
+      - Does not validate the query text.
+    output: {description: Predicate outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A comparison changes nothing.}
+    config:
+      left: $from(parse_proposed_searches).body.third
+      op: empty
+      satisfied: ProposalAbsent
+      unsatisfied: ProposalPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: ProposalPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_proposal_3
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Publish the third proposed search as the query the self search reads.
+    problem: The one self-search operation reads its query through the proposal_query label, so each pass publishes its own field there rather than declaring an operation per field.
+    goals:
+      - Publish the third field as the text the search operation's mapping selects whole.
+    requirements:
+      input:
+        - The field is read from the parsed proposal.
+      output:
+        - Output is the proposed search text.
+      errors:
+        - An unresolved field emits CommandError.
+    non_goals:
+      - Does not alter the query text.
+    output: {description: The query object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: ProposalQuerySelected
+      inputs:
+        query: $from(parse_proposed_searches).body.third
+      template: '{{ query }}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposalQuerySelected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: project_proposed_ids
+    type: builtin
+    init: project
+    visibility: internal
+    category: response
+    description: List the record ids of the current pass's rows.
+    problem: The selection compares identifiers, and a candidate list is a list of strings.
+    goals:
+      - Project each row's id, in row order.
+    requirements:
+      input:
+        - The rows are selected through the proposal_search label the pass's search publishes under.
+      output:
+        - The ids.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not deduplicate.
+    output: {description: The ids.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(proposal_search).body.mapped.results
+      field: id
+      signal: ProposedIdsProjected
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposedIdsProjected, message: builtin.Message<builtin-types-collections.Projection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_new_proposed_ids
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Find the pass's record ids the turn does not already hold.
+    problem: The turn's rows may already hold a proposed record -- from its own retrieval, its re-grounding, or an earlier pass -- and the provider refuses a repeated document id.
+    goals:
+      - Match the pass's ids against the ids of the turn's rows.
+    requirements:
+      input:
+        - The pass's ids are the candidates;
+      output:
+        - unmatched lists the ids to join.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not read records.
+    output: {description: The matched and unmatched ids.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      candidates: $from(project_proposed_ids).body.items
+      vocabulary: $from(flatten_chunks).body.items
+      match_field: id
+      all_matched: ProposedRowsAlreadyHeld
+      partial: NewProposedIdsFound
+      empty: NewProposedIdsFound
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ProposedRowsAlreadyHeld, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: NewProposedIdsFound, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_new_proposed_rows
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Select the pass's rows for the ids the turn does not hold.
+    problem: The rows to join are published under the joined_rows label the union words read, the same label the re-grounding's selection uses.
+    goals:
+      - Keep one row for each new id.
+    requirements:
+      input:
+        - The new ids are the candidates;
+      output:
+        - selected holds the rows to join.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not reorder by relevance;
+    output: {description: The selected rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      candidates: $from(select_new_proposed_ids).body.unmatched
+      vocabulary: $from(proposal_search).body.mapped.results
+      match_field: id
+      all_matched: NewProposedRowsSelected
+      partial: NewProposedRowsSelected
+      empty: NoProposedRowsSelected
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: NoProposedRowsSelected, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: NewProposedRowsSelected, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The rerank pass (srd009 R5).
+  - name: cohere_rerank_rag
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Score the retrieved candidates against the tasking through the declared rerank operation.
+    problem: Embedding similarity ranks by proximity and relevance is a different measurement; the cutoff is where a good source ranked on distance alone gets lost.
+    goals:
+      - Submit the tasking and the retrieved candidates to the declared rerank operation.
+      - Return the provider's ordering over those candidates.
+    requirements:
+      input:
+        - The tasking and the composed candidate array are selected from command state.
+      output:
+        - Output is the ordering rows the provider returned.
+      errors:
+        - Network, timeout, and mapping failures emit their mapped provider signals.
+    non_goals:
+      - Does not retrieve, and cannot, because the provider returns positions into what it was sent.
+      - Does not decide the composition budget; top_n is declared configuration.
+    output:
+      description: Provider ordering over the submitted candidates.
+    side_effects:
+      - {kind: external_api, target: cohere.rerank, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Scoring candidates mutates nothing.}
+    config:
+      rest_ref: reranker
+      operation: rerank
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: Reranked, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.CohereRerankRagOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+
+        - {signal: ProviderRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_rerank_order
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the provider returned an ordering to apply.
+    problem: A 200 carrying no ordering must take the degradation path, not the reorder, or the turn composes from nothing and calls it reranked.
+    goals:
+      - Separate an empty ordering from one with positions.
+    requirements:
+      input:
+        - The rendered ordering is selected from command state.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not judge whether the ordering is sensible, only whether there is one.
+    output: {description: Ordering presence outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      # The predicate reads the provider's ordering array directly: an empty list is empty under srd041 R2.4, so the order no longer needs to be rendered and wrapped into a comparable string first (GH-443).
+      left: $from(cohere_rerank_rag).body.mapped.results
+      op: empty
+      satisfied: RerankOrderEmpty
+      unsatisfied: RerankOrderPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RerankOrderEmpty, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: RerankOrderPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: reorder_candidates
+    type: builtin
+    init: reorder_by_index
+    visibility: internal
+    category: response
+    description: Emit the retrieved chunk rows in the order the rerank returned.
+    problem: The provider returns positions into the submitted list rather than content, so applying the ordering means indexing the rows that list was rendered from.
+    goals:
+      - Emit the chunk rows in ordering-row order.
+      - Emit only the rows the ordering names, which is the declared top-N.
+    requirements:
+      input:
+        - The chunk rows and the provider ordering are selected through fixed selectors.
+        - The ordering rows carry an integer index into the candidate list.
+      output:
+        - Output is the reordered chunk rows with their aligned ordering rows.
+      errors:
+        - A missing, fractional, negative, out-of-range, or duplicate index emits CommandError.
+    non_goals:
+      - Does not retrieve, score, or introduce a candidate; it applies an ordering over rows that already exist.
+    output:
+      description: Reordered chunk rows.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Reordering reads prior state and changes no external state.}
+    config:
+      items: $from(flatten_chunks).body.items
+      order: $from(cohere_rerank_rag).body.mapped.results
+      index_field: index
+      signal: CandidatesReordered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CandidatesReordered, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ReorderCandidatesOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_documents
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render one Cohere document object per retrieved chunk.
+    problem: Command grounds on documents rather than on a prompt string, and it cites by the document identity it was given.
+    goals:
+      - Emit one document object per retrieved chunk, in source and element order.
+      - Carry the rag-server record id as the document identity a citation resolves to.
+      - Carry the source name alongside it, so a cited chunk still names the unit that served it.
+      - Produce an empty string when no chunk survives, so the wrapper yields an empty list.
+    requirements:
+      input:
+        - The flattened chunk rows are selected through one fixed selector.
+      output:
+        - Output is the comma-joined document objects, without the surrounding array.
+      errors:
+        - Missing ids or chunk text emit CommandError.
+    non_goals:
+      - Does not filter, rank, merge, or retrieve.
+      - Does not author the document identity; it renders the id the rag-server returned.
+    output: {description: Comma-joined Cohere document objects.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(reorder_candidates).body.items
+      # The document id is the rag-server's record id, so a returned citation names the chunk a reader opens rather than the unit that served it or a value a model chose.
+      item_template: |-
+        {"id": {{ json id }}, "data": {"source": {{ json source }}, "record_id": {{ json id }}, "content": {{ json text }}, "reliability": {{ json metadata.admiralty_source_reliability }}, "clearance": {{ json metadata.clearance }}, "clearance_rank": {{ json metadata.clearance_rank }}}}
+      separator: ","
+      signal: DocumentsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_documents_unranked
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render one Cohere document per retrieved chunk in the order the fan-out returned.
+    problem: |
+      A rerank failure must leave the turn answering (srd009 R5.4), and the
+      pre-rerank order is what the previous release composed from. A word reads
+      one selector, so the degraded path needs its own render; both sit before
+      compose_documents, which reads its adjacent result.
+    goals:
+      - Emit one document object per retrieved chunk, in fan-out order.
+      - Carry the same identity and shape the reranked render carries, so the degradation changes the order and nothing else.
+      - Produce an empty string when no chunk survives, so the wrapper yields an empty list.
+    requirements:
+      input:
+        - The flattened chunk rows are selected through one fixed selector.
+      output:
+        - Output is the comma-joined document objects, without the surrounding array.
+      errors:
+        - Missing ids or chunk text emit CommandError.
+    non_goals:
+      - Does not reorder, filter, or truncate.
+    output: {description: Comma-joined Cohere document objects.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(flatten_chunks).body.items
+      item_template: |-
+        {"id": {{ json id }}, "data": {"source": {{ json source }}, "record_id": {{ json id }}, "content": {{ json text }}, "reliability": {{ json metadata.admiralty_source_reliability }}, "clearance": {{ json metadata.clearance }}, "clearance_rank": {{ json metadata.clearance_rank }}}}
+      separator: ","
+      signal: DocumentsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # Which ordering Command composed from is a property of the turn the response should carry, not something a reader infers.
+  - name: declare_rerank_applied
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the composed documents were ordered by the rerank pass.
+    problem: A reranked turn and a degraded one answer over the same chunks, so the response has to say which ordering reached Command.
+    goals:
+      - Render the applied outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the rerank outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not decide whether the pass ran; the path it sits on decides that.
+    output: {description: The rerank outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: RerankStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "applied"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RerankStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_rerank_degraded
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the rerank did not order the composed documents, so the fan-out order did.
+    problem: A degraded turn returns 200 over the same chunks in a different order, which no reader can see and no operator can alert on (srd009 R5.4).
+    goals:
+      - Render the degraded outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the rerank outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not name which refusal caused the degradation; the trace carries the mapped signal.
+    output: {description: The rerank outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: RerankStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "degraded"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RerankStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: compose_documents
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the rendered document objects as one documents array.
+    problem: render_each joins items and cannot emit the surrounding array the schema validates.
+    goals:
+      - Produce one JSON object carrying the documents array.
+      - Yield an empty array when no source survived, rather than malformed JSON.
+    requirements:
+      input:
+        - The rendered document objects are selected from command state.
+      output:
+        - Output is a JSON object with a documents array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not author, reorder, or validate the document objects.
+    output: {description: JSON object carrying the documents array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: DocumentsComposed
+      inputs:
+        # By label rather than adjacency: the OSINT branch checks run between the document render and this word, so the adjacent result is a predicate outcome.
+        rendered: $from(rag_documents).$
+      template: |-
+        {"documents": [{{ rendered }}]}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_documents
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Validate the composed documents array into addressable command state.
+    problem: The chat operation maps a documents array from command state, and a composed string reaches the wire as text rather than as an array.
+    goals:
+      - Validate the shape the Cohere document contract requires.
+      - Put the array where the operation's input_mapping can address it.
+    requirements:
+      input:
+        - Source is the composed documents object.
+      output:
+        - Valid output contains documents as an array of objects carrying id and data.
+    non_goals:
+      - Does not repair JSON or alter document content.
+    output: {description: Validated documents array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      # By the shared label the three compose variants are dispatched under, not by command name: which variant ran depends on which branches rendered documents, and one selector serves them all.
+      source: $from(composed_documents).$
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              properties:
+                id: {type: string}
+                data: {type: object}
+              required: [id, data]
+        required: [documents]
+      parsed: DocumentsParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsParsed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ParseDocumentsOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # Which tier answered is a property of the turn the response should carry, not something a reader infers from prose.
+  - name: declare_cohere_tier
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the Cohere Command tier answered this turn.
+    problem: The response reports which sources composed but not which model tier wrote the answer.
+    goals:
+      - Put the answering tier into command state as an addressable value.
+    requirements:
+      input:
+        - The tier is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object whose tier field names the Cohere tier.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not inspect the brief or decide which tier ran; the path it sits on decides that.
+    output: {description: The answering tier.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: TierDeclared
+      inputs: {}
+      template: |
+        {"tier": "cohere"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: TierDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.AnswerTier>}
+  - name: declare_ollama_tier
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that an Ollama chat word answered this turn.
+    problem: A degraded turn and a tier-selected Ollama turn both answer, and the response should say which tier did.
+    goals:
+      - Put the answering tier into command state as an addressable value.
+    requirements:
+      input:
+        - The tier is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object whose tier field names the Ollama tier.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not distinguish the fast and deep words; the tier is what the response reports.
+    output: {description: The answering tier.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: TierDeclared
+      inputs: {}
+      template: |
+        {"tier": "ollama"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: TierDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.AnswerTier>}
+  # Structured citation surfacing (srd009 R4.1, R4.2).
+  - name: flatten_citations
+    type: builtin
+    init: flat_map
+    visibility: internal
+    category: response
+    description: Flatten each returned citation into one row per source it names.
+    problem: |
+      A citation names its span once and the documents it was computed against
+      as an array, which can hold more than one -- verified live. A row per
+      citation would surface one source and drop the rest.
+    goals:
+      - Emit one row per source a citation names, carrying that citation's span onto every row.
+      - Preserve provider order, so the surfaced metadata reads in the order the answer does.
+      - Produce no rows for a citation that names no source.
+    requirements:
+      input:
+        - The citations array is selected from the invoke_cohere_command result.
+      output:
+        - Output is one row per cited source, carrying the source object and the span it belongs to.
+      errors:
+        - A citation whose sources field is absent or is not an array emits CommandError.
+    non_goals:
+      - Does not resolve, drop, or validate a cited source; those are separate words.
+      - Does not read the answer text or slice it by the span.
+    output:
+      description: One row per cited source, with the row count.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Flattening reads prior state and changes no external state.}
+    config:
+      items: $from(invoke_cohere_command).body.mapped.citations
+      # sources is itself the array to fan out over, so it is the element field rather than a path into one.
+      element_fields: {source: sources}
+      carry_fields: {start: start, end: end, text: text}
+      signal: CitationsFlattened
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CitationsFlattened, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.FlattenCitationsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_cited_sources
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Separate cited sources that resolve to a retrieved document from those that do not.
+    problem: |
+      A citation the turn cannot resolve renders exactly like one that resolves,
+      so srd009 R4.4 drops and reports it. Every document Command can cite is one
+      this turn supplied, so an unresolvable source is one the provider named
+      outside what it was given, and its type says so.
+    goals:
+      - Keep cited sources that name a retrieved document.
+      - Preserve the rest, in order, so the response can report what was dropped.
+    requirements:
+      input:
+        - The flattened citation rows are selected through one fixed selector.
+      output:
+        - matched rows may be surfaced as citations; unmatched rows are drops to report.
+      errors:
+        - A row whose source carries no type emits CommandError.
+    non_goals:
+      - Does not resolve a source to its text, rank citations, or merge spans.
+    output:
+      description: Ordered resolvable and unresolvable cited sources.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      items: $from(flatten_citations).body.items
+      field: source.type
+      op: eq
+      right: document
+      operand_type: string
+      satisfied: CitedSourcesPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CitedSourcesPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The final reader's clearance ceiling (GH-378, replacing GH-357's reader reliability floor).
+  - name: check_reader_clearance
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether this turn carries a final-reader clearance ceiling.
+    problem: The floor is optional, and an absent one must change nothing; the branch decides between the stated floor and the open default without any word downstream learning which ran.
+    goals:
+      - Route the turn to the stated-floor or open-floor compose.
+    requirements:
+      input:
+        - The floor is read from the carried request field alone.
+      output:
+        - One of the two declared signals, and nothing else.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not validate the grade; the endpoint schema constrains it.
+    output: {description: The branch decision.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A predicate changes no external state.}
+    config:
+      left: $from(query_embedding).body.carried.reader_clearance_rank
+      op: empty
+      satisfied: ReaderClearanceAbsent
+      unsatisfied: ReaderClearancePresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReaderClearanceAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: ReaderClearancePresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_open_clearance
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the open ceiling a turn without a stated reader runs under.
+    problem: The partition needs a comparable rank on every path, and the highest declared rank admits every level, so the absent-reader turn stays exactly the unfiltered one.
+    goals:
+      - Render the ceiling object at the highest declared rank.
+    requirements:
+      input:
+        - None; the template is constant.
+      output:
+        - Output is the floor object admitting every grade.
+      errors:
+        - Composing a constant emits no failure in practice; CommandError is declared for the tool path.
+    non_goals:
+      - Does not read the request.
+    output: {description: The open floor object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    relationships:
+      before: [parse_reader_clearance]
+      overlaps:
+        - tool: compose_set_clearance
+          difference: This word renders the constant open ceiling; compose_set_clearance renders the request's stated reader rank.
+    config:
+      signal: ReaderClearanceComposed
+      inputs: {}
+      template: |-
+        {"rank": 3}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReaderClearanceComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_set_clearance
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the ceiling object from the request's stated reader rank.
+    problem: The carried rank is a bare number and the partition reads a labeled, validated object, so the stated ceiling takes the same shape the open default does.
+    goals:
+      - Render the ceiling object from the carried request field.
+    requirements:
+      input:
+        - The grade is selected from the carried request field alone.
+      output:
+        - Output is the floor object carrying the stated grade.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not validate the grade; the endpoint schema constrains it.
+    output: {description: The stated floor object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    relationships:
+      before: [parse_reader_clearance]
+      overlaps:
+        - tool: compose_open_clearance
+          difference: This word renders the request's stated reader rank; compose_open_clearance renders the constant open ceiling.
+    config:
+      signal: ReaderClearanceComposed
+      inputs:
+        rank: $from(query_embedding).body.carried.reader_clearance_rank
+      template: |-
+        {"rank": {{ json rank }}}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReaderClearanceComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_reader_clearance
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: response
+    description: Validate the ceiling object under the shared reader_clearance label.
+    problem: The partition reads the grade through one label whichever compose ran, and a malformed floor must fail the filter rather than admit or drop by accident.
+    goals:
+      - Validate the composed ceiling against the declared rank range.
+      - Make the rank addressable as $from(reader_clearance).body.rank.
+    requirements:
+      input:
+        - Source is the adjacent composed floor object.
+      output:
+        - Valid output carries the grade as one Admiralty letter.
+      errors:
+        - A malformed floor emits ParseFailed rather than faulting the turn.
+    non_goals:
+      - Does not author or compare the grade.
+    output: {description: The validated floor.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Validation changes no external state.}
+    relationships:
+      after: [compose_open_clearance, compose_set_clearance]
+      before: [partition_reader_clearance]
+    config:
+      source: $.output
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          rank: {type: integer, minimum: 0, maximum: 3}
+        required: [rank]
+      parsed: ReaderClearanceParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReaderClearanceParsed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ParseReaderClearanceOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+  - name: partition_external_citations
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Separate external open-source citations from internal ones before the reader filter.
+    problem: |
+      External open-source results sit outside the clearance model by
+      doctrine (srd011 R7.4) -- they carry no level, and dressing them in one
+      to make a comparison possible would erase the distinction the OPEN
+      SOURCE marking exists to state. The reader's clearance filter therefore
+      applies to internal sources alone, and this split is what makes that
+      exemption categorical rather than a rank chosen to slip under every
+      ceiling.
+    goals:
+      - Keep external citations aside, in order, exempt from the reader filter.
+      - Pass internal citations, in order, to the clearance partition.
+    requirements:
+      input:
+        - The resolvable cited-source rows are selected through one fixed selector.
+      output:
+        - matched rows are external citations; unmatched rows are internal ones.
+      errors:
+        - A row whose echoed document carries no source field emits CommandError; every rendered document writes it.
+    non_goals:
+      - Does not compare clearance; the partition after it does, on internal rows alone.
+    output:
+      description: Ordered external and internal cited sources.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      items: $from(partition_cited_sources).body.matched
+      field: source.document.source
+      op: eq
+      right: osint
+      operand_type: string
+      satisfied: ExternalCitationsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ExternalCitationsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_reader_clearance
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Separate resolvable cited sources at or below the reader's clearance from those above it.
+    problem: A brief prepared for a lower-cleared reader must not cite above that level, and a silently vanished citation reads as uncited; the above-reader rows travel to their own reported list.
+    goals:
+      - Keep cited sources whose echoed grade is at or above the floor, in order.
+      - Preserve the below-floor rows, in order, so the response reports what was withheld.
+    requirements:
+      input:
+        - The resolvable cited-source rows are selected through one fixed selector.
+        - The ceiling is read through the shared reader_clearance label.
+      output:
+        - matched rows may be surfaced as citations; unmatched rows are withheld drops to report.
+      errors:
+        - A row whose echoed document carries no clearance rank emits CommandError; every rendered document writes the field, external results at the lowest rank.
+    non_goals:
+      - Does not grade a source or alter a row.
+    output:
+      description: Ordered admitted and withheld cited sources.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      # Internal citations alone: the external split before this word is the doctrine exemption (srd011 R7.4), so a row here always carries the seeded rank and an absent field is a fault rather than a category.
+      items: $from(partition_external_citations).body.unmatched
+      # The rank is the level's position in the declared order, seeded onto every chunk: an unrecognized level ranks above every declared one, so unknown material falls outside a reader's window rather than under it.
+      field: source.document.clearance_rank
+      op: lte
+      right: $from(reader_clearance).body.rank
+      operand_type: number
+      satisfied: ReaderClearancePartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReaderClearancePartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_withheld_citations
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render one entry per cited source withheld above the reader's clearance.
+    problem: An unreported withholding leaves assertions reading as uncited for a reason the response never states (srd009 R4.5's shape, applied to the release constraint).
+    goals:
+      - Emit one entry per withheld row, in order, carrying the span and the stated reason.
+    requirements:
+      input:
+        - The withheld rows are selected through one fixed selector.
+      output:
+        - Output is the joined withheld-citation entries.
+      errors:
+        - A row missing a span field emits CommandError.
+    non_goals:
+      - Does not decide the withholding; the partition did.
+    output: {description: Joined withheld-citation entries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_reader_clearance).body.unmatched
+      item_template: |-
+        {"start": {{ json start }}, "end": {{ json end }}, "text": {{ json text }}, "reason": "above-reader-clearance"}
+      separator: ","
+      signal: WithheldCitationsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: WithheldCitationsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_dropped_citations
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render one entry per cited source the turn could not resolve.
+    problem: An unreported drop leaves assertions reading as uncited for a reason the response never states, and makes an uncited answer and an all-dropped one identical (srd009 R4.4, R4.5).
+    goals:
+      - Name the span and the source of every dropped citation, in provider order.
+      - Produce an empty string when nothing was dropped.
+    requirements:
+      input:
+        - The unresolvable partition is selected through one fixed selector.
+      output:
+        - Output is the comma-joined dropped-citation objects, without the surrounding array.
+      errors:
+        - A row missing its span emits CommandError.
+    non_goals:
+      - Does not surface a dropped citation as a source.
+    output: {description: Comma-joined dropped-citation objects.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_cited_sources).body.unmatched
+      item_template: |-
+        {"start": {{ json start }}, "end": {{ json end }}, "text": {{ json text }}, "reason": "unresolved-source"}
+      separator: ","
+      signal: DroppedCitationsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DroppedCitationsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # Re-joining the reader filter's two lanes (GH-378).
+  - name: compose_merged_citations
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the admitted internal and exempt external citations for the merge.
+    problem: The citation render takes one row list, the reader filter produced two, and arrays concatenate only through the compose-parse-flat_map path.
+    goals:
+      - Render both lists into one wrapper, internal first.
+    requirements:
+      input:
+        - Both lists are selected through fixed selectors.
+      output:
+        - Output is the wrapper carrying both lists in order.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not reorder, drop, or alter a row.
+    output: {description: The two-lane wrapper.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    relationships:
+      before: [parse_merged_citations]
+    config:
+      signal: MergedCitationsComposed
+      inputs:
+        internal: $from(partition_reader_clearance).body.matched
+        external: $from(partition_external_citations).body.matched
+      template: |-
+        {"lanes": [{"rows": {{ json internal }}}, {"rows": {{ json external }}}]}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: MergedCitationsComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_merged_citations
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: response
+    description: Validate the merged citation wrapper into command state.
+    problem: The flat_map reads command state through a selector, and a composed string reaches it as text rather than as the two-lane structure.
+    goals:
+      - Make the lanes addressable as $from(parse_merged_citations).body.lanes.
+    requirements:
+      input:
+        - Source is the adjacent composed wrapper.
+      output:
+        - Valid output carries the two lanes, each with its rows array.
+      errors:
+        - A malformed wrapper emits ParseFailed rather than faulting the turn.
+    non_goals:
+      - Does not author or drop a citation.
+    output: {description: The validated lanes.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Validation changes no external state.}
+    relationships:
+      after: [compose_merged_citations]
+      before: [flatten_merged_citations]
+    config:
+      source: $.output
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          lanes:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              properties:
+                rows: {type: array}
+              required: [rows]
+        required: [lanes]
+      parsed: MergedCitationsParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: MergedCitationsParsed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ParseMergedCitationsOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+  - name: flatten_merged_citations
+    type: builtin
+    init: flat_map
+    visibility: internal
+    category: response
+    description: Fan the two citation lanes back into one ordered row list.
+    problem: flat_map is the one word that walks an array of arrays into rows, so it is the concatenation the merge needs.
+    goals:
+      - Emit every internal row, then every external row, each under the citation field.
+    requirements:
+      input:
+        - The lanes are selected from the validated wrapper.
+      output:
+        - Output is one row per citation, in lane order.
+      errors:
+        - A lane whose rows field is absent or not an array emits CommandError.
+    non_goals:
+      - Does not drop, reorder within a lane, or alter a row.
+    output:
+      description: One row per citation, with the row count.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Flattening reads prior state and changes no external state.}
+    relationships:
+      after: [parse_merged_citations]
+    config:
+      items: $from(parse_merged_citations).body.lanes
+      element_fields: {citation: rows}
+      signal: MergedCitationsFlattened
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: MergedCitationsFlattened, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.FlattenMergedCitationsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_citations
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render one structured citation object per cited source.
+    problem: The response carries citations as structured metadata, and a rendered object per row is what the wrapper validates into command state.
+    goals:
+      - Name the assertion span each citation covers, as the provider reported it.
+      - Name the source document the span resolves to, by the identity the rag-server returned.
+      - Produce an empty string when nothing was cited, so the wrapper yields an empty list.
+    requirements:
+      input:
+        - The flattened citation rows are selected through one fixed selector.
+      output:
+        - Output is the comma-joined citation objects, without the surrounding array.
+      errors:
+        - A row missing its span or its source id emits CommandError.
+    non_goals:
+      - Does not decide whether a cited source was composed from; that is the drop rule.
+      - Does not author or renumber a span.
+    output: {description: Comma-joined citation objects.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      # The merged lanes: admitted internal citations first, then the externals the reader filter exempts by category (GH-378) -- every resolvable citation when no reader was stated.
+      items: $from(flatten_merged_citations).body.items
+      # start and end are rune offsets into the answer, verified against the live provider: an answer containing a non-ASCII character before the cited span matches the span by rune and is off by one by byte.
+      item_template: |-
+        {"start": {{ json citation.start }}, "end": {{ json citation.end }}, "text": {{ json citation.text }}, "record_id": {{ json citation.source.id }}}
+      separator: ","
+      signal: CitationsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CitationsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_citations
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the rendered citation objects as one citations array.
+    problem: render_each joins items and cannot emit the surrounding array the schema validates.
+    goals:
+      - Produce a JSON object carrying the citations array.
+    requirements:
+      input:
+        - The rendered citation objects are selected from command state.
+      output:
+        - Output is a JSON object with a citations array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not author, reorder, or validate the citation objects.
+    output: {description: JSON object carrying the citations array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: CitationsComposed
+      inputs:
+        rendered: $from(render_citations).$
+        dropped: $from(render_dropped_citations).$
+        floor_dropped: $from(render_withheld_citations).$
+      template: |-
+        {"citations": [{{ rendered }}], "dropped_citations": [{{ dropped }}], "floor_dropped_citations": [{{ floor_dropped }}]}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CitationsComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The citations default (GH-337): every turn parses an empty citations object under the citations_state label before any tier or fallback branches, and the real parse on the cited path shadows it under the same label (most-recent-match-wins, the composed_documents idiom).
+  - name: parse_citations
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: response
+    description: Validate the composed citations array into addressable command state.
+    problem: The response template reads the citations through a selector, and a composed string reaches the reader as text rather than as an array.
+    goals:
+      - Validate the shape the response contract carries.
+      - Make the citations addressable as $from(parse_citations).body.citations.
+    requirements:
+      input:
+        - Source is the composed citations object.
+      output:
+        - Valid output contains citations as an array of objects carrying a span and a record id.
+      errors:
+        - A malformed array emits ParseFailed rather than faulting the turn.
+    non_goals:
+      - Does not author or drop a citation.
+    output: {description: Validated citations array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Validation changes no external state.}
+    config:
+      source: $from(compose_citations).$
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          citations:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              properties:
+                start: {type: integer}
+                end: {type: integer}
+                text: {type: string}
+                record_id: {type: string}
+              required: [start, end, text, record_id]
+          dropped_citations:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              properties:
+                start: {type: integer}
+                end: {type: integer}
+                text: {type: string}
+                reason: {type: string}
+              required: [start, end, text, reason]
+          # Cited spans withheld below the reader's floor (GH-357): the same shape as a dropped citation, reported apart because the reasons answer different questions -- one names what the provider cited outside what it was given, the other what the release constraint withheld.
+          floor_dropped_citations:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              properties:
+                start: {type: integer}
+                end: {type: integer}
+                text: {type: string}
+                reason: {type: string}
+              required: [start, end, text, reason]
+        required: [citations, dropped_citations, floor_dropped_citations]
+      parsed: CitationsParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CitationsParsed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.Citations>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+  # The three source lists the response reports, each projected to the fields a reader needs before it leaves the mesh.
+  - name: render_composition_ids
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Project the composed documents' identities for response metadata.
+    problem: |
+      Recall is measured at the set handed to composition (srd014 R2.2), and
+      nothing at the request boundary reported that set's identity: the
+      per-source outcomes carry everything retrieved and the citations carry
+      only what was cited. This word projects the ids -- and only the ids --
+      of the validated composed array, so the measurement observes the same
+      boundary the analyst's response does and no document content is
+      duplicated into metadata.
+    goals:
+      - Emit each composed document's id, in composed order.
+    requirements:
+      input:
+        - The validated composed documents are selected through one fixed selector.
+      output:
+        - Output is the comma-joined ids, without the surrounding array.
+      errors:
+        - An unresolved selector emits CommandError, which degrades to an unreported composition.
+    non_goals:
+      - Does not reorder, filter, or carry document content.
+    output: {description: Comma-joined composed document ids.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(parse_documents).body.documents
+      item_template: "{{ json id }}"
+      separator: ","
+      signal: CompositionIdsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CompositionIdsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_composed_sources
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the composed sources as reportable entries.
+    problem: A composed join entry carries the topology entry it was fanned out to, which names an in-cluster address the browser has no use for.
+    goals:
+      - Report the source name, its query outcome, and the chunks it contributed.
+      - Leave the topology entry, and the address in it, inside the mesh.
+    requirements:
+      input:
+        - The composed entries are the model-compatible partition.
+      output:
+        - Output is the entries as JSON objects, comma separated.
+      errors:
+        - An entry missing the projected fields emits CommandError.
+    non_goals:
+      - Does not filter, reorder, or count the entries.
+    output: {description: Rendered composed source entries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_embedding_models).body.matched
+      # documents and ids stay.
+      item_template: '{"name": {{ json input.name }}, "signal": {{ json result.signal }}, "documents": {{ json result.structured_output.mapped.documents }}, "ids": {{ json result.structured_output.mapped.ids }}, "metadatas": {{ json result.structured_output.mapped.metadatas }}}'
+      separator: ","
+      signal: ComposedSourcesRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ComposedSourcesRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_model_excluded_sources
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the embedding-model-excluded sources as reportable entries.
+    problem: An excluded join entry carries the same topology entry, and the exclusion is reported to the browser.
+    goals:
+      - Name each source excluded by the srd002 R3.3 comparison and the identity it reported.
+      - Leave the topology entry inside the mesh.
+    requirements:
+      input:
+        - The excluded entries are the model-incompatible partition.
+      output:
+        - Output is the entries as JSON objects, comma separated.
+      errors:
+        - An entry missing the projected fields emits CommandError.
+    non_goals:
+      - Does not filter or reorder the entries.
+    output: {description: Rendered excluded source entries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_embedding_models).body.unmatched
+      # The identity it reported is the whole reason it was excluded, so that is reported beside the name; the chunks it returned are not, because none of them reached the answer.
+      item_template: '{"name": {{ json input.name }}, "embedding_model": {{ json result.structured_output.mapped.embedding_model }}}'
+      separator: ","
+      signal: ModelExcludedSourcesRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ModelExcludedSourcesRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_query_failed_sources
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the failed sources as reportable entries.
+    problem: A failed join entry carries the topology entry, and its signal is the only thing separating a refusal from a broken boundary.
+    goals:
+      - Name each source whose query did not answer, with the signal that says why.
+      - Leave the topology entry inside the mesh.
+    requirements:
+      input:
+        - The failed entries are the unmatched query-result partition.
+      output:
+        - Output is the entries as JSON objects, comma separated.
+      errors:
+        - An entry missing the projected fields emits CommandError.
+    non_goals:
+      - Does not retry, filter, or reorder the entries.
+    output: {description: Rendered failed source entries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      # The clearance partition's unmatched set, not the query partition's: a source that refused the level is reported as a refusal and must not also appear here as a failure.
+      items: $from(partition_clearance_refusals).body.unmatched
+      # QueryRejected is the rag-server refusing an incompatible vector and CommandError is the boundary failing.
+      item_template: '{"name": {{ json input.name }}, "signal": {{ json result.signal }}}'
+      separator: ","
+      signal: QueryFailedSourcesRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryFailedSourcesRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the answer with complete source selection and query outcome metadata.
+    problem: Every declared source must remain reportable without rebuilding an indexed metadata array.
+    goals:
+      - Report not-selected, compatible, model-excluded, and query-failed sources as distinct ordered sets.
+      - Preserve QueryRejected versus CommandError in each failed join entry.
+    requirements:
+      input:
+        - Fixed selectors read the query partition counts and both generic partitions.
+      output:
+        - Output carries answer, query model, and all per-source outcomes.
+      errors:
+        - Missing fixed pipeline outputs emit CommandError.
+    non_goals:
+      - Does not infer outcomes or merge collections.
+    output: {description: Answer and source outcome metadata.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Response composition changes no external state.}
+    config:
+      signal: ResponseComposed
+      inputs:
+        # Addressed by label, not positionally: a tier declaration runs between the answering word and this one, so the adjacent result is no longer the answer.
+        answer: $from(answer_text).$
+        tier: $from(answer_tier).body.tier
+        query_model: $from(declare_query_model).body.model
+        succeeded: $from(partition_query_results).body.matched_count
+        failed: $from(partition_query_results).body.unmatched_count
+        # The rendered projections, not the join entries: the entries carry the topology the fan-out iterated, base_url included, and this template writes what the browser receives.
+        composed: $from(render_composed_sources).$
+        model_excluded: $from(render_model_excluded_sources).$
+        query_failed: $from(render_query_failed_sources).$
+        clearance_refused: $from(render_clearance_refused_sources).$
+        not_selected: $from(source_selection_report).body.unmatched
+        # The level the turn ran at, read through the shared label both the
+        # accepted and the defaulted words are dispatched under (srd010 R5.1).
+        clearance_enforced_at: $from(analyst_clearance).body.level
+        # The template conformance verdict, published by whichever verdict leg ran under the shared label (srd012 R3.3, R4.5).
+        conformance: $from(conformance_verdict).$
+        # The Ollama path never runs the citation chain, so this selector has no value there.
+        rerank: $from(rerank_status).body.status
+        # The search branch outcome, read through the shared label the three status words are dispatched under (srd011 R5.4).
+        osint: $from(osint_status).body.status
+        # The search pass outcome, through the shared label its two status words are dispatched under (srd011 R3.4, R5.4).
+        osint_rerank: $from(osint_rerank_status).body.status
+        # Whether the composed set is the fused cross-source top-N or the R4.5 fallback, through the shared label the fusion's two status words are dispatched under.
+        fusion: $from(fusion_status).body.status
+        # The composed set's identities, through the label the projection is dispatched under (srd014 R2.2).
+        composition: $from(composition_ids).$
+        # Through the shared citations_state label: the default parse seeds it empty on every turn and the cited path's parse shadows it, so both lists always resolve as arrays and never as the "" an unresolved selector encodes (GH-337).
+        citations: $from(citations_state).body.citations
+        # Reported separately from citations, because an empty citation list means opposite things depending on this one: the provider cited nothing, or it cited only sources the turn could not resolve (srd009 R4.5).
+        dropped_citations: $from(citations_state).body.dropped_citations
+        # The release constraint's withheld spans (GH-378), an empty list on
+        # every turn without a stated reader.
+        floor_dropped_citations: $from(citations_state).body.floor_dropped_citations
+      template: |
+        {
+          "answer": {{ json answer }},
+          "metadata": {
+            "answered_by": {{ json tier }},
+            "query_embedding_model": {{ json query_model }},
+            "rerank": {{ json rerank }},
+            "osint": {"status": {{ json osint }}, "rerank": {{ json osint_rerank }}},
+            "fusion": {{ json fusion }},
+            "composition": {"documents": [{{ composition }}]},
+            "citations": {{ json citations }},
+            "dropped_citations": {{ json dropped_citations }},
+            "floor_dropped_citations": {{ json floor_dropped_citations }},
+            "query_counts": {"succeeded": {{ succeeded }}, "failed": {{ failed }}},
+            "clearance_enforced_at": {{ json clearance_enforced_at }},
+            "conformance": {{ conformance }},
+            "sources": {
+              "not_selected": {{ json not_selected }},
+              "composed": [{{ composed }}],
+              "embedding_model_excluded": [{{ model_excluded }}],
+              "query_failed": [{{ query_failed }}],
+              "clearance_refused": [{{ clearance_refused }}]
+            }
+          }
+        }
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ResponseComposed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.ChatResponse>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_rag_candidates
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: response
+    description: Render, wrap, and validate the retrieved chunks as the rerank documents array in one word.
+    problem: The rerank body needs the candidate texts as one validated documents array, and the three reshapes that build it carry no decision a machine state should own (srd049).
+    goals:
+      - Produce the validated documents object the shared rerank binding reads, in one step.
+    requirements:
+      input:
+        - The candidate rows are selected from command state.
+      output:
+        - Output is the schema-validated JSON object with a documents string array, served under the shared parse_candidates label.
+      errors:
+        - A failing stage emits CommandError naming the stage.
+    non_goals:
+      - Does not score, order, or drop candidates.
+    output: {description: Validated documents array for the rerank body.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Marshalling changes no external state.}
+    config:
+      signal: CandidatesParsed
+      stages:
+        - name: render_texts
+          init: render_each
+          config:
+            items: $from(flatten_chunks).body.items
+            item_template: '{{ json text }}'
+            separator: ','
+            signal: CandidateTextsRendered
+        - name: wrap_documents
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"documents": [{{ rendered }}]}'
+            signal: CandidatesComposed
+        - name: validate
+          init: parse_structured
+          config:
+            source: $.output
+            schema:
+              type: object
+              additionalProperties: false
+              required: [documents]
+              properties:
+                documents: {type: array, items: {type: string}}
+            parsed: CandidatesParsed
+            unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CandidatesParsed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_default_citations
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: response
+    description: Compose and validate the empty citations object every turn starts from.
+    problem: Every turn must resolve citation arrays even when nothing is cited, and composing then validating the constant carries no decision a machine state should own (srd049).
+    goals:
+      - Stand the validated empty citations object under the shared citations label in one step.
+    requirements:
+      input:
+        - None; the default is a declared constant.
+      output:
+        - Output is the schema-validated empty citations object under the citations_state label.
+      errors:
+        - A failing stage emits CommandError naming the stage.
+    non_goals:
+      - Does not resolve or merge real citations; the cited path's parse shadows this result.
+    output: {description: Validated empty citations object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: CitationsParsed
+      stages:
+        - name: compose_default
+          init: compose
+          config:
+            inputs: {}
+            template: '{"citations": [], "dropped_citations": [], "floor_dropped_citations": []}'
+            signal: CitationsComposed
+        - name: validate
+          init: parse_structured
+          config:
+            source: $.output
+            schema:
+              type: object
+              additionalProperties: false
+              required: [citations, dropped_citations, floor_dropped_citations]
+              properties:
+                citations: {type: array}
+                dropped_citations: {type: array}
+                floor_dropped_citations: {type: array}
+            parsed: CitationsParsed
+            unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CitationsParsed, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.Citations>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_search_results
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the retrieved chunks as the search command's result rows.
+    problem: The /search command serves chunks with provenance rather than a brief, and the flattened rows need the served shape (GH-447).
+    goals:
+      - Emit one JSON row per retrieved chunk with its identity, source, text, clearance, and stored metadata.
+    requirements:
+      input:
+        - The flattened chunk rows are selected from command state.
+      output:
+        - A comma-joined list of result-row JSON objects.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not score, order, or drop chunks.
+    output: {description: Rendered result rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(flatten_chunks).body.items
+      item_template: '{"id": {{ json id }}, "source": {{ json source }}, "text": {{ json text }}, "clearance": {{ json metadata.clearance }}, "reliability": {{ json metadata.admiralty_source_reliability }}, "metadata": {{ json metadata }}}'
+      separator: ','
+      signal: SearchResultsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchResultsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_search_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the rendered search results as the /search response body.
+    problem: The HTTP reply needs one JSON object carrying the results and the levels and counts that explain them (GH-447).
+    goals:
+      - Compose the results array with the query, the enforced level, and the failed-source count.
+    requirements:
+      input:
+        - The rendered rows, the carried query, the resolved level, and the partition counts are selected from command state.
+      output:
+        - The response body the search endpoint maps.
+      errors:
+        - Selector failures emit CommandError; absent counts render empty (srd038 R1.5).
+    non_goals:
+      - Does not rank or annotate results.
+    output: {description: Search response body.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: SearchResponseComposed
+      inputs:
+        rendered: $.
+        query: $from(query_embedding).body.carried.input
+        clearance: $from(analyst_clearance).body.level
+        failed: $from(partition_query_results).body.unmatched_count
+      template: '{"results": [{{ rendered }}], "query": {{ json query }}, "clearance_enforced_at": {{ json clearance }}, "failed_sources": {{ json failed }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_leg_absent
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Publish an empty status for a response leg this tier does not run.
+    problem: |
+      compose_response reads the rerank, search rerank, and fusion statuses on
+      every turn, and the loader refuses a selector whose label no transition
+      publishes. The Ollama tier runs none of those legs, so it publishes an
+      empty status under each label instead, which is what the response has
+      always carried for them on this tier.
+    goals: [Publish the empty status under whichever label the transition names.]
+    requirements:
+      input: [Nothing; the tier, not the turn, decides the leg is absent.]
+      output: [Output is a JSON object whose status is empty.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not claim the leg was skipped or degraded; it did not exist.]
+    output: {description: The absent leg's status.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: LegAbsenceDeclared
+      inputs: {}
+      template: '{"status": ""}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LegAbsenceDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_composition_unreported
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Publish no composed identities on a tier that composes without the fused set.
+    problem: |
+      compose_response lists the composed documents' identities from the
+      composition_ids label, which render_composition_ids publishes from the
+      fused set. The Ollama tier has no fused set, so it publishes nothing under
+      the label and the response's composition list stays empty, as before.
+    goals: [Publish an empty identity list under composition_ids.]
+    requirements:
+      input: [Nothing; the tier has no fused set to project.]
+      output: [Output is empty text, which the response renders as an empty list.]
+      errors: [Rendering configured text is deterministic.]
+    non_goals: [Does not project the Ollama tier's own composed sources.]
+    output: {description: No composed identities.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: CompositionUnreported
+      inputs: {}
+      template: ""
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CompositionUnreported, message: builtin.Message<builtin.Text>}

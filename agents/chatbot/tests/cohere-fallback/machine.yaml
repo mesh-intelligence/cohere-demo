@@ -1,0 +1,96 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: cohere-fallback-critic
+purpose: |-
+  Critiques one chat turn whose tier selector reaches the Cohere word while the
+  provider refuses the call. The turn must answer anyway, on the default
+  chat-LLM word, over the same composed grounding.
+
+  Two facts have to hold together, and the second is why this critic has a probe
+  state. That the fallback answered is visible in the answer text. That the
+  Cohere word was reached at all is not: a turn whose tier selection failed to
+  parse takes the same fallback transition and returns the same answer, so an
+  answer-only assertion passes on a run that never touched the provider and
+  proves nothing about degradation.
+
+  The probe settles it through the mock's own script. The Cohere route is
+  scripted to refuse first and succeed after, and a mock repeats its last
+  response, so the critic's own call to that endpoint returns the refusal if the
+  turn never consumed it and the success if it did. The provider's call count
+  becomes a signal the machine can branch on.
+configuration:
+  machine: machine.yaml
+  tools: tools.yaml
+initial_state: Idle
+budget:
+  command_timeout: 2m
+  max_iterations: 10
+states:
+  - name: Idle
+    meaning: Before the chatbot is driven.
+  - name: Checking
+    meaning: The turn has run; its signal decides whether the answer is compared.
+  - name: Asserting
+    meaning: The answer is being compared against the fallback word's reply.
+  - name: Probing
+    meaning: The Cohere mock is being asked whether the turn consumed its refusal.
+  - name: Passed
+    run_status: succeeded
+    meaning: Terminal. The provider refused, the turn answered on the fallback word, and the provider was reached.
+  - name: Failed
+    run_status: failed
+    meaning: Terminal. The turn did not answer, answered with something else, or never reached the provider.
+terminal_states: [Passed, Failed]
+signals:
+  - name: Seed
+    trigger: Loop initialization.
+  - name: SubjectAnswered
+    trigger: The chatbot returned an answer for the turn.
+  - name: SubjectBroke
+    trigger: The chatbot reported a command error.
+  - name: FallbackMatched
+    trigger: The answer equals the fallback word's reply, so the turn degraded rather than failing.
+  - name: FallbackMismatched
+    trigger: The answer is neither the fallback reply nor absent, so some other word answered.
+  - name: CohereConsumed
+    trigger: The Cohere mock has advanced past its refusal, so the turn called it.
+  - name: CohereUntouched
+    trigger: The Cohere mock still serves its refusal, so the turn never called it and the fallback proves nothing.
+  - name: CommandError
+    trigger: The chatbot or the mock was unreachable, or a value could not be read.
+transitions:
+  - state: Idle
+    signal: Seed
+    next: Checking
+    action: drive_chat_turn
+  - state: Checking
+    signal: SubjectAnswered
+    next: Asserting
+    action: assert_fallback_answer
+  - state: Checking
+    signal: SubjectBroke
+    next: Failed
+  - state: Checking
+    signal: CommandError
+    next: Failed
+  - state: Asserting
+    signal: FallbackMatched
+    next: Probing
+    action: probe_cohere
+  - state: Asserting
+    signal: FallbackMismatched
+    next: Failed
+  - state: Asserting
+    signal: CommandError
+    next: Failed
+  - state: Probing
+    signal: CohereConsumed
+    next: Passed
+  - state: Probing
+    signal: CohereUntouched
+    next: Failed
+  - state: Probing
+    signal: CommandError
+    next: Failed

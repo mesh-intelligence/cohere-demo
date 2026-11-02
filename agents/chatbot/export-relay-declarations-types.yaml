@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of export-relay-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-export-relay-declarations-types
+types:
+  - name: RelayExportInput
+    schema:
+      properties:
+        content:
+          type: string
+        schema_version:
+          type: string
+      type: object
+  - name: RelayExportOutput
+    schema:
+      properties:
+        mapped:
+          properties:
+            pdf_base64:
+              type: string
+            status:
+              type: string
+          type: object
+      type: object

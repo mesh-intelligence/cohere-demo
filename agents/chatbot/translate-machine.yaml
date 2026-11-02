@@ -1,0 +1,54 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-translate-request
+purpose: |-
+  GH-670: segments in, translations out one-for-one via a forced tool call;
+  the client splices them back, so citations and gradings never move. The
+  English record stays authoritative.
+initial_state: AwaitingRequest
+budget:
+  command_timeout: 3m
+  max_iterations: 8
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted translate endpoint with segments and language.}
+  - {name: ComposingPrompt, meaning: The segments and target language render as the tool-call prompt.}
+  - {name: Translating, meaning: The flagship is returning one translation per segment via the forced tool call.}
+  - {name: ProjectingArguments, meaning: The tool call's arguments project to a JSON string.}
+  - {name: ParsingTranslations, meaning: The arguments validate against the translations schema.}
+  - {name: ComposingResponse, meaning: The translations wrap for the HTTP reply.}
+  - {name: TranslateServed, meaning: Terminal. The rendition is ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. The rendition failed; the English record stands untouched., run_status: failed}
+terminal_states:
+  - TranslateServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The translate endpoint starts a request-scoped run.}
+  - {name: TranslatePromptComposed, trigger: The prompt rendered.}
+  - {name: LLMResponded, trigger: The flagship returned the tool call.}
+  - {name: ProviderUnauthorized, trigger: The provider refused the credential; collected as failure.}
+  - {name: ProviderThrottled, trigger: The provider throttled the call; collected as failure.}
+  - {name: ProviderUnavailable, trigger: The provider was unavailable; collected as failure.}
+  - {name: TranslateArgumentsProjected, trigger: The tool arguments projected.}
+  - {name: TranslationsParsed, trigger: The translations validated.}
+  - {name: ParseFailed, trigger: The tool arguments failed schema validation.}
+  - {name: TranslateResponseComposed, trigger: The reply rendered.}
+  - {name: CommandError, trigger: A word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: ComposingPrompt, action: compose_translate_prompt}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  - {state: ComposingPrompt, signal: TranslatePromptComposed, next: Translating, action: translate_segments_via_tool, label: translate_tool}
+  - {state: ComposingPrompt, signal: CommandError, next: Failed}
+  - {state: Translating, signal: LLMResponded, next: ProjectingArguments, action: project_translations}
+  - {state: Translating, signal: ProviderUnauthorized, next: Failed}
+  - {state: Translating, signal: ProviderThrottled, next: Failed}
+  - {state: Translating, signal: ProviderUnavailable, next: Failed}
+  - {state: Translating, signal: CommandError, next: Failed}
+  - {state: ProjectingArguments, signal: TranslateArgumentsProjected, next: ParsingTranslations, action: parse_translations}
+  - {state: ProjectingArguments, signal: CommandError, next: Failed}
+  - {state: ParsingTranslations, signal: TranslationsParsed, next: ComposingResponse, action: compose_translate_response, label: translate_response}
+  - {state: ParsingTranslations, signal: ParseFailed, next: Failed}
+  - {state: ParsingTranslations, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: TranslateResponseComposed, next: TranslateServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

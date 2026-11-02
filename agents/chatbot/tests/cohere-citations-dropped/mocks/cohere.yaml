@@ -1,0 +1,57 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Cohere v2 chat endpoint, returning one citation the turn can
+# resolve and one it cannot.
+#
+# The resolvable source names rag0-doc-1, which is the record id mocks/rag0.yaml
+# returns and therefore a document this turn actually composed from. The other
+# names a source of a type that is not a document, which is what an unresolvable
+# cited source looks like: every document Command can cite is one the turn
+# supplied, so a source outside that set is one the provider named on its own.
+#
+# Both in one response on purpose. A scenario returning only the unresolvable
+# one would pass against a turn that dropped every citation indiscriminately,
+# and the point of srd009 R4.4 is that the resolvable one survives while the
+# other is reported.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-1
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject."
+            citations:
+              - start: 0
+                end: 10
+                text: "ASSESSMENT"
+                type: TEXT_CONTENT
+                sources:
+                  - type: document
+                    id: rag0-doc-1
+                    document:
+                      id: rag0-doc-1
+                      content: "rag0 chunk about the rig"
+              - start: 12
+                end: 22
+                text: "the corpus"
+                type: TEXT_CONTENT
+                sources:
+                  - type: tool
+                    id: invented-source-1
+                    document:
+                      id: invented-source-1

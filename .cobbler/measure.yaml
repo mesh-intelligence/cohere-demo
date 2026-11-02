@@ -1,0 +1,5 @@
+# Initial orchestrator measure state for cohere-demo.
+# mage cobbler:measure overwrites this file with the proposed task list (a YAML
+# list of crumb objects). It starts as an empty list: no tasks are proposed
+# until the first measure runs against the vendored corpus.
+[]

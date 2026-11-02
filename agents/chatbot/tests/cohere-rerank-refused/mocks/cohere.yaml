@@ -1,0 +1,38 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Cohere endpoints, refusing the rerank with a rate limit.
+#
+# 429 rather than 401 or 503 because a trial-tier rate limit is the refusal most
+# likely to interrupt a live demonstration; all three map to the same degradation
+# transition, so one exercises the path. The chat endpoint still answers, which
+# is the point: srd009 R5.4 degrades to the pre-rerank order rather than failing
+# the turn, so a refused rerank must cost the ordering and not the answer.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]
+  - method: POST
+    path: /v2/rerank
+    responses:
+      - status: 429
+        body:
+          message: scenario rate limit
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-1
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject."
+            citations: []

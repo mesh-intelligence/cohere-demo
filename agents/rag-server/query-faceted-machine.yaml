@@ -1,0 +1,85 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chroma-rag-query-faceted
+purpose: |-
+  One request-scoped run of the faceted RAG query (srd016 R4). The
+  machine_request query-faceted endpoint seeds this machine with the request
+  body: the query vector, the requester's maximum clearance, the caller's
+  metadata facet constraint, and the keyword. The flow is the plain query
+  machine's -- resolve, clearance window, filter, query -- with two
+  substitutions: the filter is the facet constraint conjoined under the
+  resolved clearance window, and the query binds the keyword as the store's
+  document filter beside it. Both substitutions narrow what the plain query
+  admits and neither can widen it: the clearance conjunct comes from the
+  resolved window alone, and a conjunction only removes candidates (srd016
+  R4.3).
+
+  The clearance words sit between the resolve and the query for the reason the
+  plain machine gives: the filter has to reach the store with the query, so a
+  document the requester cannot see is never a candidate rather than a result
+  removed after scoring (srd010 R2.3). A level the declared set does not
+  recognize reaches ClearanceRefused and no query is issued at all (R4.2).
+initial_state: AwaitingRequest
+budget:
+  # The plain query machine's envelope: the same two sequential chroma
+  # operations bound it, and the faceted compose is local composition adding
+  # iterations rather than wall-clock.
+  command_timeout: 1m
+  max_iterations: 12
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted query-faceted endpoint with the request body.}
+  - {name: ResolvingCollection, meaning: "Create-or-get the collection and carry the query vector, requested level, and facet constraints forward."}
+  - {name: DeclaringClearanceWindows, meaning: The declared ordered clearance set is being rendered as one at-or-below window per level.}
+  - {name: DeclaringRequestedClearance, meaning: The requested level is being put into command state as a candidate for the window lookup.}
+  - {name: ResolvingClearance, meaning: The requested level is being matched against the declared set.}
+  - {name: RenderingClearanceWindow, meaning: The one resolved entry is being rendered as an object the filter and the response address by field.}
+  - {name: ComposingFacetedFilter, meaning: The caller's facet constraint is being conjoined under the resolved clearance window.}
+  - {name: Querying, meaning: Query the resolved collection with the caller-supplied vector under the conjoined filter and the keyword document constraint.}
+  - {name: QueryResponded, meaning: Terminal. The retrieved chunks are ready for the HTTP response., run_status: succeeded}
+  - {name: QueryRejected, meaning: Terminal. Chroma rejected the query vector (for example an embedding-space or dimension mismatch)., run_status: failed}
+  - {name: ClearanceRefused, meaning: "Terminal. The requested level is absent or outside the declared set, so no query was issued.", run_status: failed}
+  - {name: Failed, meaning: Terminal. A Chroma boundary word failed., run_status: failed}
+terminal_states:
+  - QueryResponded
+  - QueryRejected
+  - ClearanceRefused
+  - Failed
+signals:
+  - {name: Seed, trigger: The query-faceted endpoint starts a request-scoped run.}
+  - {name: CollectionReady, trigger: The collection was create-or-got and the vector and facet constraints carried forward.}
+  - {name: ClearanceWindowsDeclared, trigger: The declared ordered clearance set was rendered as at-or-below windows.}
+  - {name: RequestedClearanceDeclared, trigger: The requested level was put into command state as a candidate.}
+  - {name: ClearanceResolved, trigger: The requested level matched a declared window.}
+  - {name: ClearanceRefused, trigger: The requested level is absent or outside the declared ordered set.}
+  - {name: ClearanceWindowRendered, trigger: The resolved entry was rendered as an addressable object.}
+  - {name: FacetedFilterComposed, trigger: The facet constraint was conjoined under the resolved window into the Chroma where-filter.}
+  - {name: QueryResponded, trigger: Chroma returned the retrieved chunks.}
+  - {name: QueryRejected, trigger: Chroma rejected the query vector with a client error.}
+  - {name: CommandError, trigger: A Chroma boundary word failed.}
+transitions:
+  # Labeled rag_resolve so the clearance words and the query word read the
+  # carried values through the same selectors the plain machine binds; only the
+  # word behind the label differs, and it differs by carrying more.
+  - {state: AwaitingRequest,             signal: Seed,                       next: ResolvingCollection,          action: rag_resolve_faceted, label: rag_resolve}
+  - {state: AwaitingRequest,             signal: CommandError,               next: Failed}
+  - {state: ResolvingCollection,         signal: CollectionReady,            next: DeclaringClearanceWindows,    action: declare_clearance_windows}
+  - {state: ResolvingCollection,         signal: CommandError,               next: Failed}
+  - {state: DeclaringClearanceWindows,   signal: ClearanceWindowsDeclared,   next: DeclaringRequestedClearance,  action: declare_requested_clearance}
+  - {state: DeclaringClearanceWindows,   signal: CommandError,               next: Failed}
+  - {state: DeclaringRequestedClearance, signal: RequestedClearanceDeclared, next: ResolvingClearance,           action: resolve_clearance_window}
+  - {state: DeclaringRequestedClearance, signal: CommandError,               next: Failed}
+  # The refusal is a terminal of its own for the plain machine's reason: a
+  # caller degrading a turn needs to tell "this source refused the level" from
+  # "this source broke" (srd010 R4.3, R5.1).
+  - {state: ResolvingClearance,          signal: ClearanceResolved,          next: RenderingClearanceWindow,     action: render_clearance_window}
+  - {state: ResolvingClearance,          signal: ClearanceRefused,           next: ClearanceRefused}
+  - {state: ResolvingClearance,          signal: CommandError,               next: Failed}
+  - {state: RenderingClearanceWindow,    signal: ClearanceWindowRendered,    next: ComposingFacetedFilter,       action: compose_faceted_query_filter}
+  - {state: RenderingClearanceWindow,    signal: CommandError,               next: Failed}
+  - {state: ComposingFacetedFilter,      signal: FacetedFilterComposed,      next: Querying,                     action: rag_query_faceted}
+  - {state: ComposingFacetedFilter,      signal: CommandError,               next: Failed}
+  - {state: Querying,                    signal: QueryResponded,             next: QueryResponded}
+  - {state: Querying,                    signal: QueryRejected,              next: QueryRejected}
+  - {state: Querying,                    signal: CommandError,               next: Failed}

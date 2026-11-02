@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: agent-profile
+schema_version: 1
+name: chatbot-turn-critic
+machine: machine.yaml
+tools:
+  - tools.yaml
+tool_declarations:
+  - declarations.yaml
+rest_definitions:
+  - rest.yaml

@@ -1,0 +1,70 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Small-footprint values for the kind smoke test and the demo that layers them.
+# One RAG unit, minimal resources, no ingress, tiny storage.
+image:
+  pullPolicy: IfNotPresent
+
+chatbot:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+ragUnits:
+  - name: rag0
+    description: Ukraine December 2022 intelligence corpus — ISW campaign assessments, strike and loss records, Telegram news reporting, and clearance-marked HUMINT field reports; harvested web material lands here too.
+    collection: corpus
+    embeddingModel: qwen3-embedding:8b
+    replicas: 1
+
+ragServer:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+chroma:
+  storage: 256Mi
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 500m, memory: 512Mi}
+
+dolt:
+  storage: 256Mi
+
+# The chart-local Collector remains the pod-facing gateway while forwarding
+# integration traces and metrics to the persistent host ingress. The Mage
+# launcher overrides commit and runID for each scenario.
+collector:
+  externalOTLPEndpoint: host.docker.internal:4317
+  integrationResource:
+    repository: mesh-intelligence/declarative-agents
+    module: applications/chatbot-mesh
+    target: integration:helm
+    commit: unknown
+    runID: local-kind
+
+ingress:
+  enabled: false
+
+# The applier image bundles helm, kubectl, and the chart (srd003 R1.3), not the
+# runtime image the smoke/swap tests kind-load. Disable it here so those tests do
+# not wait on an un-loaded image; the deployment-API flow is exercised by
+# Integration.ControlPlane with a fake deployment API.
+applier:
+  enabled: false
+
+# The smoke/swap tests use an external Ollama on the host; the in-cluster LLM tier
+# is exercised by its own values (ci/kind-llm-values.yaml) so these tests do not
+# wait on a model preload.
+ollama:
+  enabled: false
+
+llm:
+  externalURL: http://host.docker.internal:11434
+
+# The brief exporter's image is built only by demo:up (images/exporter.Dockerfile)
+# and is not published, so a scenario that does not build it cannot pull it.
+# These scenarios do not exercise export; integration:exporter proves it against
+# the demo, which re-enables it beside the image it builds (GH-759).
+exporter:
+  enabled: false

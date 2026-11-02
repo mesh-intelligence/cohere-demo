@@ -1,0 +1,158 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel12.1-cascade-rerank
+title: Test Suite for Release 12.1 Cascade Rerank
+release: "12.1"
+
+traces: [rel12.1-uc001-cascade-rerank]
+
+preconditions:
+  - The rel12.0 OSINT branch is standing, so the search results reaching these passes are already normalized into the RAG candidate shape and no per-branch adapter sits inside the cascade.
+  - A probe tasking whose best material is split across the two branches, with the cross-source ordering known in advance. Without a known correct ordering the suite can observe that a fusion ran but not that it ordered on one scale.
+  - A search fixture returning a long tail, so the trim cutoff is exercised against material that would otherwise dominate the fusion by volume.
+  - The rel10.2 rerank operation is declared and shared, since these are its second and third callers rather than new operations.
+  - The scenario tiers require no credential and no network; the live tiers require COHERE_API_KEY exported by the operator.
+
+test_cases:
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: A tasking split across both branches produces a cited brief from a re-scored top-N
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: The probe tasking's best material sits partly in the corpus and partly in the search results, and the composed brief cites both. The fused top-N matches the cross-source ordering known in advance, which is what separates a fusion that re-scored from a merge that interleaved -- both produce a set containing documents from both branches.
+    expected:
+      http_status: 200
+      brief_cites_documents_from_both_branches: true
+      fused_top_n_matches_known_cross_source_ordering: true
+      set_membership_alone_not_treated_as_evidence: true
+      skips_without_credential: true
+      skip_names_variable: COHERE_API_KEY
+    traces:
+      - rel12.1-uc001-cascade-rerank S1
+      - srd011-osint-search-cascade-rerank AC4
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: The fusion re-scores every candidate rather than combining the branches' prior scores
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: The fused ordering is the provider's ordering over the union, and it is not reproducible as any function of the branches' vector distances and search ranks. A run whose fused order can be recomputed from the prior scores has merged arithmetically, which produces comparable-looking numbers over incomparable units and fails silently.
+    expected:
+      every_candidate_rescored_against_the_tasking: true
+      fused_order_not_reproducible_from_prior_scores: true
+      no_arithmetic_combination_of_distance_and_rank: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S2
+      - srd011-osint-search-cascade-rerank AC4
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: The fused top-N is what invoke_cohere_command composes from, with N declared
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: With the search branch enabled the documents list reaching invoke_cohere_command is the first N of the fused set rather than the RAG-only top-N, and N comes from declared configuration rather than from either branch's result count. A composed count that tracks how much either branch returned has moved the budget outside the deployment's control.
+    expected:
+      composed_documents_equal_first_n_of_fused_set: true
+      rag_only_top_n_replaced_when_search_enabled: true
+      n_read_from_declared_configuration: true
+      n_independent_of_either_branch_result_count: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S3
+      - srd011-osint-search-cascade-rerank AC4
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: All three cascade passes call the one declared rerank reference
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: The shipped profile declares one rerank operation, and the RAG, search, and fusion passes each reference it, differing only in the candidate set each state supplies. Three operations against one endpoint would be three credential references, three allowlist entries, and three sets of limits to keep in step, which is the arrangement rel10.2 declared shared to avoid.
+    expected:
+      one_rerank_operation_declared: true
+      rag_pass_references_the_shared_operation: true
+      search_pass_references_the_shared_operation: true
+      fusion_pass_references_the_shared_operation: true
+      passes_differ_only_in_candidate_set: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S4
+      - srd011-osint-search-cascade-rerank AC4
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: A fusion failure falls back to the reranked RAG branch and records it
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: A scripted refusal and a scripted empty response both leave the turn composing from the reranked RAG branch, which is what the previous release composed from, and both record the degradation. An empty ordering is a successful call carrying no information, so treating only error statuses as degradation composes from an order never received and reports nothing.
+    expected:
+      http_status: 200
+      turn_answers: true
+      falls_back_to_reranked_rag_branch: true
+      degradation_reported_in_metadata: true
+      empty_fusion_response_treated_as_degradation: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S5
+      - srd011-osint-search-cascade-rerank AC4
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: The search branch is reranked on its own as the second pass
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: A RerankingSearch state reorders the search results against the tasking through the shared operation before the fusion runs, so the branch entering the union has been scored against the tasking rather than only by the external engine.
+    expected:
+      search_branch_reordered_before_fusion: true
+      reorder_scored_against_the_tasking: true
+      uses_the_shared_rerank_operation: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S6
+      - srd011-osint-search-cascade-rerank AC3
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: The reranked search branch is trimmed to a declared cutoff before the fusion
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: The long-tail fixture is cut to the declared cutoff before entering the union, so the open-search tail does not compete with curated internal reporting on volume. The cutoff is declared configuration rather than taken from how many results the engine returned.
+    expected:
+      search_branch_trimmed_before_fusion: true
+      cutoff_read_from_declared_configuration: true
+      cutoff_independent_of_engine_result_count: true
+      long_tail_does_not_dominate_the_union: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S7
+      - srd011-osint-search-cascade-rerank AC3
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: The search pass reorders within what the search returned
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: Every document after the pass was returned by the search, and none is introduced. This is the same permutation property the first cascade pass carries, and the same failure an improved answer hides -- a pass that retrieved rather than reordered produces a better brief and a candidate set that grew.
+    expected:
+      no_document_added_by_the_search_pass: true
+      reordered_search_set_is_a_permutation_before_trim: true
+      no_second_search_issued_inside_the_pass: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S8
+      - srd011-osint-search-cascade-rerank AC3
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: A search-rerank failure leaves the engine order and the turn continues into the fusion
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: A scripted refusal and an empty response both leave the search branch in the order the engine returned, record the degradation, and let the turn proceed into the fusion rather than failing. The branch is still useful in the engine's order, which is the order rel12.0 delivered before this release existed.
+    expected:
+      http_status: 200
+      search_branch_retains_engine_order: true
+      degradation_reported_in_metadata: true
+      turn_continues_into_fusion: true
+      turn_does_not_fail: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S9
+      - srd011-osint-search-cascade-rerank AC3
+
+  - use_case: rel12.1-uc001-cascade-rerank
+    name: The single-fusion collapse is supported, recorded as a tunable, and not the default
+    integration_target: mage integration:cascadeRerank
+    status: implemented
+    description: With the tunable configured the per-branch passes are skipped and one rerank runs over the raw union, still producing a fused top-N ordered on one scale. The default configuration runs all three passes, so a deployment trades the tail trim for latency knowingly rather than by inheriting it.
+    expected:
+      single_fusion_configuration_supported: true
+      per_branch_passes_skipped_under_the_tunable: true
+      fused_top_n_still_ordered_on_one_scale: true
+      three_pass_cascade_is_the_default: true
+      tunable_recorded_in_configuration: true
+    traces:
+      - rel12.1-uc001-cascade-rerank S10
+      - srd011-osint-search-cascade-rerank AC4

@@ -1,0 +1,78 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel07.0-uc001-collector-ingress
+title: The collector agent retains and relays an attributable trace batch
+
+summary: |
+  An operator enables agent trace ingress. The collector profile starts its
+  receiver, control, and monitor surfaces. A chatbot run exports an attributable
+  batch; the collector awaits it, records stdouttrace-compatible evidence, and
+  relays the unchanged request to Jaeger. The collector's own lifecycle spans
+  remain in its file exporter. The migration is now complete: the collector agent
+  owns OTLP metric intake (GH-1207) and the in-cluster Dolt Prometheus scrape is
+  retired (GH-1366); contrib remains selectable for the trace path only.
+
+actor: Mesh integration operator
+trigger: A values overlay selects collector implementation agent and starts a chatbot scenario with unique run identity.
+
+flow:
+  - F1: Helm renders the collector-agent profile and points both trace and OTLP metric producers at its OTLP/gRPC Service; no contrib metrics gateway is deployed.
+  - F2: The collector launches control, monitor, and bounded OTLP receiver listeners and enters await.
+  - F3: A chatbot scenario exports spans carrying repository, module, target, commit, run id, and stable service identity.
+  - F4: Await returns one complete batch and declared policy accepts it.
+  - F5: Spool appends complete stdouttrace-compatible NDJSON lines and syncs them.
+  - F6: Relay mode exports the unchanged batch to Jaeger and returns to await; test mode returns directly to await.
+  - F7: Evidence asserts matching trace, span, parent, service, and run identity in the spool and Jaeger.
+  - F8: Evidence asserts agent OTLP metrics through the collector agent; the in-cluster Dolt Prometheus scrape is retired and no longer required (GH-1366).
+  - F9: Lifecycle exit stops receiver, monitor, and control while persistent evidence remains queryable.
+
+touchpoints:
+  - "srd007-collector-agent R1.1, R1.2 -- persistent bounded intake and visible machine sentence"
+  - "srd007-collector-agent R2.1, R2.2 -- complete integration identity in spool and relay"
+  - "srd007-collector-agent R3.1, R3.2 -- test and relay modes"
+  - "srd007-collector-agent R4.1, R4.2, R4.3 -- control, monitor, and lifecycle cleanup"
+  - "srd007-collector-agent R5.1, R5.3 -- file-only telemetry and self-loop proof"
+  - "srd007-collector-agent R6.2, R6.4 -- agent owns trace and OTLP metric intake; contrib opt-in trace-only"
+  - "srd003-chatbot-deployment R5.10 -- retained persistent trace and metric evidence"
+
+success_criteria:
+  - id: S1
+    criterion: The collector profile receives a real chatbot OTLP batch through declared bounded intake.
+    traces: [srd007-collector-agent AC1]
+  - id: S2
+    criterion: Spool and Jaeger contain matching trace, span, parent, service, and unique run identity.
+    traces: [srd007-collector-agent AC2]
+  - id: S3
+    criterion: The same profile passes spool-only test mode and spool-first relay mode.
+    traces: [srd007-collector-agent AC3]
+  - id: S4
+    criterion: Control exit releases listeners and blocked waits while monitor reports bounded outcomes.
+    traces: [srd007-collector-agent AC4]
+  - id: S5
+    criterion: Client spans enter the receiver and collector-process spans remain only in its file.
+    traces: [srd007-collector-agent AC5]
+  - id: S6
+    criterion: Agent OTLP metrics remain available through the collector agent and retained evidence survives teardown; the in-cluster Dolt scrape is retired in agent mode (GH-1366).
+    traces: [srd007-collector-agent AC6]
+
+failure_scenarios:
+  - id: E1
+    scenario: Agent mode drops its own OTLP metric intake.
+    expected: Rejected; the collector agent owns OTLP metric intake (GH-1207) and metric evidence must remain available. The in-cluster Dolt Prometheus scrape, by contrast, is intentionally retired in agent mode (GH-1366).
+  - id: E2
+    scenario: Collector lifecycle spans arrive at its own receiver.
+    expected: Rejected; collector telemetry is file-only and the proof observes no self batch.
+  - id: E3
+    scenario: Relay succeeds before deterministic spool.
+    expected: Rejected; spool is the preceding visible state and failure cannot route implicitly to relay.
+  - id: E4
+    scenario: Trace ids match but run or service identity changes.
+    expected: Rejected; all bounded integration resource identity must match end to end.
+
+out_of_scope:
+  - Collector-agent logs intake.
+  - Re-adding an in-cluster Dolt Prometheus scrape to the default agent collector.
+  - Jaeger query behavior beyond evidence assertions.
+
+test_suite_trace: test-rel07.0-collector
+status: implemented

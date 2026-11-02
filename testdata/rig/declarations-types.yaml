@@ -1,0 +1,166 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: rig-declarations-types
+types:
+  - name: CollectScenarioVerdictOutput
+    schema:
+      properties:
+        passed:
+          type: boolean
+        reason:
+          type: string
+        scenario:
+          type: string
+        subject:
+          type: string
+      type: object
+  - name: DiscoverScenariosOutput
+    schema:
+      properties:
+        roots:
+          type: array
+        scenarios:
+          type: integer
+      type: object
+  - name: FailScenarioStartOutput
+    schema:
+      properties:
+        passed:
+          type: boolean
+        reason:
+          type: string
+      type: object
+  - name: FailScenarioUnhealthyOutput
+    schema:
+      properties:
+        passed:
+          type: boolean
+        reason:
+          type: string
+      type: object
+  - name: FailScenarioValidatorsOutput
+    schema:
+      properties:
+        passed:
+          type: boolean
+        reason:
+          type: string
+      type: object
+  - name: ListScenarioChildrenOutput
+    schema:
+      properties:
+        children:
+          type: array
+      type: object
+  - name: NextScenarioOutput
+    schema:
+      properties:
+        exhausted:
+          type: boolean
+        fixtures:
+          type: array
+        scenario:
+          type: string
+        subject:
+          type: string
+        validators:
+          type: array
+      type: object
+  - name: ProbeSubjectHealthOutput
+    schema:
+      properties:
+        attempts:
+          type: integer
+        operation:
+          type: string
+        status:
+          type: integer
+      type: object
+  - name: RecordScenarioValidatorsOutput
+    schema:
+      properties:
+        passed:
+          type: boolean
+        validators:
+          type: array
+      type: object
+  - name: ReportRigSessionOutput
+    schema:
+      properties:
+        first_failure:
+          type: object
+        passed:
+          type: boolean
+        scenarios:
+          type: integer
+        verdicts:
+          type: array
+      type: object
+  - name: RunScenarioValidatorOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        name:
+          type: string
+        passed:
+          type: boolean
+        profile:
+          type: string
+        timed_out:
+          type: boolean
+      type: object
+  - name: StartScenarioMockOutput
+    schema:
+      properties:
+        mock:
+          type: object
+      type: object
+  - name: StartScenarioSubjectOutput
+    schema:
+      properties:
+        base_url:
+          type: string
+        env:
+          type: array
+        health_base_url:
+          type: string
+        health_path:
+          type: string
+        profile:
+          type: string
+        started_at:
+          type: string
+        subject:
+          type: string
+      type: object
+  - name: StopAllServicesOutput
+    schema:
+      properties:
+        children:
+          type: array
+        stopped:
+          type: integer
+      required:
+        - stopped
+        - children
+      type: object
+  - name: StopScenarioChildOutput
+    schema:
+      properties:
+        service:
+          type: string
+        stopped:
+          type: boolean
+      type: object
+  - name: WaitHealthRetryOutput
+    schema:
+      properties:
+        deadline_reached:
+          type: boolean
+        waited:
+          type: string
+      type: object

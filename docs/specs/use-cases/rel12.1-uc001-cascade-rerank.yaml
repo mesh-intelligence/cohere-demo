@@ -1,0 +1,150 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel12.1-uc001-cascade-rerank
+title: RAG and Search Candidates Fuse Into One Reranked Top-N Ordered on a Single Relevance Scale
+
+summary: |
+  A tasking retrieves from two places at once. The internal corpus returns
+  clearance-filtered chunks ranked by vector distance; the OSINT branch returns
+  open-source extracts ranked by an external engine. Each branch is reranked on
+  its own against the tasking, and a third rerank reorders the union. What
+  Command composes from is a top-N in which every document was scored against
+  the same tasking on the same scale, whichever branch it came from.
+
+  Merging the branches by their own scores is the design this release exists to
+  avoid. Vector distance, search rank, and rerank score are three quantities
+  that share no unit. Combining them arithmetically produces an ordering that
+  looks principled and is not, and the failure is silent -- the brief still gets
+  written, from whichever source's numbers happened to dominate. Re-scoring
+  every candidate against the tasking is what makes the ordering mean one thing.
+
+  The per-branch passes are not redundant with the fusion. An open search returns
+  a long tail, and a tail entering the fusion at full length competes with
+  curated internal reporting on volume rather than on relevance. Reranking each
+  branch first and trimming to a declared cutoff is what puts comparable amounts
+  of plausible material in front of the final pass. Collapsing the three passes
+  into a single fusion over the raw union is a supported configuration and a
+  latency tunable, recorded as such, and deliberately not the default.
+
+  All three passes call one rerank operation. They differ in the candidate set
+  each supplies, not in how they call, which is why the operation was declared as
+  shared from its first caller in rel10.2 rather than grown per pass. Three
+  operations against one provider endpoint would be three credential references,
+  three allowlist entries, and three sets of limits to keep in step.
+
+  Every added pass degrades rather than fails. A search-rerank failure leaves the
+  search branch in the engine's order; a fusion failure falls back to the
+  reranked RAG branch, which is what the previous release composed from. The
+  brief still gets written, and the degradation is recorded rather than left to
+  be inferred from an answer that reads normally.
+
+actor: Intelligence analyst posing a tasking answered from both the internal corpus and open-source reporting
+trigger: The analyst submits a tasking to a mesh where both the RAG fan-out and the OSINT search branch return candidates.
+
+flow:
+  - F1: The clearance-filtered RAG fan-out produces its candidates and the first cascade pass reranks them against the tasking, as rel10.2 established.
+  - F2: The OSINT branch returns its results, normalized into the same candidate shape.
+  - F3: A RerankingSearch state reorders the search results on their own against the tasking through the same declared rerank operation, as the second cascade pass.
+  - F4: The reranked search branch is trimmed to a declared cutoff, so the open-search tail does not enter the fusion at full length.
+  - F5: That pass reorders within the results the search returned and introduces no document the search did not surface.
+  - F6: A RerankingFused state reranks the union of the two reranked branches against the tasking, re-scoring every candidate rather than combining the branches' existing scores.
+  - F7: The fused top-N becomes the documents list passed to invoke_cohere_command, replacing the RAG-only top-N whenever the search branch is enabled.
+  - F8: Command composes the brief from that cross-source set, and the brief cites documents from both branches with external provenance visible.
+  - F9: A cohere_rerank_search failure or empty response leaves the search branch in the engine's order, records the degradation, and the turn continues into the fusion.
+  - F10: A cohere_rerank_fused failure or empty response falls back to the reranked RAG branch, records the degradation, and the turn answers.
+  - F11: With the single-fusion tunable configured, the per-branch passes are skipped and one rerank runs over the raw union, which is supported, recorded, and not the default.
+
+touchpoints:
+  - id: T1
+    target: srd011-osint-search-cascade-rerank AC4
+    reason: The release is this acceptance criterion -- a third rerank over the union of both reranked branches, re-scored on one relevance scale rather than merged arithmetically, producing the top-N invoke_cohere_command composes from, calling the same single rerank reference, and falling back to the reranked RAG branch on error.
+  - id: T2
+    target: srd011-osint-search-cascade-rerank AC3
+    reason: The search branch is reranked on its own against the tasking and trimmed to a declared cutoff, reordering within what the search returned without retrieving, and a rerank error leaves the engine's order with the degradation recorded.
+  - id: T3
+    target: srd009-cohere-provider AC5
+    reason: The second and third passes are further callers of the rerank operation rel10.2 declared as shared, differing only in the candidate set each state supplies, so a third model capability does not become three transports.
+  - id: T4
+    target: srd009-cohere-provider AC3
+    reason: The fused top-N is what invoke_cohere_command receives as its documents list, so the composition tier consumes this cascade's output and is otherwise unchanged.
+  - id: T5
+    target: srd011-osint-search-cascade-rerank AC1
+    reason: The candidates the second pass reorders are the normalized search results the rel12.0 branch produces, so the cascade consumes that branch's output shape rather than reconciling two formats.
+  - id: T6
+    target: srd002-chatbot-agent AC1
+    reason: Both passes are states inserted between retrieval and composition; how the turn embeds, selects sources, and fans out is unmodified.
+
+success_criteria:
+  - id: S1
+    criterion: A tasking whose best material is split across the two branches produces a brief citing documents from both, drawn from a top-N in which every entry was re-scored against the tasking. A fused set that happens to contain both sources is not this, because a score merge produces that too.
+    traces:
+      - srd011-osint-search-cascade-rerank AC4
+  - id: S2
+    criterion: The fusion re-scores every candidate on one relevance scale, and combining vector distance, search rank, and rerank score arithmetically does not satisfy it. The evidence is that the fused ordering is the provider's ordering over the union rather than a function computed from the branches' prior scores.
+    traces:
+      - srd011-osint-search-cascade-rerank AC4
+  - id: S3
+    criterion: The fused top-N is the documents list reaching invoke_cohere_command whenever the search branch is enabled, replacing the RAG-only top-N, with N read from declared configuration rather than from either branch's result count.
+    traces:
+      - srd011-osint-search-cascade-rerank AC4
+  - id: S4
+    criterion: All three cascade passes call the one declared rerank reference, differing only in the candidate set each supplies. Three operations against the same endpoint would be three credentials, three allowlist entries, and three sets of limits to keep in step.
+    traces:
+      - srd011-osint-search-cascade-rerank AC4
+  - id: S5
+    criterion: A cohere_rerank_fused error or empty response falls back to the reranked RAG branch and records the degradation, and the turn answers. A degraded turn and a healthy one both return a composed brief, so the response says which occurred.
+    traces:
+      - srd011-osint-search-cascade-rerank AC4
+  - id: S6
+    criterion: The search branch is reordered on its own against the tasking before the fusion, as the second pass, through the same rerank operation.
+    traces:
+      - srd011-osint-search-cascade-rerank AC3
+  - id: S7
+    criterion: The reranked search branch is trimmed to a declared cutoff before the fusion, so the open-search tail does not enter at full length and compete with curated internal reporting on volume.
+    traces:
+      - srd011-osint-search-cascade-rerank AC3
+  - id: S8
+    criterion: The search-branch pass reorders within the results the search returned. No document appears that the search did not surface, which is the same permutation property the first pass carries and the same failure an improved answer would hide.
+    traces:
+      - srd011-osint-search-cascade-rerank AC3
+  - id: S9
+    criterion: A cohere_rerank_search error or empty response leaves the search branch in the order the engine returned, records the degradation, and the turn continues into the fusion rather than failing.
+    traces:
+      - srd011-osint-search-cascade-rerank AC3
+  - id: S10
+    criterion: The single-fusion collapse is a supported configuration recorded as a latency tunable and is not the default, and a deployment running it still produces a fused top-N ordered on one scale.
+    traces:
+      - srd011-osint-search-cascade-rerank AC4
+
+failure_scenarios:
+  - id: E1
+    scenario: The branches are merged by normalizing their scores onto a common range and interleaving, which is cheaper than a third provider call.
+    expected: Rejected; R4.2 forbids the arithmetic merge. Normalizing incomparable units produces comparable-looking numbers rather than comparable meanings, and the resulting order depends on each branch's score distribution rather than on the tasking. The failure is silent, which is why the requirement names the technique it excludes.
+  - id: E2
+    scenario: The per-branch passes are dropped and one fusion rerank runs over the raw union, since the fusion re-scores everything anyway.
+    expected: Supported but not the default; R6.4 records it as a latency tunable. The fusion does re-score everything, and the open-search tail still arrives at full length, so the union is dominated by volume from the branch that returns more. The per-branch trim is what the demonstration exists to show, and a deployment may trade it for latency knowingly.
+  - id: E3
+    scenario: A separate rerank operation is declared for the search pass, since its inputs and cutoff differ from the RAG pass.
+    expected: Rejected; R4.4 keeps one reference for all three. The passes differ in the candidate set each supplies, which is a state-level difference rather than a transport-level one, and this is the arrangement rel10.2 established for exactly this reason.
+  - id: E4
+    scenario: A fusion failure fails the turn, since composing from one branch is not what the release promises.
+    expected: Rejected; R4.5 falls back to the reranked RAG branch. That branch is what the previous release composed from and is a serviceable ordering, so failing trades a working answer for none. The degradation is recorded because a degraded turn otherwise reads as a healthy one.
+  - id: E5
+    scenario: The search-branch pass is allowed to query the engine again with reranked terms, since the point is better external material.
+    expected: Rejected; R3.3 confines the pass to what the search returned. Retrieving inside a rerank makes the top-N depend on a second search nothing in the release specifies, and it hides the permutation failure behind an answer that improved.
+  - id: E6
+    scenario: The trim cutoff is taken from how many results the engine returned, since the engine knows how much was relevant.
+    expected: Rejected; R3.2 makes the cutoff declared. A provider-decided cutoff moves the fusion's input budget outside the deployment's control and lets two runs of the same tasking fuse different amounts of material with no declaration changing.
+  - id: E7
+    scenario: The cascade is proven by asserting the fused top-N differs from the RAG-only top-N.
+    expected: Insufficient alone. A difference shows the search branch contributed, not that the ordering is on one scale. The suite pairs it with a tasking whose cross-source ordering is known in advance, so a fusion that re-scored and a merge that interleaved are distinguishable.
+
+out_of_scope:
+  - The OSINT search branch, its egress allowlist, and its data-minimization contract; that is rel12.0.
+  - Defining the rerank REST operation, which srd009 owns and this release calls as its second and third caller.
+  - Measuring the recall the cascade buys across a corpus; that is srd014 and rel13.0.
+  - Clearance-gating external documents, which sit outside the clearance model by design.
+  - Parallelizing the branches or the passes, which follows the existing sequential decision and its recorded concurrency follow-on.
+
+test_suite_trace: test-rel12.1-cascade-rerank
+status: implemented

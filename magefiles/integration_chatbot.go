@@ -1,0 +1,1108 @@
+// Copyright (c) 2026 Mesh Intelligence Inc.
+// SPDX-License-Identifier: MIT-0
+
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	chatbotProfile = "agents/chatbot/profile.yaml"
+
+	chatbotChatURL       = "http://127.0.0.1:18080/api/v1/chat"
+	chatbotControlHealth = "http://127.0.0.1:18081/api/lifecycle/health"
+	chatbotControlExit   = "http://127.0.0.1:18081/api/lifecycle/exit"
+	chatbotMonitorState  = "http://127.0.0.1:18082/monitor/state"
+
+	// The second rag-server (rag1) is a generated variant of the rag-server
+	// profile serving a disjoint collection on a distinct port triple.
+	rag1ControlHealth = "http://127.0.0.1:18096/api/lifecycle/health"
+	rag1ControlExit   = "http://127.0.0.1:18096/api/lifecycle/exit"
+
+	chromaCorpus2 = "corpus2"
+
+	chatbotFanOutQuestion = "List every named project or system described across the knowledge base. Return one line for each of these three entries: the corpus-agent system, the development methodology, and the photovoltaic energy project. Use the exact name from the retrieved chunks."
+)
+
+// Chatbot proves the tier-selected, two-RAG chat turn end to end across the mesh
+// topology: one Chroma container with two disjoint collections, two rag-server
+// agents (rag0 over the ingest fixture, rag1 over a seeded disjoint corpus), the
+// tier-selector-enabled chatbot, and an external Ollama for the embedding, tier selector, and
+// two chat models. It drives the chat machine_request endpoint (not the browser):
+//
+//   - a factual turn and an analytical turn exercise the $tool tier selector, and
+//     each turn's chatbot span log is asserted to show exactly one declared answer
+//     word with its configured chat model attributed to that dispatch;
+//   - a cross-corpus turn draws the disjoint rag1 corpus into the answer
+//     (sequential fan-out; compose renders each RAG under its [ragN] header, no
+//     merge word);
+//   - stopping rag1 degrades the next turn to a 200 answered from rag0 alone, with
+//     the disjoint corpus absent (via the CommandError machine transition);
+//   - the chatbot turn and each rag-server it called are one connected trace
+//     (shared trace id, the rag-server span parented under a chatbot span).
+//
+// It skips (does not fail) when Docker or Ollama with the configured models is
+// unavailable, naming the missing model, matching Integration.RagServer. One
+// Chroma container with two collections stands in for two containers; the disjoint
+// corpora are what the fan-out exercises. Cross-agent trace continuity comes from
+// traceparent propagation and request-scoped span export.
+func (Integration) Chatbot() error {
+	profilesRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	coreRoot := demoCoreRoot(profilesRoot)
+	if err := requireProfilePaths(profilesRoot,
+		chatbotProfile, ragServerProfile, chromaIngestProfile,
+		"agents/chatbot/rest.yaml", "agents/chatbot/request-declarations.yaml",
+	); err != nil {
+		return err
+	}
+	requiredModels, err := chatbotRequiredModels(profilesRoot)
+	if err != nil {
+		return fmt.Errorf("invalid shipped chatbot model config: %w", err)
+	}
+	if reason := chatbotOllamaSkipReasonForModels(requiredModels); reason != "" {
+		fmt.Printf("SKIP chatbot: %s\n", reason)
+		return nil
+	}
+	// The turn embeds its query at Cohere, and both collections are seeded there
+	// so their reported identity matches the query vector's. Without the
+	// credential neither half can run, and a target that seeded at Ollama and
+	// queried at Cohere would report every source excluded -- a red run that
+	// says nothing about the code.
+	if reason := cohereCredentialSkipReason(); reason != "" {
+		fmt.Printf("SKIP chatbot: %s\n", reason)
+		return nil
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		fmt.Println("SKIP chatbot: docker not found on PATH")
+		return nil
+	}
+	return runChatbotIntegration(profilesRoot, coreRoot)
+}
+
+func runChatbotIntegration(profilesRoot, coreRoot string) error {
+	binary, cleanupAgent, err := buildAgent(coreRoot)
+	if err != nil {
+		return err
+	}
+	defer cleanupAgent()
+	dataDir, err := os.MkdirTemp("", "chatbot-mesh-chatbot-data-*")
+	if err != nil {
+		return fmt.Errorf("create chroma data dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dataDir) }()
+	containerID, err := startRequiredChromaContainer(dataDir, ensureChromaServer)
+	if err != nil {
+		return fmt.Errorf("chatbot dependency startup: %w", err)
+	}
+	defer stopChromaContainer(containerID)
+
+	// Both collections are seeded at Cohere, because the turn embeds its query
+	// there. srd002 R3.3 excludes any source whose seeded identity differs from
+	// the query vector's, so a collection seeded at Ollama is not a degraded
+	// source here -- it is an excluded one, and the turn composes from nothing
+	// while still answering 200.
+	//
+	// This target seeds inline rather than through the corpus-ingest agent: it
+	// writes a disjoint in-memory corpus alongside the fixture (below), which is
+	// not a corpus directory the agent ingests, and the inline write keeps the
+	// two collections deterministic without standing up the agent's Cohere
+	// ingest. app:seed does use the agent now that upstream normalizes the
+	// provider row (pre-move upstream declarative-agents#1863, GH-135), and
+	// integration:chroma proves that agent's own ingest path.
+	embedModel := envOrDefault("COHERE_EMBED_MODEL", cohereEmbedDefaultModel)
+	// One identity for the whole mesh, set once rather than passed to each
+	// child. The chatbot reads it for the embed request and for
+	// declare_query_model; each rag-server reports it as the identity its
+	// collection was seeded with. srd002 R3.3 compares the two, so they agree
+	// here or every source is excluded from every turn.
+	// The process environment is the channel because this identity has to
+	// reach two kinds of reader at once: the detached agent children started
+	// below, and the in-process seeding this target does itself. Passing it
+	// on each child command would leave the in-process half reading a
+	// different value, which is the divergence srd002 R3.3 turns into an
+	// empty answer.
+	restoreEnv, err := setTargetEnv(map[string]string{"COHERE_EMBED_MODEL": embedModel, "RAG_EMBEDDING_MODEL": embedModel})
+	if err != nil {
+		return err
+	}
+	defer restoreEnv()
+	if err := seedCohereCorpusFixture(profilesRoot, embedModel, "corpus"); err != nil {
+		return fmt.Errorf("seed corpus fixture at Cohere: %w", err)
+	}
+	if err := seedCohereDisjointCorpus(embedModel); err != nil {
+		return fmt.Errorf("seed disjoint corpus at Cohere: %w", err)
+	}
+
+	// Generate the rag1 variant (distinct ports, disjoint collection).
+	rag1Profile, rag1Cleanup, err := generateRag1Variant(profilesRoot)
+	if err != nil {
+		return err
+	}
+	defer rag1Cleanup()
+
+	ragTrace0, ragCleanup0, err := chromaTraceFile("chatbot-rag0")
+	if err != nil {
+		return err
+	}
+	defer ragCleanup0()
+	ragTrace1, ragCleanup1, err := chromaTraceFile("chatbot-rag1")
+	if err != nil {
+		return err
+	}
+	defer ragCleanup1()
+	chatTrace, chatCleanup, err := chromaTraceFile("chatbot")
+	if err != nil {
+		return err
+	}
+	defer chatCleanup()
+
+	stopRag0, err := startDetachedAgent(binary, profilesRoot, coreRoot, ragServerProfile, ragTrace0)
+	if err != nil {
+		return err
+	}
+	rag0Stopped := false
+	defer func() {
+		if !rag0Stopped {
+			_ = stopRag0(true)
+		}
+	}()
+	if err := waitHTTPStatus(ragControlHealth, http.StatusOK, 30*time.Second); err != nil {
+		return fmt.Errorf("rag0 control health never came up: %w", err)
+	}
+
+	stopRag1, err := startDetachedAgent(binary, profilesRoot, coreRoot, rag1Profile, ragTrace1)
+	if err != nil {
+		return err
+	}
+	rag1Stopped := false
+	defer func() {
+		if !rag1Stopped {
+			_ = stopRag1(true)
+		}
+	}()
+	if err := waitHTTPStatus(rag1ControlHealth, http.StatusOK, 30*time.Second); err != nil {
+		return fmt.Errorf("rag1 control health never came up: %w", err)
+	}
+
+	// The credential travels on the child rather than being inherited: this
+	// process resolves it from the operator's key file when no variable is
+	// exported, and the child resolves the declared token_ref from its own
+	// environment. Inheriting alone left the skip gate satisfied by the file and
+	// the turn failing on an unresolved credential ref, which reads as a broken
+	// mesh rather than as a credential that never reached the agent.
+	stopChat, err := startDetachedAgentWithEnv(agentLaunch{
+		Binary: binary, ProfilesRoot: profilesRoot, CoreRoot: coreRoot,
+		Profile:      chatbotProfile,
+		TracePath:    chatTrace,
+		Env:          []string{cohereCredentialEnv + "=" + cohereCredential()},
+		GracefulWait: 15 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	chatStopped := false
+	defer func() {
+		if !chatStopped {
+			_ = stopChat(true)
+		}
+	}()
+	if err := waitHTTPStatus(chatbotControlHealth, http.StatusOK, 30*time.Second); err != nil {
+		return fmt.Errorf("chatbot control health never came up: %w", err)
+	}
+	if err := assertChatbotMonitorReachable(); err != nil {
+		return err
+	}
+	if err := assertChatbotScopedSourceSelection(); err != nil {
+		return err
+	}
+
+	// Tier selector: a factual turn and an analytical turn. The live classifier's
+	// choice is model-dependent; the trace asserted after exit must show exactly
+	// one declared answer-word dispatch with its configured model for each turn.
+	if err := assertChatbotTierSelectedTurn("What do the Chroma corpus agents use to compute embeddings?"); err != nil {
+		return fmt.Errorf("factual tier-selected turn: %w", err)
+	}
+	if err := assertChatbotTierSelectedTurn("Analyze and synthesize the trade-offs across the described systems with multi-step reasoning about their relative merits."); err != nil {
+		return fmt.Errorf("analytical tier-selected turn: %w", err)
+	}
+
+	// Fan-out: a cross-corpus turn cites chunks from both RAGs by their tags.
+	if err := assertChatbotFanOut(); err != nil {
+		return err
+	}
+	fmt.Println("integration:chatbot source routing PASS - rag0-only question queried only rag0 and reported rag1 not_selected; spanning question queried both declared sources")
+
+	// Degrade rag1: stop it gracefully (flushing its trace), then a turn still
+	// returns a 200 answered from rag0 alone.
+	if _, status, err := requestHTTP(http.MethodPost, rag1ControlExit, `{"reason":"chatbot integration degrade"}`); err != nil || status/100 != 2 {
+		return fmt.Errorf("rag1 exit request failed: status %d: %v", status, err)
+	}
+	if err := stopRag1(false); err != nil {
+		return fmt.Errorf("rag1 did not exit gracefully: %w", err)
+	}
+	rag1Stopped = true
+	if err := assertChatbotDegradedTurn(); err != nil {
+		return err
+	}
+
+	// Exit rag0 and the chatbot gracefully so their span logs flush.
+	if _, status, err := requestHTTP(http.MethodPost, ragControlExit, `{"reason":"chatbot integration done"}`); err != nil || status/100 != 2 {
+		return fmt.Errorf("rag0 exit request failed: status %d: %v", status, err)
+	}
+	if err := stopRag0(false); err != nil {
+		return fmt.Errorf("rag0 did not exit gracefully: %w", err)
+	}
+	rag0Stopped = true
+	if _, status, err := requestHTTP(http.MethodPost, chatbotControlExit, `{"reason":"chatbot integration done"}`); err != nil || status/100 != 2 {
+		return fmt.Errorf("chatbot exit request failed: status %d: %v", status, err)
+	}
+	if err := stopChat(false); err != nil {
+		return fmt.Errorf("chatbot did not exit gracefully: %w", err)
+	}
+	chatStopped = true
+
+	fast, deep, err := chatbotAnswerModels(profilesRoot)
+	if err != nil {
+		return err
+	}
+	if err := assertChatbotTierSelectionTrace(chatTrace, fast, deep); err != nil {
+		return err
+	}
+	// One connected cross-agent trace: the fan-out turn's chatbot spans and each
+	// rag-server's spans share a trace id, and the rag-server's machine_request
+	// span is parented under a chatbot span (traceparent propagation).
+	if err := assertConnectedTrace(chatTrace, ragTrace0); err != nil {
+		return fmt.Errorf("rag0 %w", err)
+	}
+	if err := assertConnectedTrace(chatTrace, ragTrace1); err != nil {
+		return fmt.Errorf("rag1 %w", err)
+	}
+
+	fmt.Println("integration:chatbot PASS - source router scoped one turn and selected both corpora for a spanning turn, every turn dispatched one declared answer model, rag1-down degraded to 200, and each rag-server joined the connected trace")
+	return nil
+}
+
+// chatResponse is the shape the chatbot chat endpoint returns.
+type chatResponse struct {
+	Answer  string `json:"answer"`
+	Error   string `json:"error"`
+	Message string `json:"message"`
+	Trace   struct {
+		Status         string `json:"status"`
+		TerminalSignal string `json:"terminal_signal"`
+	} `json:"trace"`
+	Metadata struct {
+		// AnsweredBy names the model tier that wrote the answer. A degraded turn
+		// and a tier-selected Ollama turn are otherwise indistinguishable from
+		// the response, and the deployed gate has no trace to read.
+		AnsweredBy string `json:"answered_by"`
+		// QueryEmbeddingModel names the model the turn asked the embedding
+		// provider for. It is the only place the response says which provider
+		// produced the query vector: the embed response carries the vector and
+		// no model echo, so a turn embedded by Cohere and one embedded by the
+		// host Ollama are otherwise indistinguishable from the answer. srd002
+		// R3.3 compares this against each RAG's reported identity.
+		QueryEmbeddingModel string `json:"query_embedding_model"`
+		// Which ordering reached the composition. A reranked turn and a degraded
+		// one answer over the same chunks in a different order, which the answer
+		// cannot show (srd009 R5.4).
+		Rerank string `json:"rerank"`
+		// Citations are the spans Command reported, each resolved to the record
+		// id of the chunk it was computed against. The Ollama path returns none:
+		// the structured spans are a Cohere Command return value, so an empty
+		// list there is the uncited outcome rather than a fault (srd009 R4.1).
+		Citations chatCitations `json:"citations"`
+		// Cited spans the turn could not resolve, reported rather than hidden so
+		// an uncited answer and an all-dropped one stay distinguishable.
+		DroppedCitations chatDroppedCitations `json:"dropped_citations"`
+		QueryCounts      struct {
+			Succeeded int `json:"succeeded"`
+			Failed    int `json:"failed"`
+		} `json:"query_counts"`
+		// The clearance level the turn ran at (srd010 R5.1). It is what a caller
+		// reads to confirm enforcement occurred rather than assume it, and it
+		// reports the level the filter applied rather than the one the request
+		// asked for.
+		ClearanceEnforcedAt string `json:"clearance_enforced_at"`
+		Sources             struct {
+			NotSelected            []string               `json:"not_selected"`
+			Composed               []chatbotSourceOutcome `json:"composed"`
+			EmbeddingModelExcluded []chatbotSourceOutcome `json:"embedding_model_excluded"`
+			QueryFailed            []chatbotSourceOutcome `json:"query_failed"`
+			// A source that refused the requester's level. Separate from
+			// QueryFailed because only this one means the remaining sources
+			// answered correctly (srd010 R4.3, R5.1).
+			ClearanceRefused []chatbotSourceOutcome `json:"clearance_refused"`
+		} `json:"sources"`
+	} `json:"metadata"`
+}
+
+// chatCitation is one span Command reported, resolved to the record it was
+// computed against.
+type chatCitation struct {
+	Start    int    `json:"start"`
+	End      int    `json:"end"`
+	Text     string `json:"text"`
+	RecordID string `json:"record_id"`
+}
+
+// chatDroppedCitation is a cited span the turn could not resolve.
+type chatDroppedCitation struct {
+	Start  int    `json:"start"`
+	End    int    `json:"end"`
+	Text   string `json:"text"`
+	Reason string `json:"reason"`
+}
+
+// chatCitations and chatDroppedCitations tolerate the two shapes the response
+// uses for an empty list. Composition renders these fields through one
+// template: the Cohere path fills them from Command's structured spans and they
+// arrive as a JSON array, while the Ollama path has none to render and the
+// field arrives as the empty string. That is the uncited outcome rather than a
+// fault (srd009 R4.1), so decoding the array shape alone would turn a
+// legitimate Ollama-tier turn into a parse error. A non-empty string is neither
+// shape and is reported rather than swallowed.
+type chatCitations []chatCitation
+
+func (c *chatCitations) UnmarshalJSON(data []byte) error {
+	list, err := decodeRenderedList(data, "citations", func(items *[]chatCitation) error {
+		return json.Unmarshal(data, items)
+	})
+	*c = list
+	return err
+}
+
+type chatDroppedCitations []chatDroppedCitation
+
+func (c *chatDroppedCitations) UnmarshalJSON(data []byte) error {
+	list, err := decodeRenderedList(data, "dropped_citations",
+		func(items *[]chatDroppedCitation) error { return json.Unmarshal(data, items) })
+	*c = list
+	return err
+}
+
+// decodeRenderedList reads a field the composition template renders either as a
+// JSON list or, when it has nothing to render, as the empty string.
+func decodeRenderedList[T any](data []byte, field string, into func(*[]T) error) ([]T, error) {
+	var rendered string
+	if err := json.Unmarshal(data, &rendered); err == nil {
+		if strings.TrimSpace(rendered) != "" {
+			return nil, fmt.Errorf(
+				"%s rendered as the string %q, which is neither a list nor the empty rendering",
+				field, rendered)
+		}
+		return nil, nil
+	}
+	var items []T
+	if err := into(&items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+// chatbotSourceOutcome is one entry of a metadata.sources list. The mesh
+// projects these before answering (GH-216): the join entry they are rendered
+// from also carries the topology entry the fan-out iterated, base_url included,
+// which has no place in a browser response.
+type chatbotSourceOutcome struct {
+	Name   string `json:"name"`
+	Signal string `json:"signal"`
+	// The chunks this source contributed, and the record ids beside them. Since
+	// GH-126 those ids are the document identities Command cites, so a surfaced
+	// citation is checked against them.
+	Documents [][]string `json:"documents"`
+	IDs       [][]string `json:"ids"`
+	// Reported on an excluded entry only: the identity that did not match the
+	// query embedding model, which is why it was excluded (srd002 R3.3).
+	EmbeddingModel string `json:"embedding_model"`
+}
+
+func postChatTurn(message string, history string) (chatResponse, int, error) {
+	body := fmt.Sprintf(`{"message":%q,"history":%s}`, message, history)
+	// A chat turn embeds, selects a model tier, fans out to the RAG tier and answers, so it is
+	// the longest inference chain in the mesh and never belongs on the probe
+	// bound (GH-709 R2).
+	data, status, err := requestInference(http.MethodPost, chatbotChatURL, body, "chatbot chat turn")
+	if err != nil {
+		return chatResponse{}, status, err
+	}
+	var resp chatResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return chatResponse{}, status, fmt.Errorf("decode chat response (status %d): %w: %s", status, err, data)
+	}
+	return resp, status, nil
+}
+
+// assertChatbotTierSelectedTurn drives one tier-selected turn and asserts a
+// grounded 200. The selector's per-turn choice is asserted collectively from
+// the trace afterwards.
+func assertChatbotTierSelectedTurn(message string) error {
+	resp, status, err := postChatTurn(message, "[]")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("status = %d, want 200: %s", status, resp.Message+resp.Error)
+	}
+	if strings.TrimSpace(resp.Answer) == "" {
+		return fmt.Errorf("empty answer")
+	}
+	if resp.Trace.Status != "succeeded" {
+		return fmt.Errorf("trace status = %q, want succeeded", resp.Trace.Status)
+	}
+	return nil
+}
+
+func assertChatbotScopedSourceSelection() error {
+	resp, status, err := postChatTurn("Using only the rag0 declarative-agent corpus, how does the scenario critic rig validate plans?", "[]")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK || resp.Trace.Status != "succeeded" {
+		return fmt.Errorf("scoped source turn failed: status=%d trace=%q error=%s", status, resp.Trace.Status, resp.Message+resp.Error)
+	}
+	if len(resp.Metadata.Sources.Composed) != 1 ||
+		resp.Metadata.Sources.Composed[0].Name != "rag0" {
+		return fmt.Errorf("scoped source turn composed %+v, want only rag0", resp.Metadata.Sources.Composed)
+	}
+	if len(resp.Metadata.Sources.NotSelected) != 1 ||
+		resp.Metadata.Sources.NotSelected[0] != "rag1" {
+		return fmt.Errorf("scoped source turn not_selected = %v, want [rag1]", resp.Metadata.Sources.NotSelected)
+	}
+	return nil
+}
+
+// assertChatbotFanOut proves the sequential two-RAG fan-out reaches both corpora.
+// compose renders each RAG's surviving chunks under its own [ragN] header (no merge
+// word); citation is by record content, not an inline per-chunk tag. Structured
+// response metadata proves both RAGs supplied grounding below the model wording,
+// while the answer must still carry Solar Ridge content that only rag1 holds.
+func assertChatbotFanOut() error {
+	resp, status, err := postChatTurn(chatbotFanOutQuestion, "[]")
+	if err != nil {
+		return err
+	}
+	return assertChatbotFanOutResponse(resp, status)
+}
+
+func assertChatbotFanOutResponse(resp chatResponse, status int) error {
+	if status != http.StatusOK {
+		return fmt.Errorf("fan-out turn status = %d, want 200: %s", status, resp.Message+resp.Error)
+	}
+	if resp.Trace.Status != "succeeded" {
+		return fmt.Errorf("fan-out turn trace status = %q, want succeeded", resp.Trace.Status)
+	}
+	if !strings.Contains(strings.ToLower(resp.Answer), "solar ridge") {
+		return fmt.Errorf("fan-out answer omits the disjoint rag1 corpus (Solar Ridge); both RAGs must contribute; answer: %s", resp.Answer)
+	}
+	if len(resp.Metadata.Sources.NotSelected) != 0 {
+		return fmt.Errorf("spanning turn left sources unselected: %v", resp.Metadata.Sources.NotSelected)
+	}
+	if resp.Metadata.QueryCounts.Succeeded != 2 || resp.Metadata.QueryCounts.Failed != 0 {
+		return fmt.Errorf("fan-out query counts = %+v, want 2 succeeded and 0 failed", resp.Metadata.QueryCounts)
+	}
+	if len(resp.Metadata.Sources.EmbeddingModelExcluded) != 0 ||
+		len(resp.Metadata.Sources.QueryFailed) != 0 {
+		return fmt.Errorf("fan-out excluded or failed sources: excluded=%+v failed=%+v",
+			resp.Metadata.Sources.EmbeddingModelExcluded, resp.Metadata.Sources.QueryFailed)
+	}
+	if err := requireComposedSourceEvidence(resp.Metadata.Sources.Composed, "rag0", ""); err != nil {
+		return fmt.Errorf("fan-out rag0 evidence: %w", err)
+	}
+	if err := requireComposedSourceEvidence(resp.Metadata.Sources.Composed, "rag1", "solar ridge"); err != nil {
+		return fmt.Errorf("fan-out rag1 evidence: %w", err)
+	}
+	if len(resp.Metadata.Sources.Composed) != 2 {
+		return fmt.Errorf("fan-out composed %d sources, want exactly rag0 and rag1", len(resp.Metadata.Sources.Composed))
+	}
+	return nil
+}
+
+func requireComposedSourceEvidence(outcomes []chatbotSourceOutcome, source, requiredText string) error {
+	for _, outcome := range outcomes {
+		if outcome.Name != source {
+			continue
+		}
+		for _, group := range outcome.Documents {
+			for _, document := range group {
+				if strings.TrimSpace(document) != "" &&
+					(requiredText == "" || strings.Contains(strings.ToLower(document), requiredText)) {
+					return nil
+				}
+			}
+		}
+		if requiredText == "" {
+			return fmt.Errorf("source %s composed no retrieved documents", source)
+		}
+		return fmt.Errorf("source %s composed no document containing %q", source, requiredText)
+	}
+	return fmt.Errorf("source %s is absent from composed metadata", source)
+}
+
+func assertChatbotDegradedTurn() error {
+	// A follow-up turn carries the prior turn as client-side history. rag1 (the
+	// disjoint Solar Ridge corpus) is stopped, so its query fails: the machine
+	// routes on via CommandError (degraded), compose renders rag1's section empty,
+	// and the turn still answers 200 from rag0 alone. The same spanning question
+	// as the fan-out turn now cannot surface any Solar Ridge content, since only
+	// rag1 held it.
+	history := `[{"role":"user","content":"What is in the knowledge base?"},{"role":"assistant","content":"Several systems and projects."}]`
+	resp, status, err := postChatTurn(chatbotFanOutQuestion, history)
+	if err != nil {
+		return err
+	}
+	return assertChatbotDegradedResponse(resp, status)
+}
+
+func assertChatbotDegradedResponse(resp chatResponse, status int) error {
+	if status != http.StatusOK {
+		return fmt.Errorf("degraded turn status = %d, want 200 (rag1 down must degrade, not fail): %s", status, resp.Message+resp.Error)
+	}
+	if strings.TrimSpace(resp.Answer) == "" {
+		return fmt.Errorf("degraded turn returned an empty answer")
+	}
+	if resp.Trace.Status != "succeeded" {
+		return fmt.Errorf("degraded turn trace status = %q, want succeeded", resp.Trace.Status)
+	}
+	if strings.Contains(strings.ToLower(resp.Answer), "solar ridge") {
+		return fmt.Errorf("degraded turn surfaced the stopped rag1 corpus (Solar Ridge); answer: %s", resp.Answer)
+	}
+	if len(resp.Metadata.Sources.NotSelected) != 0 {
+		return fmt.Errorf("degraded turn left sources unselected: %v", resp.Metadata.Sources.NotSelected)
+	}
+	if resp.Metadata.QueryCounts.Succeeded != 1 || resp.Metadata.QueryCounts.Failed != 1 {
+		return fmt.Errorf("degraded query counts = %+v, want 1 succeeded and 1 failed", resp.Metadata.QueryCounts)
+	}
+	if len(resp.Metadata.Sources.Composed) != 1 {
+		return fmt.Errorf("degraded composed sources = %+v, want only rag0", resp.Metadata.Sources.Composed)
+	}
+	if err := requireComposedSourceEvidence(resp.Metadata.Sources.Composed, "rag0", ""); err != nil {
+		return fmt.Errorf("degraded rag0 evidence: %w", err)
+	}
+	if len(resp.Metadata.Sources.EmbeddingModelExcluded) != 0 {
+		return fmt.Errorf("degraded turn embedding-model exclusions = %+v, want empty", resp.Metadata.Sources.EmbeddingModelExcluded)
+	}
+	if len(resp.Metadata.Sources.QueryFailed) != 1 ||
+		resp.Metadata.Sources.QueryFailed[0].Name != "rag1" ||
+		resp.Metadata.Sources.QueryFailed[0].Signal != "CommandError" {
+		return fmt.Errorf("degraded query_failed = %+v, want rag1 CommandError", resp.Metadata.Sources.QueryFailed)
+	}
+	return nil
+}
+
+func assertChatbotMonitorReachable() error {
+	data, status, err := requestHTTP(http.MethodGet, chatbotMonitorState, "")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("chatbot monitor current_state status = %d, want 200: %s", status, data)
+	}
+	return nil
+}
+
+// assertChatbotTierSelectionTrace proves, from the chatbot's own span log, that
+// every chat turn dynamically dispatched exactly one declared answer word and
+// that the dispatch carries the word's configured model. The answer phase starts
+// after the alias-preserving parse_tier span, so earlier model spans from
+// select_sources and select_tier cannot count.
+//
+// It also proves the dispatch happened at all. One declared answer word with a
+// configured model is true of the ParseFailed fallback as well, because the
+// fallback word is itself a declared answer word -- so that check passed
+// throughout the period the $tool selector never dispatched anything (GH-84).
+// The discriminator is parse_tier's own outcome: agent-core stamps
+// command.signal on every dispatch span, so a turn whose selection resolved
+// carries ToolDone and a turn that fell back carries ParseFailed.
+// chatbotTierDispatchedSignal is what parse_tier emits when the tier selection
+// resolved to a registered, in-manifest word. Any other signal means the turn
+// took the fallback.
+const chatbotTierDispatchedSignal = "ToolDone"
+
+// chatbotCohereAnswerWord is the composition word the Cohere machine selects for
+// every grounded turn (declare_cohere_tier_choice, srd009): the fast and deep
+// words stay reachable there only as provider-failure fallbacks. Its dispatch is
+// an execute_tool span rather than a "chat <model>" span, and a compose that
+// succeeded emits chatbotCohereComposedSignal.
+const (
+	chatbotCohereAnswerWord     = "invoke_cohere_command"
+	chatbotCohereComposedSignal = "BriefComposed"
+)
+
+func assertChatbotTierSelectionTrace(tracePath, fastModel, deepModel string) error {
+	spans, err := readChromaSpans(tracePath)
+	if err != nil {
+		return err
+	}
+	if fastModel == deepModel {
+		return fmt.Errorf("chatbot answer words use the same model %q; trace attribution would be ambiguous", fastModel)
+	}
+	declaredByModel := map[string]string{
+		fastModel: "invoke_llm_fast",
+		deepModel: "invoke_llm_deep",
+	}
+	declaredWords := map[string]bool{
+		"invoke_llm_fast": true,
+		"invoke_llm_deep": true,
+	}
+	parentByID := make(map[string]string, len(spans))
+	var turns []chromaSpan
+	for _, s := range spans {
+		if s.SpanContext.SpanID != "" {
+			parentByID[s.SpanContext.SpanID] = s.Parent.SpanID
+		}
+		if strings.HasPrefix(s.Name, "machine_request ") {
+			turns = append(turns, s)
+		}
+	}
+	if len(turns) == 0 {
+		return fmt.Errorf("chatbot trace shows no machine_request chat turns")
+	}
+	for _, turn := range turns {
+		var answerSpans []chromaSpan
+		parseTierSeen := false
+		parseTierCount := 0
+		composeResponseCount := 0
+		parseTierSignal := ""
+		for _, s := range spans {
+			if !chatbotSpanNestedUnder(s, turn.SpanContext.SpanID, parentByID) {
+				continue
+			}
+			switch s.commandName() {
+			case "parse_tier":
+				parseTierCount++
+				parseTierSeen = true
+				parseTierSignal, _ = s.stringAttr("command.signal")
+			case "compose_response":
+				composeResponseCount++
+				parseTierSeen = false
+			default:
+				if parseTierSeen && declaredWords[s.commandName()] && strings.HasPrefix(s.Name, "chat ") {
+					answerSpans = append(answerSpans, s)
+				}
+				if parseTierSeen && s.commandName() == chatbotCohereAnswerWord {
+					answerSpans = append(answerSpans, s)
+				}
+			}
+		}
+		if parseTierCount != 1 || composeResponseCount != 1 {
+			return fmt.Errorf("chatbot turn %s has parse_tier/compose_response span counts %d/%d, want 1/1",
+				turn.SpanContext.SpanID, parseTierCount, composeResponseCount)
+		}
+		if parseTierSignal != chatbotTierDispatchedSignal {
+			return fmt.Errorf(
+				"chatbot turn %s answered on the fallback: parse_tier emitted %q rather than %q,"+
+					" so the tier selection never dispatched and the turn was answered by the"+
+					" default chat word instead of the selected one",
+				turn.SpanContext.SpanID, parseTierSignal, chatbotTierDispatchedSignal)
+		}
+		if len(answerSpans) != 1 {
+			return fmt.Errorf("chatbot turn %s has %d answer-word dispatch spans after parse_tier, want exactly one;"+
+				" a Command compose followed by a fast or deep dispatch is a provider failure that fell back",
+				turn.SpanContext.SpanID, len(answerSpans))
+		}
+		if answerSpans[0].commandName() == chatbotCohereAnswerWord {
+			if signal, _ := answerSpans[0].stringAttr("command.signal"); signal != chatbotCohereComposedSignal {
+				return fmt.Errorf("chatbot turn %s dispatched %s, which emitted %q rather than %q",
+					turn.SpanContext.SpanID, chatbotCohereAnswerWord, signal, chatbotCohereComposedSignal)
+			}
+			continue
+		}
+		model, ok := answerSpans[0].stringAttr("gen_ai.request.model")
+		if !ok {
+			return fmt.Errorf("chatbot turn %s answer-word dispatch has no gen_ai.request.model", turn.SpanContext.SpanID)
+		}
+		word, ok := declaredByModel[model]
+		if !ok {
+			return fmt.Errorf("chatbot turn %s answer-word dispatch uses undeclared model %q; declared fast/deep models are %v",
+				turn.SpanContext.SpanID, model, sortedModelKeys(map[string]bool{fastModel: true, deepModel: true}))
+		}
+		if answerSpans[0].Name != "chat "+model {
+			return fmt.Errorf("chatbot turn %s answer word %q has model %q but span name %q",
+				turn.SpanContext.SpanID, word, model, answerSpans[0].Name)
+		}
+	}
+	return nil
+}
+
+func chatbotSpanNestedUnder(span chromaSpan, ancestorID string, parentByID map[string]string) bool {
+	for parentID := span.Parent.SpanID; parentID != ""; parentID = parentByID[parentID] {
+		if parentID == ancestorID {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedModelKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// assertConnectedTrace proves the chatbot turn and a rag-server it called are one
+// connected cross-agent trace: their span logs share a trace id, and a rag-server
+// span in that trace is parented under a chatbot span (the chatbot's outbound
+// rag_query REST client span, via traceparent propagation).
+func assertConnectedTrace(chatTracePath, ragTracePath string) error {
+	chatSpans, err := readChromaSpans(chatTracePath)
+	if err != nil {
+		return err
+	}
+	ragSpans, err := readChromaSpans(ragTracePath)
+	if err != nil {
+		return err
+	}
+	chatByID := map[string]string{} // spanID -> traceID, for the shared-trace check
+	chatTraces := map[string]bool{}
+	for _, s := range chatSpans {
+		if s.SpanContext.SpanID != "" {
+			chatByID[s.SpanContext.SpanID] = s.SpanContext.TraceID
+		}
+		if s.SpanContext.TraceID != "" {
+			chatTraces[s.SpanContext.TraceID] = true
+		}
+	}
+	shared := ""
+	for _, s := range ragSpans {
+		if s.SpanContext.TraceID != "" && chatTraces[s.SpanContext.TraceID] {
+			shared = s.SpanContext.TraceID
+			break
+		}
+	}
+	if shared == "" {
+		return fmt.Errorf("no trace id shared between the chatbot and rag-server span logs (cross-agent trace not connected)")
+	}
+	for _, s := range ragSpans {
+		if s.SpanContext.TraceID != shared || s.Parent.SpanID == "" {
+			continue
+		}
+		if chatByID[s.Parent.SpanID] == shared {
+			return nil // a rag-server span is parented under a chatbot span in the shared trace
+		}
+	}
+	return fmt.Errorf("shared trace %s exists but no rag-server span is parented under a chatbot span", shared)
+}
+
+var citedRecordPattern = regexp.MustCompile(`(?i)record[\s#]*([0-9]+)`)
+
+// citedRecordNumbers extracts the 1-based record positions the model cited.
+func citedRecordNumbers(answer string) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, m := range citedRecordPattern.FindAllStringSubmatch(answer, -1) {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// disjointCorpus2Docs are the rag1 corpus, disjoint from the ingest fixture, so a
+// cross-corpus inventory question has direct lexical evidence that the ingest
+// collection cannot supply.
+var disjointCorpus2Docs = []struct{ id, text string }{
+	{"solar-1", "Knowledge-base project and system inventory answer: the exact name of the photovoltaic energy project is Solar Ridge. Return the proper name Solar Ridge when listing every named project or system. It has a capacity of 55 megawatts across 140000 panels on a decommissioned quarry."},
+	{"solar-2", "Knowledge-base system inventory entry: the exact project name Solar Ridge identifies the photovoltaic system that feeds a 33 kilovolt substation and includes a 12 megawatt-hour battery for evening dispatch."},
+}
+
+// seedChromaCorpus2 embeds the disjoint documents at Ollama and adds them to a
+// second Chroma collection, so rag1 serves a corpus disjoint from rag0's.
+func seedChromaCorpus2(embedModel string) error {
+	base := "http://127.0.0.1:8000/api/v2/tenants/default_tenant/databases/default_database/collections"
+	data, status, err := requestHTTP(http.MethodPost, base, fmt.Sprintf(`{"name":%q,"get_or_create":true}`, chromaCorpus2))
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK && status != http.StatusCreated {
+		return fmt.Errorf("resolve %s collection: status %d: %s", chromaCorpus2, status, data)
+	}
+	var collection struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(data, &collection); err != nil {
+		return fmt.Errorf("decode collection id: %w", err)
+	}
+	ids := make([]string, 0, len(disjointCorpus2Docs))
+	docs := make([]string, 0, len(disjointCorpus2Docs))
+	embeddings := make([][]float64, 0, len(disjointCorpus2Docs))
+	for _, d := range disjointCorpus2Docs {
+		vector, err := ollamaEmbedQuery(embedModel, d.text)
+		if err != nil {
+			return fmt.Errorf("embed %s: %w", d.id, err)
+		}
+		ids = append(ids, d.id)
+		docs = append(docs, d.text)
+		embeddings = append(embeddings, vector)
+	}
+	payload, err := json.Marshal(map[string]interface{}{"ids": ids, "documents": docs, "embeddings": embeddings})
+	if err != nil {
+		return err
+	}
+	addData, addStatus, err := requestHTTP(http.MethodPost, base+"/"+collection.ID+"/add", string(payload))
+	if err != nil {
+		return err
+	}
+	if addStatus/100 != 2 {
+		return fmt.Errorf("add to %s: status %d: %s", chromaCorpus2, addStatus, addData)
+	}
+	return nil
+}
+
+// generateRag1Variant copies the rag-server profile into a temp directory and
+// rewrites its ports (18085/6/7 -> 18095/6/7) and served collection
+// (corpus -> corpus2), so rag1 serves the disjoint corpus without a second
+// committed profile. It returns the variant profile path and a cleanup.
+func generateRag1Variant(profilesRoot string) (string, func(), error) {
+	srcDir := filepath.Join(profilesRoot, "agents", "rag-server")
+	dstDir, err := os.MkdirTemp("", "chatbot-mesh-rag1-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create rag1 variant dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dstDir) }
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("read rag-server profile: %w", err)
+	}
+	replacer := strings.NewReplacer("18085", "18095", "18086", "18096", "18087", "18097")
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(srcDir, entry.Name()))
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+		out := replacer.Replace(string(content))
+		if entry.Name() == "rest.yaml" {
+			// The collection name is env-parameterized; rewrite the default so the
+			// rag1 variant serves the disjoint corpus under a local run. Every
+			// endpoint names it, and one left on the default serves rag0's corpus
+			// under rag1's name: the fan-out then carries each fixture twice and
+			// Command refuses the duplicate document ids.
+			out = strings.ReplaceAll(out, "name: ${RAG_COLLECTION:-corpus}\n", "name: ${RAG_COLLECTION:-"+chromaCorpus2+"}\n")
+		}
+		if err := os.WriteFile(filepath.Join(dstDir, entry.Name()), []byte(out), 0o644); err != nil {
+			cleanup()
+			return "", nil, err
+		}
+	}
+	return filepath.Join(dstDir, "profile.yaml"), cleanup, nil
+}
+
+// chatbotOllamaSkipReason returns a non-empty reason when Ollama is unreachable or
+// a model the chatbot integration needs is not installed: the chroma embed model
+// that seeds both collections, the chatbot's embedding model, and the tier-selector and
+// two chat models. Reading them from config keeps the gate from duplicating names.
+func chatbotOllamaSkipReason(profilesRoot string) string {
+	required, err := chatbotRequiredModels(profilesRoot)
+	if err != nil {
+		return fmt.Sprintf("read chatbot model config: %v", err)
+	}
+	return chatbotOllamaSkipReasonForModels(required)
+}
+
+func chatbotOllamaSkipReasonForModels(required []string) string {
+	if err := waitHTTPStatus(ollamaVersionURL, http.StatusOK, 2*time.Second); err != nil {
+		return fmt.Sprintf("Ollama not reachable at %s: %v", ollamaVersionURL, err)
+	}
+	names, err := fetchChromaOllamaModels()
+	if err != nil {
+		return fmt.Sprintf("Ollama /api/tags preflight failed: %v", err)
+	}
+	for _, model := range required {
+		if !chromaModelInstalled(names, model) {
+			return fmt.Sprintf("Ollama model %q not installed; available: %s", model, strings.Join(names, ", "))
+		}
+	}
+	return ""
+}
+
+func chatbotRequiredModels(profilesRoot string) ([]string, error) {
+	set := map[string]bool{}
+	ingestEmbed, err := chromaEmbedModelFromConfig(profilesRoot)
+	if err != nil {
+		return nil, err
+	}
+	set[ingestEmbed] = true
+	set[demoChromaIntegrationChatModel(profilesRoot)] = true
+	embed, err := chatbotEmbedModelFromConfig(profilesRoot)
+	if err != nil {
+		return nil, err
+	}
+	set[embed] = true
+	chatModels, err := chatbotChatModels(profilesRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, model := range chatModels {
+		set[model] = true
+	}
+	models := make([]string, 0, len(set))
+	for model := range set {
+		models = append(models, model)
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+// chatbotEmbedModelFromConfig reads the query-embedding model an Ollama tier
+// embeds with. agents/chatbot/embed-rest.yaml names the Cohere identity, and the
+// chart rewrites it for a render with the provider off (profiles-configmap.yaml),
+// so the Ollama model is the rewrite's target: one source for the identity the
+// local Ollama must hold.
+func chatbotEmbedModelFromConfig(profilesRoot string) (string, error) {
+	var cfg struct {
+		Instantiate []struct {
+			Fragment string `yaml:"fragment"`
+			Args     struct {
+				Model string `yaml:"model"`
+			} `yaml:"args"`
+		} `yaml:"expand"`
+	}
+	path := filepath.Join(profilesRoot, "agents", "chatbot", "embed-rest.yaml")
+	if err := readIntegrationYAML(path, "chatbot embed asset", &cfg); err != nil {
+		return "", err
+	}
+	reference := ""
+	for _, instance := range cfg.Instantiate {
+		if strings.HasSuffix(instance.Fragment, "/embed-query-fragment.yaml") {
+			reference = instance.Args.Model
+		}
+	}
+	if reference == "" {
+		return "", fmt.Errorf("no query embedding model in %s", path)
+	}
+	configMap := filepath.Join(applicationChartDir(profilesRoot), "templates", "profiles-configmap.yaml")
+	data, err := os.ReadFile(configMap)
+	if err != nil {
+		return "", err
+	}
+	match := chatbotEmbedRewritePattern.FindStringSubmatch(string(data))
+	if match == nil || match[1] != reference {
+		return "", fmt.Errorf("%s does not rewrite the query embedding model %s for an Ollama tier", configMap, reference)
+	}
+	model := resolveModelReference(match[2])
+	if model == "" {
+		return "", fmt.Errorf("no embedding model in %s", configMap)
+	}
+	return model, nil
+}
+
+// chatbotEmbedRewritePattern matches the chart's Ollama-tier rewrite of the
+// query embedding model in embed-rest.yaml.
+var chatbotEmbedRewritePattern = regexp.MustCompile(`\$embedRest \| replace "([^"]+)" "([^"]+)"`)
+
+// chatbotToolModels reads the model of every invoke_llm-init word in the chatbot's
+// request-declarations.yaml keyed by word name (select_tier, invoke_llm_fast, invoke_llm_deep).
+func chatbotToolModels(profilesRoot string) (map[string]string, error) {
+	var cfg struct {
+		Tools []struct {
+			Name   string `yaml:"name"`
+			Init   string `yaml:"init"`
+			Config struct {
+				Model   string `yaml:"model"`
+				Dialect string `yaml:"dialect"`
+			} `yaml:"config"`
+		} `yaml:"tools"`
+	}
+	path := filepath.Join(profilesRoot, "agents", "chatbot", "request-declarations.yaml")
+	if err := readIntegrationYAML(path, "chatbot request declarations", &cfg); err != nil {
+		return nil, err
+	}
+	var profile struct {
+		Libraries map[string]string `yaml:"libraries"`
+	}
+	profilePath := filepath.Join(profilesRoot, "agents", "chatbot", "request-profile.yaml")
+	if err := readIntegrationYAML(profilePath, "chatbot request profile", &profile); err != nil {
+		return nil, err
+	}
+	models := map[string]string{}
+	for _, tool := range cfg.Tools {
+		model := resolveModelReference(tool.Config.Model)
+		// Only the Ollama-bound words count: this inventory decides what the
+		// local Ollama must hold, and the classifiers run at the Cohere provider
+		// (GH-425), whose models no preload can pull. A word is Ollama-bound when
+		// the library root its dialect sits under names the Ollama library as the
+		// profile ships it (srd058 R1.1).
+		if tool.Init == "invoke_llm" && model != "" &&
+			dialectLibrary(tool.Config.Dialect, profile.Libraries) == "ollama" {
+			models[tool.Name] = model
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no invoke_llm word with a model in %s", path)
+	}
+	return models, nil
+}
+
+// dialectLibrary names the shipped provider library a dialect path resolves to
+// through the declaring profile's roots: "/opt/<root>/chat-dialect.yaml" under a
+// root bound to .../providers/<name> is <name>. Anything else resolves to "".
+func dialectLibrary(dialect string, roots map[string]string) string {
+	rest, ok := strings.CutPrefix(dialect, "/opt/")
+	if !ok {
+		return ""
+	}
+	root, _, _ := strings.Cut(rest, "/")
+	directory, ok := roots[root]
+	if !ok {
+		return ""
+	}
+	parent, name := filepath.Split(filepath.Clean(directory))
+	if filepath.Base(filepath.Clean(parent)) != "providers" {
+		return ""
+	}
+	return name
+}
+
+// chatbotChatModels returns the distinct models of the chatbot's invoke_llm words.
+func chatbotChatModels(profilesRoot string) ([]string, error) {
+	models, err := chatbotToolModels(profilesRoot)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		out = append(out, model)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// chatbotAnswerModels returns the fast and deep chat-LLM answer word models.
+func chatbotAnswerModels(profilesRoot string) (fast, deep string, err error) {
+	models, err := chatbotToolModels(profilesRoot)
+	if err != nil {
+		return "", "", err
+	}
+	fast, okFast := models["invoke_llm_fast"]
+	deep, okDeep := models["invoke_llm_deep"]
+	if !okFast || !okDeep {
+		return "", "", fmt.Errorf("chatbot must declare invoke_llm_fast and invoke_llm_deep; got %v", models)
+	}
+	return fast, deep, nil
+}

@@ -1,0 +1,65 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: exporter-export-request
+purpose: |-
+  Render one approved, analyst-edited brief to a PDF (srd013 R1.2): the
+  request seed's markdown is written to the workspace, converted to .tex,
+  rendered by the LaTeX engine, and the PDF is base64-encoded as the final
+  output the endpoint's Done mapping returns. Every word on the path is a
+  file write or a fixed-argv child process; the document reaches each binary
+  as a file and never as an argument or shell string (srd013 R2.2, R2.3).
+
+  Every failure routes through CleaningUp, which removes the request's
+  working directory before the run terminates in Failed, so no .tex,
+  auxiliary file, or partial output survives a failed export (R5.1) and a
+  partial PDF is never returned (R5.2) -- the encode word only runs after a
+  successful render, and its output is the only thing Done maps. The
+  response reports the failing stage through the trace the server attaches
+  (terminal signal and trace id) rather than by embedding engine output,
+  which quotes the document, in an error surface retained apart from the
+  brief (R5.3). The success path's workspace is overwritten wholesale by the
+  next request's write, and the machine holds nothing between requests
+  (R1.4).
+initial_state: AwaitingExport
+budget:
+  # The render bound (srd013 R5.4): a document that sends the engine into a
+  # pathological run fails the request rather than occupying the workload.
+  command_timeout: 90s
+  max_iterations: 12
+states:
+  - {name: AwaitingExport, meaning: Seeded by the export endpoint with the approved brief markdown.}
+  - {name: PreparingWorkspace, meaning: "Runs write_brief, writing the approved markdown to the request workspace."}
+  - {name: ConvertingTex, meaning: "Runs md_to_tex, converting the markdown file to a .tex document under fixed argv."}
+  - {name: RenderingPdf, meaning: "Runs render_pdf, rendering the .tex through the LaTeX engine with shell escape disabled."}
+  - {name: Reporting, meaning: "Runs encode_pdf, encoding the rendered PDF as the response payload."}
+  - {name: CleaningUp, meaning: "Runs clean_workspace on a failure path, removing the request's temporary files."}
+  - {name: Done, meaning: Terminal. The PDF rendered and the encoded document is the output., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. A stage failed and the workspace was cleaned., run_status: failed}
+terminal_states:
+  - Done
+  - Failed
+signals:
+  - {name: Seed, trigger: The export endpoint starts a request-scoped run.}
+  - {name: ToolDone, trigger: A file or child-process word completed.}
+  - {name: ToolFailed, trigger: A file or child-process word failed.}
+  - {name: CommandError, trigger: A word could not be built or run.}
+transitions:
+  - {state: AwaitingExport, signal: Seed, next: PreparingWorkspace, action: write_brief}
+  - {state: AwaitingExport, signal: CommandError, next: Failed}
+  - {state: PreparingWorkspace, signal: ToolDone, next: ConvertingTex, action: md_to_tex}
+  - {state: PreparingWorkspace, signal: ToolFailed, next: CleaningUp, action: clean_workspace}
+  - {state: PreparingWorkspace, signal: CommandError, next: CleaningUp, action: clean_workspace}
+  - {state: ConvertingTex, signal: ToolDone, next: RenderingPdf, action: render_pdf}
+  - {state: ConvertingTex, signal: ToolFailed, next: CleaningUp, action: clean_workspace}
+  - {state: ConvertingTex, signal: CommandError, next: CleaningUp, action: clean_workspace}
+  - {state: RenderingPdf, signal: ToolDone, next: Reporting, action: encode_pdf}
+  - {state: RenderingPdf, signal: ToolFailed, next: CleaningUp, action: clean_workspace}
+  - {state: RenderingPdf, signal: CommandError, next: CleaningUp, action: clean_workspace}
+  - {state: Reporting, signal: ToolDone, next: Done}
+  - {state: Reporting, signal: ToolFailed, next: CleaningUp, action: clean_workspace}
+  - {state: Reporting, signal: CommandError, next: CleaningUp, action: clean_workspace}
+  - {state: CleaningUp, signal: ToolDone, next: Failed}
+  - {state: CleaningUp, signal: ToolFailed, next: Failed}
+  - {state: CleaningUp, signal: CommandError, next: Failed}

@@ -1,0 +1,213 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of request-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: rag-server-request-declarations-types
+types:
+  - name: ComposeClearanceFilterOutput
+    schema:
+      properties:
+        where:
+          type: object
+      required:
+        - where
+      type: object
+  - name: ComposeDocumentFilterOutput
+    schema:
+      properties:
+        where:
+          type: object
+      required:
+        - where
+      type: object
+  - name: ComposeFacetedQueryFilterOutput
+    schema:
+      properties:
+        where:
+          type: object
+      required:
+        - where
+      type: object
+  - name: DeclareClearanceWindowsOutput
+    schema:
+      properties:
+        items:
+          type: array
+        names:
+          type: array
+      required:
+        - items
+        - names
+      type: object
+  - name: DeclareRequestedClearanceOutput
+    schema:
+      properties:
+        names:
+          type: array
+      required:
+        - names
+      type: object
+  - name: RagGetDocumentsByFilterInput
+    schema:
+      properties:
+        clearance_enforced_at:
+          type: string
+        collection:
+          type: string
+        where:
+          type: object
+      type: object
+  - name: RagGetDocumentsByFilterOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RagGetDocumentsByIdsInput
+    schema:
+      properties:
+        clearance_enforced_at:
+          type: string
+        collection:
+          type: string
+        ids:
+          type: array
+        where:
+          type: object
+      type: object
+  - name: RagGetDocumentsByIdsOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RagQueryFacetedInput
+    schema:
+      properties:
+        clearance_enforced_at:
+          type: string
+        collection:
+          type: string
+        keyword:
+          type: string
+        n_results:
+          type: integer
+        query_embeddings:
+          type: array
+        where:
+          type: object
+      type: object
+  - name: RagQueryFacetedOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RagQueryInput
+    schema:
+      properties:
+        clearance_enforced_at:
+          type: string
+        collection:
+          type: string
+        n_results:
+          type: integer
+        query_embeddings:
+          type: array
+        where:
+          type: object
+      type: object
+  - name: RagQueryOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RagResolveDocumentsInput
+    schema:
+      properties:
+        document_filter:
+          type: object
+        max_clearance:
+          type: string
+        record_ids:
+          type: array
+      type: object
+  - name: RagResolveDocumentsOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RagResolveFacetedInput
+    schema:
+      properties:
+        facet_where:
+          type: object
+        keyword:
+          type: string
+        max_clearance:
+          type: string
+        n_results:
+          type: integer
+        query_embeddings:
+          type: array
+      type: object
+  - name: RagResolveFacetedOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RagResolveInput
+    schema:
+      properties:
+        max_clearance:
+          type: string
+        n_results:
+          type: integer
+        query_embeddings:
+          type: array
+      type: object
+  - name: RagResolveOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        mapped:
+          type: object
+      type: object
+  - name: RenderClearanceWindowOutput
+    schema:
+      properties:
+        allowed:
+          type: array
+        level:
+          type: string
+      required:
+        - level
+        - allowed
+      type: object
+  - name: ResolveClearanceWindowOutput
+    schema:
+      properties:
+        matched:
+          type: array
+        selected:
+          type: array
+        unmatched:
+          type: array
+      type: object

@@ -1,0 +1,9 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-selection
+schema_version: 1
+tools:
+  - drive_chat_turn
+  - read_rag_request_log
+  - capture_rag_query_body
+  - assert_query_vector_flat

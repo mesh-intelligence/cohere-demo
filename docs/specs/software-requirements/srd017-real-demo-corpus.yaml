@@ -1,0 +1,354 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd017-real-demo-corpus
+title: Real Multi-Source Demo Corpus
+
+role_realization_decision:
+  current_actor: corpus build
+  implemented_responsibility: Read five real source tiers through one normalized envelope, chunk the searchable material at several named profiles, carry parent-document lineage on every chunk, embed a declared and bounded selection of those chunks, and serve the resulting documents to the interface through a read API over the same vector store the retrieval path uses.
+  canonical_role_sub_role: Knowledge Manager / Ontology Manager -- the same role srd015 realizes. This release widens what the build reads and what the store serves, and asserts nothing new about how the retrieval agents serve it.
+  retained_or_proposed_name: >-
+    No new agent. The build remains an offline target alongside the existing
+    mage targets, and corpus-ingest remains the canonical ingest agent with its
+    machine unaltered. The document-serving read API is a seam the interface
+    calls, not a profile on the runtime, for the reason srd015 gives under its
+    R5.5 bound: a REST-client operation cannot read a local file, and a new
+    catalog word would need an upstream change.
+  authority_boundary: The build reads source datasets and writes a store; the read API reads the served collections and returns documents. Neither holds authority over any running agent, cluster, or collection, and neither SHALL relax the clearance filter srd010 places ahead of retrieval.
+  evidence: [docs/road-map.yaml rel10.5, srd017 R1-R9]
+  migration_impact: >-
+    The demo corpus is replaced rather than extended, so every downstream
+    reference that names a Sable Strait entity is repointed in the same release.
+    What does not change is the chunk record's identity semantics, the vectors
+    already stored under their embedding identities, the ordered clearance set,
+    or the point at which clearance is enforced.
+
+context: |
+  rel10.4 built the corpus pipeline against a synthetic corpus written for it.
+  Every document declared its own front matter -- source identifier, source
+  type, clearance level, Admiralty rating, keywords -- because the corpus and
+  the schema were authored together. That was the right way to prove the
+  pipeline and the wrong way to demonstrate it. A reviewer who is shown a
+  system answering questions about invented vessels in an invented strait
+  learns that the machinery runs, and learns nothing about whether it would
+  survive contact with reporting that was not written to suit it.
+
+  rel10.5 replaces that corpus with five real source tiers drawn from the 2022
+  Ukraine war: daily assessments from the Institute for the Study of War, a
+  public Telegram news corpus, a missile and drone attack dataset, daily loss
+  figures, and one synthetic HUMINT tier written over the public rumour stream
+  so the clearance demonstration has classified-looking material to gate. Four
+  of the five are real, and they arrive in four different shapes, none of which
+  is the front matter the build expects.
+
+  The corpus also gets larger by roughly two orders of magnitude, and that
+  changes what the build costs. Under rel10.4 the embedding spend was bounded
+  by a corpus small enough that nobody had to think about it. A twelve-month
+  slice of daily assessments chunked at nine hundred characters is on the order
+  of twelve thousand chunks, and this release asks for several chunk sizes over
+  the same material. The spend is paid from a personal account, so the
+  selection of what gets embedded becomes a specified artifact rather than a
+  consequence of how much data happened to be on disk.
+
+  What the release buys, beyond realism, is a demonstration of provenance. A
+  retrieved chunk is a fragment of a document; an analyst reading a brief needs
+  the document. Carrying lineage on every chunk, and serving the parent
+  document back through a read API, is what lets the interface show the path
+  from an assertion in the brief to the chunk it came from to the report that
+  chunk was cut out of.
+
+problem: |
+  Five things go wrong if this release is specified as "point the existing
+  build at bigger inputs."
+
+  The first is clearance provenance. The synthetic corpus declared a
+  classification on every document because it was written to. ISW assessments
+  and Telegram messages declare nothing, and the temptation is to have the
+  build read a document and decide how restricted it is. That is the practice
+  srd010 R1.2 forbids, and for the reason it gives: something which reads a
+  document to decide how restricted it is has already read it. Real open
+  material is unclassified because of where it came from, not because of what
+  it says, and the mapping has to be a declared property of the tier rather
+  than a judgment made per document.
+
+  The second is unbounded spend behind an innocuous command. Embedding is the
+  one step in the build that costs money, it scales with chunk count, and chunk
+  count now scales with a corpus nobody sized by hand. A specification that
+  requires every chunk to carry a vector puts an unbounded bill behind
+  `mage corpus:build`, and the failure is silent until the invoice arrives.
+  Conversion and chunking are free and can cover the whole window; embedding
+  has to be a declared selection with a checked ceiling, and the check has to
+  run before the first request rather than after the last one.
+
+  The third is a second path around an access control. rel11.0 filters the
+  served collection to the requester's level before the vector search, so an
+  over-clearance document is never a retrieval candidate. This release adds a
+  document-serving collection the interface reads by identifier, because the
+  provenance panel has to resolve a citation to its parent document. Specified
+  as a presentation concern, it is a second route to the same documents that
+  the filter does not sit on, and the release that shipped the access control
+  would be undone by the release that shipped the panel.
+
+  The fourth is what a citation resolves to. Retrieval returns chunks, and a
+  chunk identifier is not a source. Without lineage travelling on the chunk,
+  the brief's every-assertion-traceable criterion is satisfied by a string that
+  names a fragment nobody can open, and the reconstruction has to be done by
+  rejoining against the corpus at display time -- which is the same
+  metadata-provenance mistake srd015 R2.2 moved off the seeding path.
+
+  The fifth is a citation that survives as a number. An assessment cites its
+  sources inline, as bracketed markers, and collects the sources themselves in
+  a tail at the end of the document. Carrying that tail unsearchable is right
+  -- it is apparatus, not assessment -- but it leaves every chunk holding
+  markers whose referents were segmented away. The chunk cites something
+  outside itself, and what it cites is unreachable from it. The obvious repair,
+  deleting the markers, is worse than the defect: the text a chunk holds is
+  what its stored vector was computed over, and it is what the interface
+  matches against the parent document to locate the passage. Editing that text
+  to tidy the prose discards vectors that were paid for and breaks the
+  provenance walk this release exists to provide. The markers have to resolve
+  where they stand.
+
+goals:
+  - G1: Read all five tiers through one normalized envelope, so chunking, lineage, and the store consume one shape rather than five, and adding a sixth tier is an adapter rather than a change to everything downstream.
+  - G2: Derive each document's clearance from a declared per-tier mapping onto the existing ordered set, never from content a model read, and carry a restriction caveat as a flag beside the level rather than as a new level.
+  - G3: Bound the corpus to one declared window inside the span where all five tiers overlap, and convert that window whole, so what is in the store is decided by the window rather than by what the embedding budget could afford.
+  - G4: Chunk the searchable material at several named profiles that coexist in one store, without changing the vectors rel10.4 already stored for the profile it used.
+  - G5: Carry lineage on every chunk -- to its parent document, across the profiles of that document, and across tiers to the reporting it was derived from -- so a retrieved fragment reconstructs to a citable source.
+  - G6: Bound the paid embedding to a declared selection with a ceiling checked before any request is issued, and make widening that selection cost only the chunks it adds.
+  - G7: Serve documents to the interface through a read API over the same vector store, behind the clearance filter that already governs retrieval, without introducing a second document database.
+  - G8: Replace the synthetic corpus while keeping every qualification attached to the material -- each real tier's source and licence, the synthetic tier's fictional nature, and the retrieval conditions the downstream releases depend on.
+  - G9: Resolve the citation markers an assessment leaves in its prose against the citation tail carried beside it, so a chunk cites sources it can name rather than numbers pointing outside itself, and do it without altering a single character of embedded text.
+
+requirements:
+  R1:
+    title: Source tiers and the normalized envelope
+    items:
+      - R1.1: The corpus SHALL be built from five declared source tiers, each with a source-type name the store and the collection metadata carry -- humint, osint_news, osint_assessment, sigint_event, and sigint_series.
+      - R1.2: Every tier SHALL be read through one normalized envelope carrying the same top-level metadata fields, so a consumer of an envelope cannot tell which adapter produced it without reading the source type. The fields are the document identifier, source type, clearance level and caveats, issued date, origin, reliability, provenance, title, a synthetic flag, and a reference to the untransformed source record.
+      - R1.3: An envelope SHALL carry its document body as a list of typed segments rather than as one string, each segment declaring whether it is searchable.
+      - R1.4: Material that is carried for display or citation but never embedded SHALL be marked unsearchable rather than removed, so the classification-authority line of a HUMINT report, the endnote and citation tail of an ISW assessment, and a Telegram foreign-agent disclaimer remain readable in the served document without entering a vector.
+      - R1.5: The issued date SHALL be the publication date the source itself carries. A record whose date cannot be established from its source SHALL fail the build with the record named, rather than being defaulted to a date that would place it inside or outside the window by accident.
+      - R1.6: Every envelope SHALL reference the untransformed source record it was built from, so a served document is attributable to a line in a dataset rather than only to the build that read it.
+      - R1.7: The boundary between an assessment's prose and its citation tail SHALL NOT depend on every entry in that tail being well formed. The tier writes its URLs by hand and mistypes them, and a boundary anchored only on a well-formed URL admits the entries before the first malformed one into the searchable body, where they are embedded as though they were assessment.
+      - R1.8: A tier's fixed editorial boilerplate SHALL be carried as an unsearchable segment rather than chunked with the assessment. Boilerplate repeated verbatim across a tier makes the chunks that carry it resemble each other rather than their documents, which is a retrieval defect and not merely noise.
+  R2:
+    title: Clearance from declared tier policy
+    items:
+      - R2.1: Document clearance SHALL be expressed in the ordered set the corpus manifest already declares (srd010 R1.1), and this release SHALL NOT add a level to that set.
+      - R2.2: The synthetic HUMINT tier's markings SHALL map onto that set as declared configuration -- UNCLASSIFIED//FOUO to unclassified, CONFIDENTIAL to confidential, SECRET to secret, and SECRET//NOFORN to secret -- so the mapping is reviewable in the corpus artifact rather than resident in build code.
+      - R2.3: A dissemination caveat SHALL be carried as a flag beside the level rather than as a level of its own, because NOFORN restricts who may receive a secret document and does not make it more classified than secret.
+      - R2.4: The four real tiers SHALL be tagged unclassified as a property of the tier, on the ground that the material is published, and SHALL NOT be tagged by a model reading the document, for the reason srd010 R1.2 states.
+      - R2.5: A document whose marking is absent or outside the declared set SHALL be written at the highest declared level, so an adapter's omission withholds a document rather than exposing one (srd010 R1.3, srd015 R2.5).
+      - R2.6: Every document SHALL carry an Admiralty rating on both axes, which rel12.2 checks a brief's source-evaluation table against (srd015 R1.4). A document declaring its own rating SHALL keep it; a document declaring none SHALL take the rating its tier declares in the corpus manifest. Published reporting is not graded on this scale by whoever published it, and a rating evaluates a source rather than a sentence, so the tier is the unit the rating is declared at -- and no rating SHALL be decided by reading a document, for the reason srd010 R1.2 gives.
+  R3:
+    title: Conversion window and per-tier aggregation
+    items:
+      - R3.1: The corpus SHALL be bounded to a declared window inside 2022-07-01 to 2023-06-30, the longest span over which all five tiers carry material, and SHALL filter on the issued date R1.5 establishes. The demonstration declares December 2022, the densest month of the infrastructure-strike campaign, because that is what the committed store can weigh under R3.3.
+      - R3.2: The window SHALL be declared in the corpus manifest, so the bound is a reviewable property of the corpus rather than a constant in the build.
+      - R3.3: Conversion and chunking SHALL cover the declared window in full, and the embedding budget of R6 SHALL NOT reduce what is converted -- a document absent from the store cannot be cited even when its neighbours can. The window itself is sized by what the store may weigh, because the store is a versioned repository artifact (srd015 R6.1) and every converted chunk costs a record whether or not it carries a vector. Measured, twelve months at three profiles is 235 MB across 78,662 records against a 5.3 MB predecessor, so the declared window is the span the repository can carry rather than the span the datasets cover (GH-284).
+      - R3.4: The two row-oriented tiers SHALL be aggregated into one envelope per day rather than one per row -- a missile and drone attack digest and a daily loss delta -- with the aggregated source rows named in the envelope's provenance.
+      - R3.5: The Telegram tier SHALL be down-sampled to a declared cap by a deterministic rule, so two builds over unchanged inputs select the same messages and produce byte-identical envelope ordering.
+  R4:
+    title: Chunk profiles over searchable segments
+    items:
+      - R4.1: The build SHALL chunk at three named profiles -- atomic, one chunk per segment, and medium-900 and large-1800, sized in characters with declared overlap. A fourth profile cutting at the source's own section structure was specified and withdrawn, because none of the five tiers writes headings -- it returned one chunk per document, duplicating the atomic profile at the cost of a fourth set of records in every store and count (GH-278).
+      - R4.2: Only segments marked searchable SHALL be chunked, so the material R1.4 carries for display never reaches a vector.
+      - R4.3: The medium-900 profile SHALL reproduce, character for character, the chunk text the rel10.4 chunker produces for an unchanged document, so adopting profiles does not invalidate vectors already stored under their identities (srd015 R3.4).
+      - R4.4: Every chunk record SHALL name the profile that produced it, and a chunk identifier SHALL distinguish profiles, so the profiles of one document coexist in the store without collision.
+      - R4.5: Profile parameters SHALL be recorded with the store as build configuration, following srd015 R4.5, rather than fixed as normative values in this document.
+  R5:
+    title: Parent-document lineage on every chunk
+    items:
+      - R5.1: Every chunk record SHALL carry structural lineage to its parent -- the document identifier, the reference to the untransformed source, the chunk's position, the number of siblings in that document and profile, and the character span the chunk occupies in the joined searchable body.
+      - R5.2: Every chunk SHALL name its previous and next chunk within its own profile, so a served fragment can be widened to its neighbours without a second query.
+      - R5.3: A chunk SHALL name the coarser chunk covering the same span in the next larger profile, so an interface can move between chunk sizes over one passage.
+      - R5.4: A chunk whose document was derived from other reporting SHALL carry that provenance as a list of tier, identifier, and relation, so a HUMINT report resolves to the Telegram messages it was written over and a daily digest resolves to the rows it aggregates.
+      - R5.5: Lineage SHALL be metadata and SHALL NOT enter the text that is embedded, so the chunk identity that decides whether a vector is recomputed changes when the passage changes and not when a neighbouring document is added (srd015 R2.2).
+      - R5.6: Lineage SHALL be internally consistent -- a position within its sibling count, previous and next references that resolve within the profile, and a coarser parent that exists -- and a build that cannot satisfy this SHALL fail rather than write a chunk whose citation leads nowhere.
+  R6:
+    title: Embed selection and its ceiling
+    items:
+      - R6.1: The chunks that carry vectors SHALL be a declared embed selection -- a sub-window and a per-tier allocation recorded with the store -- rather than every chunk the build produced.
+      - R6.2: The embed selection SHALL NOT exceed three thousand chunks at any single profile, counting all tiers together, because the embedding spend is paid from a personal account and the ceiling is what makes the build's cost decidable before it runs.
+      - R6.3: The selection SHALL be counted and checked against the ceiling before any embedding request is issued. A selection over the ceiling SHALL fail the build naming the profile and its count, having issued zero requests, rather than embedding what fits and truncating the rest.
+      - R6.4: A chunk outside the selection SHALL be stored without a vector, and its absence SHALL NOT be an error, so the store holds the whole converted window while only part of it is embedded. The build SHALL remove a vector from a chunk the declared selection does not reach -- the seed writes the selection alone into the retrieval collection (R8.3), and the store's weight is the resource the window is sized by (R3.3), so a narrowed selection sheds what it stopped paying for rather than carrying it. What shedding discards is the free re-widening a kept vector bought, which at this corpus's scale protects cents of embedding spend against roughly half the store's weight.
+      - R6.5: Widening the selection SHALL compute vectors only for chunks the store does not already hold at that identity, so extending the demonstration toward the full window costs the chunks it adds and not the ones it keeps (srd015 R3.3).
+      - R6.6: The store index SHALL record, per profile, both the number of chunks and the number that carry vectors, so what was embedded is legible without counting records.
+  R7:
+    title: Multi-version store on disk
+    items:
+      - R7.1: A document's raw envelope and every chunk profile built from it SHALL be co-located in the store under the document identifier, so the versions of one document are read together rather than gathered from across the store.
+      - R7.2: The store index SHALL enumerate the profiles it holds alongside the identities srd015 R6.2 already requires it to name.
+      - R7.3: Pruning SHALL match on the chunk and its profile together, so a document that shrinks or is removed leaves no profile variant behind that a seed would still load.
+      - R7.4: A rebuild over unchanged inputs at an unchanged selection SHALL write no records, extending the idempotence srd015 R4.3 requires to a store holding several profiles.
+      - R7.5: The store SHALL remain text a reviewer reads without running anything, as srd015 R6.3 requires, with the added lineage legible in the record rather than encoded.
+  R8:
+    title: Document serving over the vector store
+    items:
+      - R8.1: Documents SHALL be served from the same vector store that serves retrieval, in a second collection, and this release SHALL NOT introduce a separate document database.
+      - R8.2: The document collection SHALL hold the raw envelope and every chunk-profile version, addressed by identifier and by metadata filter, and SHALL NOT be queried by vector similarity. Its records may carry a constant placeholder vector where the store requires one, and seeding it SHALL issue no embedding request.
+      - R8.3: The retrieval collection SHALL hold the embed selection alone, so a collection whose records all carry real vectors is what the vector search runs against.
+      - R8.4: The interface SHALL read documents through a declared API of four operations -- a chunk by identifier, a document by identifier, the profile versions of a document, and a metadata query over clearance, source type, and issued date.
+      - R8.5: A chunk identifier returned by retrieval SHALL resolve through that API to its chunk, its parent document, and the other profile versions of that document, so the join between the retrieval path and the presentation path is the identifier the search already returned.
+      - R8.6: Lineage SHALL survive the collection's flat metadata representation and SHALL be recoverable by the interface without rejoining against the store.
+      - R8.7: The document-serving path SHALL apply the requester's clearance exactly as the retrieval path does, so a document above the requester's level is not returned by identifier, by version, or by metadata query. A presentation path that reaches documents the retrieval filter withholds is an access-control bypass rather than a display feature (srd010 R2).
+      - R8.8: Seeding both collections at demo startup SHALL issue no embedding-provider request, preserving the property srd015 R5.2 establishes.
+  R9:
+    title: Corpus replacement, provenance, and retained conditions
+    items:
+      - R9.1: The Ukraine corpus SHALL replace the synthetic Sable Strait corpus as the demo corpus, and the taskings, manifest vocabularies, and tracers that name Sable Strait entities SHALL be repointed in this release rather than left to resolve against a corpus that is no longer seeded.
+      - R9.2: Each real tier SHALL record its source, its licence, and the date it was retrieved, so the corpus states what it is built from and under what terms.
+      - R9.3: The synthetic tier SHALL identify itself as invented in the artifact rather than only in surrounding prose, and its classification markings SHALL be identified as demonstration labels over invented sources (srd015 R6.5).
+      - R9.4: A figure measured over this corpus SHALL carry the qualification that four tiers are real published reporting and one is synthetic, because srd014 R6.1 bounds what a figure over a synthetic corpus supports and that bound now applies unevenly across the corpus.
+      - R9.5: The corpus SHALL retain the retrieval conditions the downstream releases depend on -- material above the lower level of every clearance pair the rel11.0 assertion iterates, and enough material relevant to a tasking that some of it falls below the composition cutoff (srd015 R1.3, R1.5).
+      - R9.6: The corpus SHALL contain no real classified material, and the presence of realistic classification markings on the synthetic tier SHALL NOT be read as an exception to that.
+      - R9.7: Each tier's licence record (R9.2) SHALL carry an explicit publish or keep-private verdict, and a tier whose verdict is keep-private SHALL NOT be tracked in this repository -- neither its source dataset nor the chunks built from it. Keep-private tiers are versioned in the private data repository (mesh-intelligence/cohere-demo-data) and read from there (srd015 R6.1), because the GH-281 decision admits the all-rights-reserved and scraped tiers to a private demonstration only, and a repository that tracks their text republishes it the day the repository is published. Text composed from a keep-private tier by a model takes that tier's verdict, and no tracked file SHALL share an unreviewed run of eight or more words with the private checkout (mage corpus:overlap).
+  R10:
+    title: Citation resolution on assessment chunks
+    items:
+      - R10.1: An assessment's citation tail SHALL be parsed into numbered entries carried on the envelope, each entry holding the text the source wrote and the references extracted from it. An entry SHALL be copied rather than interpreted -- a source that obscures its own links SHALL have them stored as it wrote them -- because the obscuring is an editorial decision of the publisher's and reversing it is a decision this build has no standing to make.
+      - R10.2: An entry SHALL be recognized only where its number is at least one and its bracket opens the entry rather than falling inside a reference the entry carries, so an ordinary bracketed index inside a link does not become an entry of its own.
+      - R10.3: An entry carrying no resolvable reference SHALL be carried with its text rather than dropped, because the tier writes plain-text bibliographic citations alongside links and an entry that is silently discarded leaves a marker that resolves to nothing.
+      - R10.4: Every chunk SHALL carry, as metadata, the entries resolving the citation markers its own text holds. The chunk text and the digest computed over it SHALL NOT change, so vectors already stored under their identities stay valid (R4.3, srd015 R3.4) and the resolution stays out of what is embedded for the reason R5.5 gives about lineage.
+      - R10.5: A document's markers SHALL reconcile against its parsed entries, and a document whose markers cannot be reconciled SHALL fail the build naming the document and the markers. Reconciliation is what detects a boundary that fell in the wrong place (R1.7); a length or ratio check does not, because a tail short by one entry sits inside the normal range.
+      - R10.6: A chunk's resolved entries SHALL survive the collection's flat metadata representation and be recoverable by the interface without rejoining against the store, as R8.6 requires of lineage, and SHALL be presented as the source wrote them.
+
+non_goals:
+  - Author the rel10.5 use case or its test suite. Those are the next documentation unit of this release, and they enumerate the measured per-tier counts this document deliberately leaves as configuration.
+  - Define the two-panel interface, its layout, or how the provenance tree is drawn. R8.4 specifies the read API the panel consumes; the surface is srd016-intsum-ui and rel11.5.
+  - Introduce a document database beside the vector store. R8.1 settles this, and a sovereign deployment that swaps the store swaps both collections behind the same read API.
+  - Re-specify the identity keying, the offline build, or the seed's fail-closed behaviour. srd015 R3 through R5 hold unchanged and this release extends the store they define.
+  - Change the ordered clearance set, the point at which clearance is enforced, or how a level reaches the request. srd010 owns all three; R8.7 places the new path behind the existing enforcement rather than adding an enforcement of its own.
+  - Fix the per-tier allocation of the embed budget as normative values. R6.1 requires the allocation to be declared and recorded; what the numbers are is configuration a release may revise without amending this document.
+  - Author the labeled relevant sets. srd014 R1 owns the measurement and rel13.0 builds the labels over these documents.
+  - Define Go package or file layout for the adapters, the chunker, or the read API.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: All five tiers are read through one envelope carrying the same top-level metadata fields, with the body held as typed segments whose searchable flag excludes the classification-authority line, the endnote tail, and the disclaimer from chunking while keeping them readable in the served document; every envelope names the source record it was built from, and a record whose publication date cannot be established fails the build rather than defaulting. The prose-to-tail boundary holds where an entry in the tail is malformed, and a tier's fixed editorial boilerplate is carried unsearchable rather than chunked.
+    traces: [R1.1, R1.2, R1.3, R1.4, R1.5, R1.6, R1.7, R1.8]
+  - id: AC2
+    criterion: Clearance is expressed in the existing ordered set with no level added; the synthetic tier's markings map onto it through configuration declared in the corpus artifact, a dissemination caveat rides beside the level rather than above it, the real tiers are unclassified as a property of the tier rather than by content inspection, an absent or unrecognized marking is written at the highest level, and every document carries an Admiralty rating on both axes taken from its own declared grade where it has one and from its tier's declared rating otherwise, with no rating decided by reading a document.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5, R2.6]
+  - id: AC3
+    criterion: The corpus is bounded by a window declared in the manifest and applied to the issued date, sized by what the committed store may weigh; conversion covers that window in full regardless of the embedding budget; the row-oriented tiers arrive as one envelope per day naming the rows they aggregate; and the Telegram tier is down-sampled to a declared cap deterministically enough that two builds order their envelopes identically.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5]
+  - id: AC4
+    criterion: Three named profiles chunk only the searchable segments; the medium-900 profile reproduces the rel10.4 chunker's text character for character on an unchanged document so stored vectors stay valid; every record names its profile and the identifiers distinguish profiles; and the profile parameters are recorded with the store as configuration.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5]
+  - id: AC5
+    criterion: Every chunk carries structural lineage to its parent with position, sibling count, and character span, resolvable previous and next references within its profile, a coarser parent over the same passage, and cross-tier provenance where its document was derived from other reporting; lineage stays out of the embedded text; and a build that cannot make lineage internally consistent fails rather than writing a citation that leads nowhere.
+    traces: [R5.1, R5.2, R5.3, R5.4, R5.5, R5.6]
+  - id: AC6
+    criterion: The embed selection is declared and recorded, holds at most three thousand chunks at any profile, and is counted and checked before the first embedding request so that an over-ceiling selection fails with zero requests issued; unselected chunks are stored without vectors and without error, and a chunk a narrowed selection no longer reaches has its vector removed; widening the selection embeds only what the store does not already hold; and the index reports chunk and vector counts per profile.
+    traces: [R6.1, R6.2, R6.3, R6.4, R6.5, R6.6]
+  - id: AC7
+    criterion: A document's raw envelope and all its profiles co-locate under its identifier, the index enumerates profiles beside the identities it already names, pruning on chunk and profile together leaves no orphan variant, a rebuild over unchanged inputs writes nothing, and the store stays legible text down to the lineage.
+    traces: [R7.1, R7.2, R7.3, R7.4, R7.5]
+  - id: AC8
+    criterion: Documents are served from a second collection in the same vector store with no separate database, addressed by identifier and metadata filter and never by similarity, seeded without embedding requests; the retrieval collection holds the embed selection alone; the four read operations resolve a retrieval-returned chunk identifier to its chunk, its parent, and its versions with lineage recoverable from the collection; and the requester's clearance governs that path exactly as it governs retrieval, so no document above the requester's level is reachable by identifier, by version, or by metadata query.
+    traces: [R8.1, R8.2, R8.3, R8.4, R8.5, R8.6, R8.7, R8.8]
+  - id: AC9
+    criterion: The Ukraine corpus replaces Sable Strait with the taskings, vocabularies, and tracers repointed in the same release; each real tier records its source, licence, retrieval date, and an explicit publish or keep-private verdict; no keep-private tier's source data or built chunks are tracked in this repository; the synthetic tier identifies itself and its markings as invented in the artifact; figures carry the mixed real-and-synthetic qualification; the clearance-pair and below-cutoff retrieval conditions survive the replacement; and no real classified material is present.
+    traces: [R9.1, R9.2, R9.3, R9.4, R9.5, R9.6, R9.7]
+  - id: AC10
+    criterion: An assessment's citation tail is parsed into numbered entries on the envelope, copied as the source wrote them, with an entry recognized only where its number is at least one and its bracket opens the entry, and an entry carrying no resolvable reference kept rather than dropped. Every chunk carries the entries resolving the markers its text holds, while its text and digest are byte-identical to what the store already holds, so no stored vector is invalidated by the resolution. A document whose markers do not reconcile against its entries fails the build naming both, and a chunk's entries reach the interface through the flat collection metadata and are presented as the source wrote them.
+    traces: [R10.1, R10.2, R10.3, R10.4, R10.5, R10.6]
+
+depends_on:
+  # This release extends the store and the build srd015 defines. R4.3 preserves
+  # the chunk text its chunker produced, R6.5 reuses its identity comparison to
+  # avoid re-embedding, and R7 extends the store shape rather than replacing it.
+  - srd_id: srd015-corpus-build
+    symbols_used: [R2, R3, R4, R5, R6]
+  # R2 writes the clearance tag under the provenance and fail-closed rules
+  # srd010 R1 states, and R8.7 places the document-serving path behind the
+  # enforcement srd010 R2 puts ahead of the vector search.
+  - srd_id: srd010-clearance-gated-retrieval
+    symbols_used: [R1, R2]
+  # R6 embeds through the declared Cohere client and embed operation, and the
+  # ceiling it checks bounds requests to that provider.
+  - srd_id: srd009-cohere-provider
+    symbols_used: [R1, R2]
+  # R6.5 turns on the embedding-model identity the rag-server reports, which is
+  # the identity srd015 R3.2 records and srd001 R2 defines.
+  - srd_id: srd001-rag-server-agent
+    symbols_used: [R2]
+  # R9.4 carries the qualification srd014 R6 places on figures measured over a
+  # synthetic corpus into a corpus that is now mostly real.
+  - srd_id: srd014-evaluation
+    symbols_used: [R1, R6]
+
+implementation_status:
+  planned:
+    - >-
+      rel10.5, data pipeline: the five source adapters and the normalized
+      envelope with its clearance mapping (R1, R2), the windowed slice loader
+      with per-tier aggregation and deterministic sampling (R3), the
+      multi-profile chunker (R4), lineage on every chunk record (R5), the
+      multi-version store and its index (R7), and the budgeted embed selection
+      with its pre-request ceiling check (R6).
+    - >-
+      rel10.5, serving: the document collection beside the retrieval collection,
+      the four read operations, and the clearance enforcement that governs them
+      (R8), together with the repoint of every downstream reference off the
+      Sable Strait corpus and onto this one (R9.1).
+    - >-
+      The provenance tree the read API exists to serve is drawn by the two-panel
+      interface at rel11.5. This release specifies what the panel reads;
+      srd016-intsum-ui specifies how it renders and how the operations reach the
+      browser.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: real sources declare no clearance, embedding spend is unbounded, a serving path can bypass the retrieval filter, and a chunk id is not a citable source"] --> Goals["Goals: Real Multi-Source Demo Corpus"]
+      Goals --> R1["R1: Source tiers and the normalized envelope"]
+      Goals --> R2["R2: Clearance from declared tier policy"]
+      Goals --> R3["R3: Conversion window and per-tier aggregation"]
+      Goals --> R4["R4: Chunk profiles over searchable segments"]
+      Goals --> R5["R5: Parent-document lineage on every chunk"]
+      Goals --> R6["R6: Embed selection and its ceiling"]
+      Goals --> R7["R7: Multi-version store on disk"]
+      Goals --> R8["R8: Document serving over the vector store"]
+      Goals --> R9["R9: Corpus replacement, provenance, and retained conditions"]
+      Goals --> R10["R10: Citation resolution on assessment chunks"]
+      R1 --> AC1["AC1: one envelope, typed segments, unsearchable material kept but unembedded"]
+      R2 --> AC2["AC2: declared tier mapping, caveat beside the level, fail closed"]
+      R3 --> AC3["AC3: declared window converted whole, daily digests, deterministic sampling"]
+      R4 --> AC4["AC4: three profiles, medium-900 unchanged, no vector churn"]
+      R5 --> AC5["AC5: fragment reconstructs to a citable source, across profiles and tiers"]
+      R6 --> AC6["AC6: ceiling checked before the first request, widening costs the delta"]
+      R7 --> AC7["AC7: raw and profiles co-located, prune by profile, idempotent"]
+      R8 --> AC8["AC8: second collection, four read operations, clearance on both paths"]
+      R9 --> AC9["AC9: replaces Sable Strait, licences and verdicts recorded, keep-private tiers untracked, conditions retained"]
+      R10 --> AC10["AC10: markers resolve to named sources, text and vectors untouched"]
+    ```
+  build_and_serve: |
+    ```mermaid
+    flowchart TD
+      subgraph Sources["Five source tiers (R1.1)"]
+        H["humint (synthetic)"]
+        A["osint_assessment"]
+        N["osint_news"]
+        E["sigint_event"]
+        S["sigint_series"]
+      end
+      Sources --> ENV["Normalized envelope: metadata + typed segments (R1.2, R1.3)"]
+      ENV --> WIN["Window 2022-07-01..2023-06-30, aggregate, sample (R3)"]
+      WIN --> CH["Chunk at three profiles, searchable segments only (R4)"]
+      CH --> LIN["Attach parent, version, and cross-tier lineage (R5)"]
+      LIN --> STORE["On-disk store: raw + all profiles per document (R7)"]
+      STORE --> SEL{"Embed selection under the ceiling? (R6.2, R6.3)"}
+      SEL -->|"over ceiling"| FAIL["Build fails, zero requests issued"]
+      SEL -->|"within ceiling"| EMB["Embed selected chunks once per identity (R6.5)"]
+      EMB --> STORE
+      STORE --> RC["Retrieval collection: embed selection only (R8.3)"]
+      STORE --> DC["Document collection: raw + all versions, get only (R8.2)"]
+      RC --> GATE["Clearance filter ahead of retrieval (srd010 R2)"]
+      DC --> GATE
+      GATE --> API["Read API: chunk, document, versions, metadata query (R8.4)"]
+      API --> UI["Two-panel interface draws the provenance tree (srd016, rel11.5)"]
+    ```

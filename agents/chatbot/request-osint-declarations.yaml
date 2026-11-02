@@ -1,0 +1,1925 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#  The OSINT search branch (srd011 R1, R2, R5): a second retrieval branch beside and independent of the clearance-filtered RAG fan-out.
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-request-osint-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - request-fanout-declarations-types.yaml
+  - request-osint-declarations-types.yaml
+tools:
+  - name: osint_search
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Query the declared OSINT search endpoint with the analyst's tasking.
+    problem: |
+      DefTech taskings draw on open-source reporting no internal corpus holds,
+      and an outbound request from a system holding classified material must
+      carry the minimum and reach only the declared host. The operation's
+      declared query binding is that contract: the egress payload is reviewable
+      on the operation without reading the machine (srd011 R2.4).
+    goals:
+      - Send the tasking as the search query, through the declared operation.
+      - Return the engine's result list for normalization.
+    requirements:
+      input:
+        - The query is selected from the declared tasking label alone.
+      output:
+        - Output includes the mapped result list.
+      errors:
+        - Transport, egress, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not carry chunk content, clearance, identity, or history off the enclave (srd011 R2.1-R2.3).
+      - Does not accept runtime method, URL, host, or credential overrides (srd011 R1.5).
+      - Does not follow redirects; the client's redirect mode is none (srd011 R1.4).
+    output:
+      description: Mapped search results.
+    side_effects:
+      - kind: external_api
+        target: osint.search
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A search query mutates nothing.
+    config:
+      rest_ref: osint
+      operation: search
+    signature:
+      input: builtin.Message<chatbot-request-osint-declarations-types.OsintSearchInput>
+      emits:
+        - {signal: SearchResponded, message: builtin.Message<chatbot-request-osint-declarations-types.OsintSearchOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_osint_enabled
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether this deployment runs the search branch at all.
+    problem: |
+      An air-gapped deployment runs the retrieval-only turn (srd011 R6.1,
+      R6.3), and a machine branches on signals. The toggle is a declared
+      operand the deployed render rewrites -- the declare_query_model
+      precedent -- so the committed file and the enabled deployment compare
+      equal and the disabled render compares unequal, with no runtime input
+      anywhere in the decision (R1.5).
+    goals:
+      - Send an enabled deployment's turn into the Searching state.
+      - Send a disabled deployment's turn past the branch untouched.
+    requirements:
+      input:
+        - Both operands are declared configuration; no selector is read.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - Comparing two declared literals does not fail.
+    non_goals:
+      - Does not remove the egress capability; the rendered network policy does that (srd011 R6.2).
+    output: {description: Branch toggle outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      # The deployed render rewrites this left operand to osint-branch-disabled
+      # when .Values.osint.enabled is false; the right operand never changes.
+      left: osint-branch-enabled
+      op: eq
+      right: osint-branch-enabled
+      operand_type: string
+      satisfied: OsintEnabled
+      unsatisfied: OsintDisabled
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintEnabled, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: OsintDisabled, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_osint_results
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the search returned any result.
+    problem: |
+      An engine that answers 200 with an empty list and one that errors are
+      different branch outcomes (srd011 R5.4), and a machine branches on
+      signals. The emptiness check is a word so the empty outcome takes its own
+      status leg instead of rendering an empty document list as "composed".
+    goals:
+      - Send a turn with results down the normalization leg.
+      - Send an empty response to the empty-status leg.
+    requirements:
+      input:
+        - The result list is read from the search word's mapped output.
+      output:
+        - Output is the emptiness outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not validate result shape; the render's field reads own that.
+    output: {description: Result presence outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $from(partition_search_results).body.matched
+      op: empty
+      satisfied: OsintResultsEmpty
+      unsatisfied: OsintResultsPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintResultsEmpty, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: OsintResultsPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_osint_documents
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render each search result as a Command document in the RAG candidate shape.
+    problem: |
+      Two branches must present one document set to composition (srd011 R1.6),
+      and Command cites by the document identity it is given. The result URL is
+      that identity: a citation resolves to the open-source page a reviewer
+      opens, and the source field says it is external without opening anything
+      (srd011 R7.3).
+    goals:
+      - Emit one document object per search result, in the reranked, trimmed order the search pass produced.
+      - Carry the result URL as the document identity and the provenance a citation exposes.
+      - Mark every document with the osint source, apart from every internal source name.
+    requirements:
+      input:
+        - The reordered search rows are selected through one fixed selector.
+      output:
+        - Output is the comma-joined document objects, without the surrounding array.
+      errors:
+        - A result missing its fields emits CommandError.
+    non_goals:
+      - Does not reorder or truncate; the search rerank pass decided both (srd011 R3.1, R3.2).
+      - Does not tag clearance; external documents sit outside the clearance model (srd011 R7.4).
+    output: {description: Comma-joined Cohere document objects.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(reorder_osint_results).body.items
+      # The same id/data envelope render_documents emits for a RAG chunk, so parse_documents validates both branches under one schema.
+      item_template: |-
+        {"id": "osint-{{ position }}", "data": {"source": "osint", "record_id": "osint-{{ position }}", "url": {{ json link }}, "title": {{ json title }}, "content": {{ json snippet }}, "reliability": ""}}
+      separator: ","
+      signal: OsintDocumentsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintDocumentsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_osint_documents_unranked
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render each search result as a Command document in the order the engine returned.
+    problem: |
+      A search-rerank failure leaves the branch in the order the search engine
+      returned with the degradation recorded (srd011 R3.4), and the
+      pre-provider turn has no rerank cascade at all -- cohere_rerank_search binds the
+      Cohere client that deployment does not declare. Both compose from this
+      render; the reranked render and this one differ in order and nothing
+      else, the render_documents_unranked shape.
+    goals:
+      - Emit one document object per search result, in engine order.
+      - Carry the same identity, provenance, and source mark the reranked render carries.
+    requirements:
+      input:
+        - The raw search results are selected through one fixed selector.
+      output:
+        - Output is the comma-joined document objects, without the surrounding array.
+      errors:
+        - A result missing its fields emits CommandError.
+    non_goals:
+      - Does not reorder, filter, or truncate.
+      - Does not tag clearance; external documents sit outside the clearance model (srd011 R7.4).
+    output: {description: Comma-joined Cohere document objects.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_search_results).body.matched
+      item_template: |-
+        {"id": "osint-{{ position }}", "data": {"source": "osint", "record_id": "osint-{{ position }}", "url": {{ json link }}, "title": {{ json title }}, "content": {{ json snippet }}, "reliability": ""}}
+      separator: ","
+      signal: OsintDocumentsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintDocumentsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The search-branch rerank pass (srd011 R3), the cascade's second pass and the same render -> compose -> parse -> score -> check -> reorder shape the RAG pass runs.
+  - name: cohere_rerank_search
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Score the search results against the tasking through the declared rerank operation.
+    problem: |
+      An open search returns a noisy tail ranked by an engine's own signals,
+      and relevance to the tasking is a different measurement. Scoring the
+      branch on its own trims that tail before it competes with curated
+      internal reporting in the fusion (srd011 R3.1, R3.2).
+    goals:
+      - Submit the tasking and the search candidates to the one declared rerank operation.
+      - Return the provider's ordering over those candidates.
+    requirements:
+      input:
+        - The tasking and the search candidate array are selected from command state through the operation's own bindings.
+      output:
+        - Output is the ordering rows the provider returned.
+      errors:
+        - Network, timeout, and mapping failures emit their mapped provider signals.
+    non_goals:
+      - Does not retrieve, and cannot, because the provider returns positions into what it was sent (srd011 R3.3).
+      - Does not declare a second operation; the pass differs from the RAG pass only in the candidate set (srd011 R4.4).
+    output:
+      description: Provider ordering over the submitted candidates.
+    side_effects:
+      - {kind: external_api, target: cohere.rerank, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Scoring candidates mutates nothing.}
+    config:
+      rest_ref: reranker
+      operation: rerank
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: Reranked, message: builtin.Message<chatbot-request-osint-declarations-types.CohereRerankSearchOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+
+        - {signal: ProviderRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_osint_rerank_order
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the search pass returned an ordering to apply.
+    problem: A 200 carrying no ordering must take the engine-order degradation, not the reorder, or the branch composes from nothing and calls it reranked.
+    goals:
+      - Separate an empty ordering from one with positions.
+    requirements:
+      input:
+        - The wrapped ordering is selected from command state.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not judge whether the ordering is sensible, only whether there is one.
+    output: {description: Ordering presence outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      # The predicate reads the provider's ordering array directly: an empty list is empty under srd041 R2.4, so the order no longer needs to be rendered and wrapped into a comparable string first (GH-443).
+      left: $from(cohere_rerank_search).body.mapped.results
+      op: empty
+      satisfied: OsintRerankOrderEmpty
+      unsatisfied: OsintRerankOrderPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintRerankOrderEmpty, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: OsintRerankOrderPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: reorder_osint_results
+    type: builtin
+    init: reorder_by_index
+    visibility: internal
+    category: response
+    description: Emit the search results in the order the search rerank returned, trimmed to the declared budget.
+    problem: |
+      The provider returns positions into the submitted list rather than
+      content, so applying the ordering means indexing the result rows the
+      candidate list was rendered from. The ordering names at most the
+      operation's declared top_n rows, so this is also where the open-search
+      tail is trimmed before the union (srd011 R3.2).
+    goals:
+      - Emit the result rows in ordering-row order.
+      - Emit only the rows the ordering names, which is the declared cutoff.
+    requirements:
+      input:
+        - The result rows and the provider ordering are selected through fixed selectors.
+        - The ordering rows carry an integer index into the candidate list.
+      output:
+        - Output is the reordered result rows with their aligned ordering rows.
+      errors:
+        - A missing, fractional, negative, out-of-range, or duplicate index emits CommandError.
+    non_goals:
+      - Does not retrieve, score, or introduce a result; it applies an ordering over rows that already exist (srd011 R3.3).
+    output:
+      description: Reordered search result rows.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Reordering reads prior state and changes no external state.}
+    config:
+      items: $from(partition_search_results).body.matched
+      order: $from(cohere_rerank_search).body.mapped.results
+      index_field: index
+      signal: OsintResultsReordered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintResultsReordered, message: builtin.Message<chatbot-request-osint-declarations-types.ReorderOsintResultsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The two status words below are dispatched under one shared osint_rerank_status label, the rerank_status shape: the response reports which ordering the branch composed in through a single selector, apart from the branch outcome and the RAG pass's own status (srd011 R5.4).
+  - name: declare_osint_rerank_applied
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the search rerank ordered the branch's composed documents.
+    problem: A reranked branch and a degraded one compose the same results in different orders, which no reader can see without the status.
+    goals:
+      - Render the applied outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the pass outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not decide whether the pass ran; the leg it sits on decides that.
+    output: {description: The search pass outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintRerankStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "applied"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintRerankStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_osint_rerank_degraded
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the search rerank did not order the branch, so the engine order did.
+    problem: |
+      A degraded pass returns the branch in engine order with a 200 the reader
+      cannot distinguish from a reranked one (srd011 R3.4), and an operator
+      alerts on the status rather than inferring it from ordering.
+    goals:
+      - Render the degraded outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the pass outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not name which refusal caused the degradation; the trace carries the mapped signal.
+    output: {description: The search pass outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintRerankStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "degraded"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintRerankStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  # The latency tunable (srd011 R6.4): collapsing the three passes to a single fusion over the raw union is a supported configuration and not the default, because the per-branch passes trim the tail the demonstration exists to show.
+  - name: check_cascade_mode
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether this deployment runs the three-pass cascade or the single-fusion collapse.
+    problem: |
+      The per-branch passes cost two provider calls a latency-sensitive
+      deployment may trade away (srd011 R6.4), and a machine branches on
+      signals. The mode is a declared operand the deployed render rewrites --
+      the check_osint_enabled precedent -- so no runtime input anywhere in the
+      decision, and a comparison failure takes the default three-pass path.
+    goals:
+      - Send a three-pass deployment's turn into the per-branch pass.
+      - Send a single-fusion deployment's turn past it with the skip recorded.
+    requirements:
+      input:
+        - Both operands are declared configuration; no selector is read.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - Comparing two declared literals does not fail.
+    non_goals:
+      - Does not skip the fusion; the collapse still fuses on one scale (srd011 R4.2).
+    output: {description: Cascade mode outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      # The deployed render rewrites this left operand to cascade-single-fusion when .Values.osint.cascade is single_fusion; the right operand never changes.
+      left: cascade-three-pass
+      op: eq
+      right: cascade-three-pass
+      operand_type: string
+      satisfied: CascadeThreePass
+      unsatisfied: CascadeSingleFusion
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: CascadeThreePass, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CascadeSingleFusion, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_rerank_skipped
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the RAG rerank pass was skipped under the single-fusion collapse.
+    problem: |
+      A skipped pass and a degraded one both leave the fan-out order, and only
+      the first is a configuration the operator chose (srd011 R6.4). The
+      status keeps them apart under the label the response already reads.
+    goals:
+      - Render the skipped outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the pass outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not decide the mode; check_cascade_mode and the rendered operand do.
+    output: {description: The rerank outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: RerankStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "skipped"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RerankStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_osint_rerank_skipped
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the search rerank pass was skipped under the single-fusion collapse.
+    problem: |
+      The same distinction the RAG side records: a skipped pass is chosen
+      configuration, a degraded one is a fault, and the branch composes in
+      engine order under both (srd011 R6.4).
+    goals:
+      - Render the skipped outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the pass outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not decide the mode; check_cascade_mode and the rendered operand do.
+    output: {description: The search pass outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintRerankStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "skipped"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintRerankStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  # The fusion pass (srd011 R4), the cascade's third pass, run only when both branches rendered documents: with one branch, that branch's own rerank already produced the top-N.
+  - name: parse_union_documents
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: response
+    description: Validate the two branches' composed document union into one addressable array.
+    problem: |
+      The fusion re-scores and reorders individual documents, and the union
+      exists only as composed text. Parsing it back yields one array of
+      id/data envelopes the candidate render and the reorder both address, so
+      the pass fuses one document set rather than two formats (srd011 R1.6).
+    goals:
+      - Validate the union under the same envelope the final composition validates.
+      - Make the union addressable for the fused candidate render and the reorder.
+    requirements:
+      input:
+        - Source is the composed union of both branches' rendered documents.
+      output:
+        - Valid output contains documents as an array of objects carrying id and data.
+      errors:
+        - A malformed union emits ParseFailed, which the machine routes to the fusion degradation.
+    non_goals:
+      - Does not reorder, filter, or author documents.
+    output: {description: Validated union document array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      source: $from(compose_documents_augmented).$
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              properties:
+                id: {type: string}
+                data: {type: object}
+              required: [id, data]
+        required: [documents]
+      parsed: UnionDocumentsParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: UnionDocumentsParsed, message: builtin.Message<chatbot-request-osint-declarations-types.ParseUnionDocumentsOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+  - name: cohere_rerank_fused
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Score the union of both branches against the tasking through the declared rerank operation.
+    problem: |
+      Vector distance from Chroma, search rank from an engine, and rerank
+      score from the provider are three incomparable scales, and merging by
+      score lets one source dominate for a reason that has nothing to do with
+      relevance. Re-scoring every candidate against the tasking is the one
+      scale the top-N is ordered on (srd011 R4.1, R4.2).
+    goals:
+      - Submit the tasking and the fused candidates to the one declared rerank operation.
+      - Return the provider's ordering over those candidates.
+    requirements:
+      input:
+        - The tasking and the fused candidate array are selected from command state through the operation's own bindings.
+      output:
+        - Output is the ordering rows the provider returned.
+      errors:
+        - Network, timeout, and mapping failures emit their mapped provider signals.
+    non_goals:
+      - Does not retrieve, and cannot, because the provider returns positions into what it was sent.
+      - Does not declare a second operation; the pass differs from the others only in the candidate set (srd011 R4.4).
+    output:
+      description: Provider ordering over the submitted candidates.
+    side_effects:
+      - {kind: external_api, target: cohere.rerank, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Scoring candidates mutates nothing.}
+    config:
+      rest_ref: reranker
+      operation: rerank
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: Reranked, message: builtin.Message<chatbot-request-osint-declarations-types.CohereRerankFusedOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+
+        - {signal: ProviderRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_fused_rerank_order
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the fusion returned an ordering to apply.
+    problem: A 200 carrying no ordering must take the fallback to the reranked RAG branch, not the reorder, or the turn composes from nothing and calls it fused.
+    goals:
+      - Separate an empty ordering from one with positions.
+    requirements:
+      input:
+        - The wrapped ordering is selected from command state.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not judge whether the ordering is sensible, only whether there is one.
+    output: {description: Ordering presence outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      # The predicate reads the provider's ordering array directly: an empty list is empty under srd041 R2.4, so the order no longer needs to be rendered and wrapped into a comparable string first (GH-443).
+      left: $from(cohere_rerank_fused).body.mapped.results
+      op: empty
+      satisfied: FusedRerankOrderEmpty
+      unsatisfied: FusedRerankOrderPresent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FusedRerankOrderEmpty, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: FusedRerankOrderPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: reorder_fused_documents
+    type: builtin
+    init: reorder_by_index
+    visibility: internal
+    category: response
+    description: Emit the union documents in the order the fusion returned, trimmed to the declared budget.
+    problem: |
+      The provider returns positions into the submitted list rather than
+      content, so applying the ordering means indexing the union documents the
+      candidate list was rendered from. The ordering names at most the
+      operation's declared top_n rows, which is the R4.3 composition budget:
+      the fused top-N is the document set Command composes from.
+    goals:
+      - Emit the union documents in ordering-row order.
+      - Emit only the documents the ordering names, which is the declared top-N.
+    requirements:
+      input:
+        - The union documents and the provider ordering are selected through fixed selectors.
+        - The ordering rows carry an integer index into the candidate list.
+      output:
+        - Output is the reordered union documents.
+      errors:
+        - A missing, fractional, negative, out-of-range, or duplicate index emits CommandError.
+    non_goals:
+      - Does not retrieve, score, or introduce a document; it applies an ordering over documents that already exist.
+    output:
+      description: Reordered union documents.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Reordering reads prior state and changes no external state.}
+    config:
+      items: $from(parse_union_documents).body.documents
+      order: $from(cohere_rerank_fused).body.mapped.results
+      index_field: index
+      signal: FusedDocumentsReordered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FusedDocumentsReordered, message: builtin.Message<chatbot-request-osint-declarations-types.ReorderFusedDocumentsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_fused_documents
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the fused top-N documents for the final composition wrapper.
+    problem: |
+      The reordered union rows are already complete id/data envelopes -- the
+      reorder passes rows through unmodified -- and the composition wrapper
+      takes comma-joined objects, so this render is the identity per row in
+      fused order.
+    goals:
+      - Emit each fused document verbatim, in fused order.
+    requirements:
+      input:
+        - The reordered union documents are selected through one fixed selector.
+      output:
+        - Output is the comma-joined document objects, without the surrounding array.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not reorder, filter, or reshape the documents.
+    output: {description: Comma-joined fused document objects.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(reorder_fused_documents).body.items
+      item_template: "{{ json . }}"
+      separator: ","
+      signal: FusedDocumentsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FusedDocumentsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_fused_documents
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the fused top-N as the documents array Command composes from.
+    problem: |
+      The fused top-N replaces the RAG-only top-N whenever the search branch
+      is enabled (srd011 R4.3), and the final parse reads whichever compose
+      variant ran through the shared composed_documents label.
+    goals:
+      - Produce one JSON object carrying the fused documents array.
+    requirements:
+      input:
+        - The rendered fused documents are selected from command state.
+      output:
+        - Output is a JSON object with a documents array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not author, reorder, or validate the document objects.
+    output: {description: JSON object carrying the documents array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: DocumentsComposed
+      inputs:
+        rendered: $from(render_fused_documents).$
+      template: |-
+        {"documents": [{{ rendered }}]}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The two status words below are dispatched under one shared fusion_status label: the response reports whether the composed set is the fused top-N or the R4.5 fallback through a single selector, apart from each branch pass's own status.
+  - name: declare_fusion_applied
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the composed documents are the fused cross-source top-N.
+    problem: A fused turn and a fallback turn both answer 200 over plausible documents, and only this status says which set Command composed from.
+    goals:
+      - Render the applied outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the pass outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not decide whether the pass ran; the leg it sits on decides that.
+    output: {description: The fusion outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: FusionStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "applied"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FusionStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_fusion_degraded
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the fusion did not run to completion, so the reranked RAG branch composed.
+    problem: |
+      A fusion failure must leave the turn answering from the reranked RAG
+      branch (srd011 R4.5), and an operator alerts on the recorded degradation
+      rather than inferring it from which documents were cited.
+    goals:
+      - Render the degraded outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the pass outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not name which failure degraded the pass; the trace carries the mapped signal.
+    output: {description: The fusion outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: FusionStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "degraded"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FusionStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  # The three status words below are dispatched on their respective branch legs under one shared osint_status label, the rerank_status shape: whichever leg ran, compose_response reads the branch outcome through a single selector and reports it apart from the per-source RAG outcomes (srd011 R5.4).
+  - name: declare_osint_composed
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the search branch composed documents into the turn.
+    problem: An augmented turn and a retrieval-only turn both answer 200, so the response has to say the branch contributed.
+    goals:
+      - Render the composed outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the branch outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not decide whether the branch ran; the leg it sits on decides that.
+    output: {description: The branch outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "composed"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_osint_empty
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the search answered with no results, so the turn composed from RAG alone.
+    problem: An empty engine answer is a branch outcome, not a fault, and it must be distinguishable from an errored branch (srd011 R5.4).
+    goals:
+      - Render the empty outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the branch outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not retry the search; one query per turn is the branch contract.
+    output: {description: The branch outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "empty"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_osint_errored
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the search branch failed and the turn composed from RAG alone.
+    problem: |
+      Search is a network call to something outside the enclave; it will be
+      slow, empty, or down, and the brief still gets written from what the
+      corpus holds (srd011 R5.1). A degraded branch that no reader can see is
+      one no operator can alert on.
+    goals:
+      - Render the errored outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the branch outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not name which failure degraded the branch; the trace carries the mapped signal.
+    output: {description: The branch outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "errored"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: check_osint_dropped
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the failed search request was dropped by the client's network policy.
+    problem: |
+      A request the egress allowlist refused and a request the engine failed to
+      answer are different events for a security reviewer (srd011 R1.3, R5.4):
+      the first is the control working, the second is an outage. The client
+      reports a request it refused to build or send -- the network-policy drop
+      lands here, measured live 2026-09-02 -- under the request_rendering
+      failure stage on its error result, and this word reads that stage from
+      the adjacent failed result. The stage means no bytes left the enclave;
+      a distinct stage for the policy refusal alone is an agent-core
+      enhancement, and until it exists every never-sent request reports as
+      dropped rather than as an engine outage.
+    goals:
+      - Send a request the client refused before sending to the dropped status leg.
+      - Send every failure of a request that was actually sent to the errored status leg.
+    requirements:
+      input:
+        - The failure stage is read from the adjacent failed search result.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - A result carrying no failure stage emits CommandError, which the machine routes to the errored status.
+    non_goals:
+      - Does not retry, and does not read the refused host; the trace carries the redacted message.
+    output: {description: Refusal classification outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $.failure_stage
+      op: eq
+      right: request_rendering
+      operand_type: string
+      satisfied: OsintRequestDropped
+      unsatisfied: OsintSearchErrored
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintRequestDropped, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: OsintSearchErrored, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_osint_dropped
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that the client's network policy dropped the search request.
+    problem: |
+      A dropped request is the approved-domain control refusing an egress
+      (srd011 R1.3), and it must be visible in response metadata apart from an
+      engine outage -- an operator alerts on one and audits the other.
+    goals:
+      - Render the dropped outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the branch outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not name the refused host; the redacted trace message carries it.
+    output: {description: The branch outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "dropped"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  - name: declare_osint_disabled
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record that this deployment runs with the search branch disabled.
+    problem: |
+      The air-gapped turn is the retrieval-only path rather than a degraded
+      variant of the search turn (srd011 R6.3), and the response says so
+      plainly instead of leaving the branch outcome blank.
+    goals:
+      - Render the disabled outcome as a command-state value.
+    requirements:
+      input:
+        - The outcome is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object naming the branch outcome.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not decide the toggle; check_osint_enabled and the rendered operand do.
+    output: {description: The branch outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a configured constant has no durable effect.}
+    config:
+      signal: OsintStatusDeclared
+      inputs: {}
+      template: |
+        {"status": "disabled"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintStatusDeclared, message: builtin.Message<cohere-chatbot-request-fanout-declarations-types.StageStatus>}
+  # The two checks below route the document composition.
+  - name: check_osint_documents
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the search branch rendered documents this turn.
+    problem: |
+      On a degraded or empty branch the osint_documents label never ran, and a
+      compose reading it would fault the composition the degradation exists to
+      protect (srd011 R5.3). The presence check is a word whose CommandError
+      leg is the degraded case.
+    goals:
+      - Send an augmented turn to the union composition.
+      - Send a degraded or empty branch to the RAG-only composition it composed before.
+    requirements:
+      input:
+        - The rendered external documents are read through the osint_documents label.
+      output:
+        - Output is the emptiness outcome.
+      errors:
+        - An unresolved label -- the branch never rendered -- emits CommandError.
+    non_goals:
+      - Does not inspect document content.
+    output: {description: External document presence outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $from(osint_documents).$
+      op: non_empty
+      satisfied: OsintDocumentsPresent
+      unsatisfied: OsintDocumentsAbsent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintDocumentsPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: OsintDocumentsAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_rag_documents
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide whether the RAG branch rendered documents this turn.
+    problem: |
+      A turn whose every internal source was refused, excluded, or empty still
+      augments from the search branch (srd011 R5.3), and the union template
+      would wrap that empty operand into malformed JSON. The check routes the
+      corner to a composition that carries the external documents alone.
+    goals:
+      - Send a turn with both document sets to the union composition.
+      - Send an empty RAG render to the external-only composition.
+    requirements:
+      input:
+        - The rendered RAG documents are read through the rag_documents label.
+      output:
+        - Output is the emptiness outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not inspect document content.
+    output: {description: RAG document presence outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $from(rag_documents).$
+      op: non_empty
+      satisfied: RagDocumentsPresent
+      unsatisfied: RagDocumentsAbsent
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RagDocumentsPresent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: RagDocumentsAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_documents_augmented
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the RAG and external document objects as one documents array.
+    problem: |
+      Both branches present one document set to composition (srd011 R1.6), and
+      external content reaches the model only as a document in that set, never
+      as a prompt fragment outside it (srd011 R7.2). The union is textual
+      concatenation of two rendered lists; membership was decided by the
+      branches, not here.
+    goals:
+      - Produce one JSON object carrying both branches' documents.
+      - Keep the RAG branch's order first, the engine's order second.
+    requirements:
+      input:
+        - Both rendered document lists are selected from command state.
+      output:
+        - Output is a JSON object with a documents array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not author, reorder, or validate the document objects.
+      - Does not rerank across branches; that fusion is rel12.1 (srd011 R4).
+    output: {description: JSON object carrying the documents array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: DocumentsComposed
+      inputs:
+        rendered: $from(rag_documents).$
+        osint: $from(osint_documents).$
+      template: |-
+        {"documents": [{{ rendered }},{{ osint }}]}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_documents_osint_only
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the external document objects alone as the documents array.
+    problem: |
+      When no internal chunk survived, the union template's RAG operand is an
+      empty string and its leading comma is malformed JSON. This word is the
+      route for that corner, so an all-refused turn still composes over what
+      the search branch found (srd011 R5.3).
+    goals:
+      - Produce one JSON object carrying the external documents.
+    requirements:
+      input:
+        - The rendered external documents are selected from command state.
+      output:
+        - Output is a JSON object with a documents array.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not author, reorder, or validate the document objects.
+    output: {description: JSON object carrying the documents array.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: DocumentsComposed
+      inputs:
+        osint: $from(osint_documents).$
+      template: |-
+        {"documents": [{{ osint }}]}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentsComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_osint_candidates
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: response
+    description: Render, wrap, and validate the search snippets as the rerank documents array in one word.
+    problem: The rerank body needs the candidate texts as one validated documents array, and the three reshapes that build it carry no decision a machine state should own (srd049).
+    goals:
+      - Produce the validated documents object the shared rerank binding reads, in one step.
+    requirements:
+      input:
+        - The candidate rows are selected from command state.
+      output:
+        - Output is the schema-validated JSON object with a documents string array, served under the shared parse_candidates label.
+      errors:
+        - A failing stage emits CommandError naming the stage.
+    non_goals:
+      - Does not score, order, or drop candidates.
+    output: {description: Validated documents array for the rerank body.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Marshalling changes no external state.}
+    config:
+      signal: OsintCandidatesParsed
+      stages:
+        - name: render_texts
+          init: render_each
+          config:
+            items: $from(partition_search_results).body.matched
+            item_template: '{{ json snippet }}'
+            separator: ','
+            signal: OsintCandidateTextsRendered
+        - name: wrap_documents
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"documents": [{{ rendered }}]}'
+            signal: OsintCandidatesComposed
+        - name: validate
+          init: parse_structured
+          config:
+            source: $.output
+            schema:
+              type: object
+              additionalProperties: false
+              required: [documents]
+              properties:
+                documents: {type: array, items: {type: string}}
+            parsed: OsintCandidatesParsed
+            unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OsintCandidatesParsed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_fused_candidates
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: response
+    description: Render, wrap, and validate the union documents as the rerank documents array in one word.
+    problem: The rerank body needs the candidate texts as one validated documents array, and the three reshapes that build it carry no decision a machine state should own (srd049).
+    goals:
+      - Produce the validated documents object the shared rerank binding reads, in one step.
+    requirements:
+      input:
+        - The candidate rows are selected from command state.
+      output:
+        - Output is the schema-validated JSON object with a documents string array, served under the shared parse_candidates label.
+      errors:
+        - A failing stage emits CommandError naming the stage.
+    non_goals:
+      - Does not score, order, or drop candidates.
+    output: {description: Validated documents array for the rerank body.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Marshalling changes no external state.}
+    config:
+      signal: FusedCandidatesParsed
+      stages:
+        - name: render_texts
+          init: render_each
+          config:
+            items: $from(parse_union_documents).body.documents
+            item_template: '{{ json data.content }}'
+            separator: ','
+            signal: FusedCandidateTextsRendered
+        - name: wrap_documents
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"documents": [{{ rendered }}]}'
+            signal: FusedCandidatesComposed
+        - name: validate
+          init: parse_structured
+          config:
+            source: $.output
+            schema:
+              type: object
+              additionalProperties: false
+              required: [documents]
+              properties:
+                documents: {type: array, items: {type: string}}
+            parsed: FusedCandidatesParsed
+            unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: FusedCandidatesParsed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_search_terms_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Compose the prompt that asks the Command model for web search terms.
+    problem: A tasking is written for an analyst, not a search engine; the query the metered engine sees should be the model's distillation of it (GH-457).
+    goals:
+      - Wrap the declared question with the search-terms instruction.
+    requirements:
+      input:
+        - The question is selected from command state.
+      output:
+        - The prompt text the model reads.
+      errors:
+        - Selector failures emit CommandError; the machine seeds the raw question instead.
+    non_goals:
+      - Does not search; osint_search owns the engine call.
+    output: {description: Search-terms prompt.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: SearchTermsPromptComposed
+      inputs:
+        question: $from(declare_question).body.question
+      template: |-
+        Turn this analyst tasking into one web search query. Return the query
+        alone on a single line: three to eight keywords, no quotes, no
+        operators, no commentary.
+
+        Tasking:
+        {{ question }}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchTermsPromptComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: derive_search_terms
+    type: builtin
+    init: invoke_llm
+    visibility: internal
+    category: boundary
+    description: Ask the Command model for the web search terms the tasking implies.
+    problem: The metered engine answers keyword queries, and the model is the demo's translator from tasking to query -- one small Command call, with the raw question as the declared fallback (GH-457).
+    goals:
+      - Return one line of search terms for the declared question.
+    requirements:
+      input:
+        - The composed search-terms prompt is selected from command state.
+      output:
+        - The model's single-line query under the shared search_terms label.
+      errors:
+        - Provider, credential, and transport failures emit CommandError; the machine seeds the raw question instead.
+    non_goals:
+      - Does not search and does not judge results.
+    output: {description: One line of search terms.}
+    side_effects:
+      - {kind: external_api, state: read_only, target: cohere.chat}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Conversation history is request-scoped.}
+    config:
+      dialect: /opt/cohere/chat-dialect.yaml
+      provider_url: ${COHERE_BASE_URL:-https://api.cohere.com}
+      model: ${COHERE_CLASSIFIER_MODEL:-command-r7b-12-2024}
+      response_profile: cohere
+      answer_only: true
+      manifest_state: DerivingSearchTerms
+      user_prompt_from: $from(compose_search_terms_prompt).$
+      system_prompt: |
+        You turn analyst taskings into web search queries. Follow the
+        instruction in the message and answer with the query alone.
+      max_time: 30
+      llm_timeout: 30
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_search_terms_fallback
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Seed the raw question as the search terms when no model derivation ran.
+    problem: The search must never die on the translator -- a failed or unavailable derivation searches the tasking verbatim, and the Ollama tier, which binds no Cohere client, always takes this leg (GH-457).
+    goals:
+      - Publish the declared question under the shared search_terms label.
+    requirements:
+      input:
+        - The question is selected from command state.
+      output:
+        - The raw question under the search_terms label.
+      errors:
+        - Selector failures emit CommandError; the branch reports errored status.
+    non_goals:
+      - Does not rewrite or trim the question.
+    output: {description: The raw question as search terms.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: SearchTermsDeclared
+      inputs:
+        question: $from(declare_question).body.question
+      template: '{{ question }}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchTermsDeclared, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: derive_search_terms_via_tool
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Propose web search queries through a forced native tool call (GH-612).
+    problem: One prompt-derived line covers one angle of a tasking; the declared report_search_terms tool's arguments carry up to three distinct queries, schema-enforced by the provider.
+    goals:
+      - Submit the composed tasking prompt to the declared derive_search_terms_tool chat operation.
+      - Force exactly one tool call whose arguments carry the queries array.
+    requirements:
+      input:
+        - The composed search-terms prompt is selected from command state.
+      output:
+        - Output is the provider's tool_calls array; project_search_terms unwraps the single call's arguments.
+      errors:
+        - Provider failures emit their mapped provider signals; the machine seeds the raw question instead.
+    non_goals:
+      - Does not search and does not judge results.
+    output:
+      description: The provider response's tool_calls array under mapped.
+    side_effects:
+      - {kind: external_api, target: cohere.chat, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Read-only.}
+    config:
+      rest_ref: cohere
+      operation: derive_search_terms_tool
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<chatbot-request-osint-declarations-types.DeriveSearchTermsViaToolOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: project_search_terms
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Unwrap the forced tool call's arguments string for schema validation (GH-612).
+    problem: Selector paths walk maps only, so the single tool call cannot be indexed in the response mapping (the project_tool_arguments precedent).
+    goals:
+      - Render the one tool call's arguments as the raw JSON string the parser expects.
+    requirements:
+      input:
+        - The tool_calls array is selected from the search-tool result under the search_tool label.
+      output:
+        - Output is the arguments JSON string of the single forced call.
+      errors:
+        - A selector that does not resolve to an array emits CommandError; the machine seeds the raw question instead.
+    non_goals:
+      - Does not validate the queries; parse_search_terms does.
+    output: {description: The tool call's arguments JSON string.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(search_tool).body.mapped.tool_calls
+      item_template: '{{ function.arguments }}'
+      separator: ""
+      signal: SearchToolArgumentsProjected
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchToolArgumentsProjected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_search_terms
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Schema-validate the proposed queries (GH-612).
+    problem: The fan must iterate a validated array, never raw model text; a malformed payload routes to the one-query fallback.
+    goals:
+      - Accept only an object whose queries field is one to three strings.
+    requirements:
+      input:
+        - The projected arguments string is the previous step's output.
+      output:
+        - The validated queries object under the shared search_queries label.
+      errors:
+        - Malformed or schema-invalid content emits ParseFailed for the fallback.
+    non_goals:
+      - Does not run searches and does not rewrite queries.
+    output: {description: Validated queries object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      source: $.output
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          queries:
+            type: array
+            minItems: 1
+            maxItems: 3
+            items: {type: string}
+        required: [queries]
+      parsed: SearchTermsParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchTermsParsed, message: builtin.Message<chatbot-request-osint-declarations-types.SearchQueries>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_search_queries_fallback
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Seed the raw question as the one-query fan input (GH-612).
+    problem: A failed proposal must still harvest; the raw question in the fan's own shape keeps one code path downstream.
+    goals:
+      - Publish the declared question as a single-element queries array.
+    requirements:
+      input:
+        - The question is selected from the declared harvest question.
+      output:
+        - A queries object shaped exactly like a validated proposal.
+      errors:
+        - Selector failures emit CommandError and the harvest fails.
+    non_goals:
+      - Does not call any model.
+    output: {description: One-query object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: SearchQueriesDeclared
+      inputs:
+        question: $from(declare_question).body.question
+      template: '{"queries": [{{ json question }}]}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchQueriesDeclared, message: builtin.Message<chatbot-request-osint-declarations-types.SearchQueries>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: flatten_search_rows
+    type: builtin
+    init: flat_map
+    visibility: internal
+    category: response
+    description: Flatten the per-query search results into one row set (GH-612).
+    problem: The queries fan joins one result list per search, and the partition and embed fans take one flat list; each row keeps the query that found it.
+    goals:
+      - Produce one row per search result across every query, in query then engine order.
+    requirements:
+      input:
+        - The joined searches are selected under the osint_searches label.
+      output:
+        - items carries {row, query} elements, one per result.
+      errors:
+        - A selector that does not resolve emits CommandError.
+    non_goals:
+      - Does not deduplicate, score, or trim rows.
+    output: {description: Flat row set across queries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Flattening changes no external state.}
+    config:
+      items: $from(osint_searches).body.items
+      element_fields:
+        row: result.structured_output.mapped.results
+      carry_fields:
+        query: input
+      signal: SearchRowsFlattened
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchRowsFlattened, message: builtin.Message<builtin-types-collections.FlattenedObjects>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_search_rows
+    type: builtin
+    init: partition
+    visibility: internal
+    category: word
+    description: Keep only flattened rows carrying a non-empty snippet (GH-612).
+    problem: The GH-457 snippet screen, applied to the flattened {row, query} shape the queries fan produces.
+    goals:
+      - Partition the flattened rows on snippet presence; the matched set is the harvest working set.
+    requirements:
+      input:
+        - The flattened rows are selected under the search_rows label.
+      output:
+        - matched carries the snippet-bearing rows in fan order.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not score, trim, or reorder rows.
+    output: {description: Partitioned flattened rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A partition changes no external state.}
+    config:
+      items: $from(search_rows).body.items
+      field: row.snippet
+      op: non_empty
+      operand_type: string
+      satisfied: SearchResultsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchResultsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_search_results
+    type: builtin
+    init: partition
+    visibility: internal
+    category: word
+    description: Keep only search results carrying a non-empty snippet.
+    problem: A live engine returns rows without snippets (video carousels, knowledge panels), and an empty candidate is both unscorable by the rerank and rejected by the chat provider's documents mode (GH-457).
+    goals:
+      - Partition the search rows on snippet presence; the matched set is the branch's working set.
+    requirements:
+      input:
+        - The search rows are selected from command state.
+      output:
+        - matched carries the snippet-bearing rows in engine order.
+      errors:
+        - An unresolved selector emits CommandError; the branch reports errored status.
+    non_goals:
+      - Does not score, trim, or reorder rows.
+    output: {description: Partitioned search rows.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A partition changes no external state.}
+    config:
+      items: $from(osint_search).body.mapped.results
+      field: snippet
+      op: non_empty
+      operand_type: string
+      satisfied: SearchResultsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SearchResultsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: embed_harvest_result
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Embed one web result's text as a search document.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects:
+      - {kind: external_api, state: read_only, target: cohere.embed}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      rest_ref: document_embedder
+      operation: embed_document
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DocumentEmbedded, message: builtin.Message<chatbot-request-osint-declarations-types.EmbedHarvestResultOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+
+        - {signal: ProviderRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_harvest_embeds
+    type: builtin
+    init: partition
+    visibility: internal
+    category: word
+    description: Keep only the results whose embed succeeded.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(harvest_embeds).body.items
+      field: result.signal
+      op: eq
+      operand_type: string
+      right: DocumentEmbedded
+      satisfied: HarvestEmbedsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: HarvestEmbedsPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: marshal_harvest_rows
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: word
+    description: Render the embedded results as the ingest batch and validate it.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: HarvestRowsMarshalled
+      stages:
+        - name: render
+          init: render_each
+          config:
+            items: $from(partition_harvest_embeds).body.matched
+            item_template: '{"id": "harvest-{{ input.row.position }}", "text": {{ json input.row.snippet }}, "embedding": {{ json result.structured_output.mapped.embedding.0 }}, "url": {{ json input.row.link }}, "title": {{ json input.row.title }}}'
+            separator: ','
+            signal: Rendered
+        - name: wrap
+          init: compose
+          config:
+            inputs: {rendered: $.}
+            template: '{"rows": [{{ rendered }}]}'
+            signal: Wrapped
+        - name: validate
+          init: parse_structured
+          config:
+            source: $.output
+            schema:
+              type: object
+              additionalProperties: false
+              required: [rows]
+              properties:
+                rows:
+                  type: array
+                  items:
+                    type: object
+                    required: [id, text, embedding, url, title]
+                    properties:
+                      id: {type: string}
+                      text: {type: string}
+                      embedding: {type: array}
+                      url: {type: string}
+                      title: {type: string}
+            parsed: HarvestRowsMarshalled
+            unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: HarvestRowsMarshalled, message: builtin.Message<chatbot-request-osint-declarations-types.MarshalHarvestRowsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: rag_ingest
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Relay the marshalled batch to a declared RAG unit's ingest surface.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects:
+      - {kind: external_api, state: records_added, target: rag_server.ingest}
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: The records are added by the callee, which owns its collection; this relay cannot delete what it did not write.
+    config:
+      rest_ref: rag
+      operation: ingest
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RowsIngested, message: builtin.Message<chatbot-request-osint-declarations-types.RagIngestOutput>}
+        - {signal: IngestFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_harvest_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the harvest outcome as the HTTP reply.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: HarvestResponseComposed
+      inputs:
+        rows: $from(marshal_harvest_rows).body.rows
+        failed: $from(partition_harvest_embeds).body.unmatched_count
+        # The proposed (or fallback) queries the fan ran (GH-612).
+        query: $from(search_queries).body.queries
+      template: '{"harvested": {{ json rows }}, "failed_embeds": {{ json failed }}, "queries": {{ json query }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: HarvestResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_harvest_question
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Declare the harvest query for the derivation and the search to read.
+    problem: See the file header (GH-459).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: QuestionDeclared
+      inputs:
+        question: $from(seed).body.message
+      template: '{"question": {{ json question }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QuestionDeclared, message: builtin.Message<chatbot-request-osint-declarations-types.DeclareHarvestQuestionOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: purge_rag_unit
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Relay the reset purge to a declared RAG unit's purge surface.
+    problem: See the file header (GH-648).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects:
+      - {kind: external_api, state: records_deleted, target: rag_server.purge}
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: The purge deletes records at the callee; nothing here can restore them.
+    config:
+      rest_ref: rag
+      operation: purge_harvest
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: UnitPurged, message: builtin.Message<chatbot-request-osint-declarations-types.PurgeRagUnitOutput>}
+        - {signal: UnitPurgeFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_purge_relay_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the purge relay outcome as the HTTP reply.
+    problem: See the file header (GH-648).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: PurgeRelayResponseComposed
+      template: '{"purged": true}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: PurgeRelayResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

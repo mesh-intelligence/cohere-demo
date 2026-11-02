@@ -1,0 +1,81 @@
+direction: right
+
+vars: {
+  d2-config: {
+    theme-id: 0
+    pad: 6
+  }
+}
+
+classes: {
+  step: {
+    style: {
+      border-radius: 8
+      fill: "#f6f8fb"
+      stroke: "#7a8699"
+      font-size: 19
+    }
+  }
+}
+
+(* -> *)[*].style.stroke: "#7a8699"
+focus: "" {
+  style: {
+    stroke: "#3d70b8"
+    stroke-dash: 4
+    fill: transparent
+    border-radius: 10
+  }
+  select: Choose which\nsources to search {
+    class: step
+  }
+  search: Search\nthe corpus {
+    class: step
+  }
+  s1: HUMINT {
+    class: step
+      style.font-size: 16
+  }
+  s2: OSINT {
+    class: step
+      style.font-size: 16
+  }
+  s3: SIGINT {
+    class: step
+      style.font-size: 16
+  }
+  rerank: Pick the\nbest sources {
+    class: step
+  }
+  command: Write brief\nwith citations {
+    class: step
+  }
+  check: Check the\ntemplate\n(no model) {
+    class: step
+      style.font-size: 16
+  }
+}
+tasking: Tasking {
+  shape: page
+  style: {fill: "#fbfcfe"; stroke: "#3d70b8"; font-size: 19}
+}
+intsum: Cited\nINTSUM {
+  shape: page
+  style: {fill: "#eef6ef"; stroke: "#2f7d4f"; font-size: 19}
+}
+audit: Audit\ncitations {
+  class: step
+  style.stroke-dash: 4
+}
+tasking -> focus.select
+focus.select -> focus.search
+focus.search -> focus.s1
+focus.search -> focus.s2
+focus.search -> focus.s3
+focus.s1 -> focus.rerank
+focus.s2 -> focus.rerank
+focus.s3 -> focus.rerank
+focus.rerank -> focus.command
+focus.command -> focus.check
+focus.check -> intsum
+intsum -> audit: optional {style.stroke-dash: 4}

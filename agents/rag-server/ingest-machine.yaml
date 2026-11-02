@@ -1,0 +1,66 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chroma-ingest-request
+purpose: |-
+  See GH-459: the scratch harvest/ingest workflow. The retrieval tier owns
+  the write and enforces the clearance floor; the next demo seed drops the
+  collection and everything harvested with it.
+
+  The clearance floor is enforced in this machine's own declared metadata
+  template: every record lands unclassified at rank zero with the weakest
+  Admiralty grading, whatever the request carries. Harvested material is
+  retrievable at every level, marked for what it is, and the next demo seed
+  drops the collection and everything harvested with it.
+initial_state: AwaitingRequest
+budget:
+  command_timeout: 45s
+  max_iterations: 16
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted ingest endpoint with the embedded rows.}
+  - {name: ResolvingCollection, meaning: The corpus collection is being resolved (get or create) for its id.}
+  - {name: MarshallingIds, meaning: The batch's ids column is being rendered.}
+  - {name: MarshallingDocuments, meaning: The batch's texts column is being rendered.}
+  - {name: MarshallingEmbeddings, meaning: The batch's vectors column is being rendered.}
+  - {name: MarshallingMetadatas, meaning: The declared floor metadata is being rendered for every record.}
+  - {name: ComposingPayload, meaning: The columns are being merged and schema-validated.}
+  - {name: AddingRecords, meaning: The batch is being added to the collection.}
+  - {name: ComposingResponse, meaning: The ingested ids are being wrapped for the HTTP reply.}
+  - {name: IngestServed, meaning: Terminal. The receipt is ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. A boundary word failed; nothing partial is reported as ingested., run_status: failed}
+terminal_states:
+  - IngestServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The ingest endpoint starts a request-scoped run.}
+  - {name: CollectionReady, trigger: The collection resolved to an id.}
+  - {name: IngestIdsMarshalled, trigger: The ids column rendered.}
+  - {name: IngestDocumentsMarshalled, trigger: The texts column rendered.}
+  - {name: IngestEmbeddingsMarshalled, trigger: The vectors column rendered.}
+  - {name: IngestMetadatasMarshalled, trigger: The floor metadata rendered.}
+  - {name: AddPayloadComposed, trigger: The merged payload validated.}
+  - {name: ParseFailed, trigger: The merged payload failed validation; the store never sees it.}
+  - {name: RecordsAdded, trigger: The batch landed in the collection.}
+  - {name: IngestResponseComposed, trigger: The receipt was composed.}
+  - {name: CommandError, trigger: A boundary word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: ResolvingCollection, action: rag_resolve_ingest}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  - {state: ResolvingCollection, signal: CollectionReady, next: MarshallingIds, action: marshal_ingest_ids}
+  - {state: ResolvingCollection, signal: CommandError, next: Failed}
+  - {state: MarshallingIds, signal: IngestIdsMarshalled, next: MarshallingDocuments, action: marshal_ingest_documents}
+  - {state: MarshallingIds, signal: CommandError, next: Failed}
+  - {state: MarshallingDocuments, signal: IngestDocumentsMarshalled, next: MarshallingEmbeddings, action: marshal_ingest_embeddings}
+  - {state: MarshallingDocuments, signal: CommandError, next: Failed}
+  - {state: MarshallingEmbeddings, signal: IngestEmbeddingsMarshalled, next: MarshallingMetadatas, action: marshal_ingest_metadatas}
+  - {state: MarshallingEmbeddings, signal: CommandError, next: Failed}
+  - {state: MarshallingMetadatas, signal: IngestMetadatasMarshalled, next: ComposingPayload, action: compose_add_payload}
+  - {state: MarshallingMetadatas, signal: CommandError, next: Failed}
+  - {state: ComposingPayload, signal: AddPayloadComposed, next: AddingRecords, action: rag_add_records}
+  - {state: ComposingPayload, signal: ParseFailed, next: Failed}
+  - {state: ComposingPayload, signal: CommandError, next: Failed}
+  - {state: AddingRecords, signal: RecordsAdded, next: ComposingResponse, action: compose_ingest_response, label: ingest_response}
+  - {state: AddingRecords, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: IngestResponseComposed, next: IngestServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

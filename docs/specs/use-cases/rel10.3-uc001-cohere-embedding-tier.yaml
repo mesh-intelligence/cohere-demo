@@ -1,0 +1,129 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel10.3-uc001-cohere-embedding-tier
+title: Query Embedding Repoints to Cohere Embed While Every Source Survives the Identity Comparison
+
+summary: |
+  An analyst poses a tasking to the running mesh and the query vector is
+  computed by Cohere Embed rather than by the host Ollama endpoint. The single
+  resulting vector remains the fan-out input to every selected rag-server,
+  unchanged, and the composed brief is written by Cohere Command over the chunks
+  that vector retrieved. The model stack the provider declares is complete:
+  embed, then compose, through one client.
+
+  This is the one Cohere addition that is not purely additive at run time, and
+  the release is shaped by that fact. The rag-server reports the embedding-model
+  identity its collection was seeded with, and the chatbot excludes any source
+  whose identity differs from the query vector's (srd002 R3.3). Repointing the
+  query embedding without reseeding therefore does not degrade the turn; it
+  empties it. Every source is excluded, every turn answers from nothing, and the
+  response still returns 200 with fluent prose. We carry the corpus migration as
+  first-class work alongside the declaration change, and the release's central
+  proof is that no source was dropped.
+
+  We prove the embedding path, not retrieval quality. Whether Cohere Embed
+  retrieves better than the Ollama family is a measurement over labeled
+  taskings, which is srd014 and rel13.0. What is checkable here is that the
+  vector is computed at the declared operation, reaches the fan-out in the shape
+  the rag-server accepts, and matches the space the corpus was seeded in.
+
+  The Ollama embedding declaration remains in the profile and remains selectable
+  (srd009 R2.3). Repointing is a configuration choice, not the removal of a
+  path.
+
+actor: Intelligence analyst posing a tasking to the running mesh
+trigger: The analyst submits a tasking to a mesh whose collections have been reseeded with the Cohere embedding family.
+
+flow:
+  - F1: The analyst submits a tasking through the SPA or POST /api/v1/chat, and the request-scoped turn seeds unchanged.
+  - F2: The turn invokes the declared Cohere embeddings operation once, sending the tasking as a single text with the query input type and the credential resolved from the environment by reference.
+  - F3: The turn normalizes the provider's response into the flat vector the rag-server's query contract accepts, because the provider's embedding response and that contract do not share a shape.
+  - F4: The normalized value is validated as a numeric array and placed in command state where the rag operation's input_mapping addresses it, so a malformed vector stops the turn rather than reaching the fan-out.
+  - F5: The turn fans out to the selected rag-server units with that single vector, unchanged from srd002 R1.3.
+  - F6: Each rag-server reports the embedding-model identity its collection was seeded with, and the chatbot compares it against the identity the turn declares for the query vector. On a reseeded mesh every source matches and none is excluded.
+  - F7: The surviving chunks are composed and the tasking is answered on the tier the selector names, with the Cohere Command path unchanged from rel10.0.
+  - F8: When the embeddings operation refuses the call, the mapped failure signal surfaces as a distinguishable outcome rather than as an empty retrieval, because a turn that embedded nothing and a turn that retrieved nothing are indistinguishable at the response.
+
+touchpoints:
+  - id: T1
+    target: srd009-cohere-provider AC1
+    reason: The embeddings operation joins the existing declared client, inheriting its credential reference, egress allowlist, and fixed method and path, so the transport a security reviewer audits does not widen.
+  - id: T2
+    target: srd009-cohere-provider AC2
+    reason: The tasking is embedded once through Cohere Embed and fanned out unchanged, the declared identity matches the seeded collections, and the Ollama embedding path remains declared and selectable.
+  - id: T3
+    target: srd002-chatbot-agent AC1
+    reason: The turn shape the repoint lands in is the unchanged request-scoped machine that embeds once, fans out, and composes; only the word computing the vector changes.
+  - id: T4
+    target: srd001-rag-server-agent AC2
+    reason: The vector-in query contract and the embedding-model metadata the rag-server reports are unmodified; the migration changes what the collections were seeded with, not what the agent promises.
+  - id: T5
+    target: srd009-cohere-provider AC3
+    reason: The composition tier rel10.0 established answers over the chunks this vector retrieved, so the completed stack is proven end to end rather than at the embedding boundary alone.
+
+success_criteria:
+  - id: S1
+    criterion: A tasking returns 200 with a non-empty answer and the turn's span log names the Cohere embeddings operation as the word that computed the query vector. Asserting the answer alone is insufficient, because a turn still answers fluently when the vector came from the Ollama word the profile still declares.
+    traces:
+      - srd009-cohere-provider AC2
+      - srd002-chatbot-agent AC1
+  - id: S2
+    criterion: The value reaching the fan-out is a flat array of numbers, neither nested nor serialized as text. The provider's embedding response and the rag-server's query contract do not share a shape, so the vector arrives correctly formed only through the normalization between them.
+    traces:
+      - srd009-cohere-provider AC2
+  - id: S3
+    criterion: No source is excluded by the srd002 R3.3 embedding-model comparison on a reseeded mesh, and the count of documents retrieved into the answer is non-zero for every rag unit that holds matching material. A turn that answers while every source was excluded is the failure this release exists to prevent, and it is invisible in both the answer text and the composed-source list.
+    traces:
+      - srd009-cohere-provider AC2
+      - srd002-chatbot-agent AC1
+  - id: S4
+    criterion: The provider's embedding response shape and the dimension it returns are established against the real API rather than against a fixture, and the declarations are written to what was observed. A mock returns whatever shape it declares, so a fixture-derived declaration confirms itself.
+    traces:
+      - srd009-cohere-provider AC2
+  - id: S5
+    criterion: The embeddings operation's method, path, authentication, egress allowlist, and model identity are fixed declared configuration reached by environment reference, and no model-authored or request-supplied value reaches any of them. The credential appears in no profile, machine, prompt, log line, or exported span.
+    traces:
+      - srd009-cohere-provider AC1
+  - id: S6
+    criterion: The Ollama embedding declaration remains in the shipped profile and remains selectable after the repoint, so the query embedding path is a configuration choice rather than a replacement.
+    traces:
+      - srd009-cohere-provider AC2
+      - srd009-cohere-provider AC6
+  - id: S7
+    criterion: An embeddings-operation failure surfaces as a distinguishable machine outcome rather than as an empty retrieval, so an operator reading a trace separates a provider refusal from a corpus that returned nothing.
+    traces:
+      - srd009-cohere-provider AC1
+
+failure_scenarios:
+  - id: E1
+    scenario: The provider's embedding response is mapped straight into the rag operation's query_embeddings, since the response field already holds the vector.
+    expected: Rejected; the provider returns its embeddings under a structure the rag-server's flat-vector contract does not accept, and a selector cannot index into it because selector paths walk maps only. The normalization is a word, and the shape it normalizes from is established against the live API before the word is written.
+  - id: E2
+    scenario: The query embedding is repointed without reseeding, on the reasoning that the repoint is a declaration change and reseeding is operational work that can follow.
+    expected: Rejected; the srd002 R3.3 comparison excludes every source whose seeded identity differs from the query vector's, so an unseeded mesh drops every source from every turn while still returning 200 and fluent prose. The migration is not follow-up work; it is the precondition that makes the repoint observable as anything other than a silent emptying.
+  - id: E3
+    scenario: The query and the corpus are embedded with the same input type, since both are text going to the same model.
+    expected: Rejected; the provider's retrieval models distinguish a query from a document, and embedding both alike costs retrieval quality without failing. Nothing errors, no assertion in this release fires, and the loss appears only under a labeled-tasking measurement. The two values are pinned separately and their difference is asserted mechanically, which we record as weaker than a test.
+  - id: E4
+    scenario: The Ollama embedding declaration is deleted once the repoint lands, since nothing dispatches it.
+    expected: Rejected; srd009 R2.3 makes the repoint a configuration choice rather than the removal of a path, and a deployment that cannot fall back to a local embedding has no answer to a provider outage during a demonstration.
+  - id: E5
+    scenario: The shape of the provider's embedding response is established with a scenario mock, since the machine is what the release changes.
+    expected: Rejected; a mock returns whatever shape its fixture declares, so a fixture written from the same reading that produced the declaration confirms the declaration against itself. This is the failure rel10.0 already paid for once, when a reasoning model's content blocks faulted a word every scenario mock had reported healthy. The live tier closes the gap, and it skips rather than fails where no credential is available.
+  - id: E6
+    scenario: The embeddings operation is declared as a second client so its limits can be tuned independently of the chat operation.
+    expected: Rejected; a second client is a second egress surface, a second credential reference, and a second base URL for a reviewer to audit and for a deployment to keep in step. The operation joins the existing client, which keeps the sovereignty configuration point single.
+  - id: E7
+    scenario: The document-side embedding reuses the query-side normalization word, since both call the same provider operation.
+    expected: Rejected unless the ingest path embeds one text per request. The query embeds a single tasking and normalizes a single result; an ingest path that batches receives one result per text, and a word written for the single case either drops the remainder or produces a malformed structure. Which case applies is determined before the word is written, not assumed from the query side.
+
+out_of_scope:
+  - Retrieval quality and answer quality. We assert that the vector is computed at the declared operation and matches the seeded space, not that Cohere Embed retrieves better than the Ollama family.
+  - Measuring recall, citation coverage, and first-draft time over labeled taskings; that is srd014 and rel13.0, and it is where a query-document input-type mismatch would surface.
+  - Structured citation surfacing; that is rel10.1 and srd009 R4.
+  - The rerank pass over the RAG candidates; that is rel10.2 and srd009 R5.
+  - Reducing or configuring the embedding dimension, and any re-indexing strategy short of a full reseed.
+  - Clearance-gated retrieval, the OSINT search branch, and the cascade's later passes.
+
+test_suite_trace: test-rel10.3-cohere-embedding-tier
+status: implemented

@@ -1,0 +1,203 @@
+{{/* Copyright (c) 2026 Mesh Intelligence Inc. */}}
+{{/* SPDX-License-Identifier: MIT-0 */}}
+{{- if .Values.collector.enabled }}
+{{- $fullname := include "chatbot-mesh.fullname" . -}}
+{{- $external := .Values.collector.externalOTLPEndpoint -}}
+{{- $agent := eq .Values.collector.implementation "agent" -}}
+{{- $uiArchive := .Values.collector.uiArchiveConfigMap | default "" -}}
+{{- /* The topology tooltip text for this node (GH-376), on the Deployment and the Service. */ -}}
+{{- $role := dict "mesh.cohere-demo/role" "Receives OTLP traces and metrics from every agent and serves the query surface the topology figure reads." -}}
+{{- if not $agent }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-collector-contrib
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:{{ .Values.collector.otlpGRPCPort }}
+          http:
+            endpoint: 0.0.0.0:{{ .Values.collector.otlpHTTPPort }}
+      {{- if .Values.dolt.enabled }}
+      prometheus/dolt:
+        config:
+          scrape_configs:
+            - job_name: dolt
+              scrape_interval: 5s
+              static_configs:
+                - targets: [{{ printf "%s-dolt:%v" $fullname .Values.dolt.metricsPort | quote }}]
+      {{- end }}
+    processors:
+      batch: {}
+      {{- if $external }}
+      resource/integration:
+        attributes:
+          - {key: test.repository, value: {{ .Values.collector.integrationResource.repository | quote }}, action: upsert}
+          - {key: test.module, value: {{ .Values.collector.integrationResource.module | quote }}, action: upsert}
+          - {key: test.target, value: {{ .Values.collector.integrationResource.target | quote }}, action: upsert}
+          - {key: vcs.ref.head.revision, value: {{ .Values.collector.integrationResource.commit | quote }}, action: upsert}
+          - {key: test.run.id, value: {{ .Values.collector.integrationResource.runID | quote }}, action: upsert}
+      {{- end }}
+    exporters:
+      {{- if $external }}
+      otlp/external:
+        endpoint: {{ $external | quote }}
+        tls:
+          insecure: true
+      {{- end }}
+      debug:
+        verbosity: basic
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [{{ if $external }}resource/integration, {{ end }}batch]
+          exporters:
+            {{- if $external }}
+            - otlp/external
+            {{- else }}
+            - debug
+            {{- end }}
+        metrics:
+          receivers: [otlp{{ if .Values.dolt.enabled }}, prometheus/dolt{{ end }}]
+          processors: [{{ if $external }}resource/integration, {{ end }}batch]
+          exporters:
+            {{- if $external }}
+            - otlp/external
+            {{- else }}
+            - debug
+            {{- end }}
+{{- end }}
+{{- if and $agent (not $uiArchive) }}
+---
+# The collector's built trace UI (srd020 R7), carried by a collector-only
+# ConfigMap so it never enters the shared profiles ConfigMap that every pod
+# mounts. The collector container mounts it at /collector-ui and serves ui/dist
+# from there.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-collector-ui
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+data:
+  {{- range $path, $_ := .Files.Glob "collector-ui/**" }}
+  {{ $path | trimPrefix "collector-ui/" | replace "/" "__" }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}
+---
+{{- if $agent }}
+{{/*
+The agent collector workload and its Service come from the shared agent-services
+library (GH-2045). This chart supplies the mesh-wide profiles ConfigMap volume,
+the trace UI it serves from /collector-ui, the relay-mode spool paths on its work
+volume, and the monitor port on its Service for the observer's fan-in (GH-431);
+the contrib gateway below is a different product and stays here.
+*/}}
+{{- $uiVolumes := list -}}
+{{- $uiInit := list -}}
+{{- $uiAnnotations := dict -}}
+{{- if $uiArchive }}
+{{- $uiVolumes = list (dict "name" "collector-ui" "emptyDir" dict) (dict "name" "collector-ui-source" "configMap" (dict "name" $uiArchive "items" (list (dict "key" "assets.tgz" "path" "assets.tgz")))) -}}
+{{- $uiInit = list (dict
+      "name" "stage-collector-ui"
+      "image" (include "agent-services.image" .)
+      "imagePullPolicy" .Values.image.pullPolicy
+      "command" (list "sh" "-c" (printf "echo '%s  /collector-ui-src/assets.tgz' | sha256sum -c - && tar -xzf /collector-ui-src/assets.tgz -C /collector-ui && cd /collector-ui && sha256sum -c .inventory.sha256 && rm .inventory.sha256" .Values.collector.uiArchiveChecksum))
+      "volumeMounts" (list (dict "name" "collector-ui-source" "mountPath" "/collector-ui-src" "readOnly" true) (dict "name" "collector-ui" "mountPath" "/collector-ui"))) -}}
+{{- $uiAnnotations = dict "checksum/collector-ui-archive" (required "collector.uiArchiveChecksum is required with collector.uiArchiveConfigMap" .Values.collector.uiArchiveChecksum) -}}
+{{- else }}
+{{- $uiItems := list -}}
+{{- range $path, $_ := .Files.Glob "collector-ui/**" }}
+{{- $uiItems = append $uiItems (dict "key" ($path | trimPrefix "collector-ui/" | replace "/" "__") "path" ($path | trimPrefix "collector-ui/")) -}}
+{{- end }}
+{{- $uiVolumes = list (dict "name" "collector-ui" "projected" (dict "defaultMode" 0444 "sources" (list (dict "configMap" (dict "name" (printf "%s-collector-ui" $fullname) "items" $uiItems))))) -}}
+{{- end }}
+{{- $work := .Values.profiles.workMountPath -}}
+{{- include "agent-services.collector" (dict
+      "root" .
+      "image" (include "agent-services.image" .)
+      "imagePullPolicy" .Values.image.pullPolicy
+      "profilePath" (printf "%s/agents/collector/profile.yaml" .Values.profiles.mountPath)
+      "workingDir" "/collector-ui"
+      "dataDir" $work
+      "spoolPath" (printf "%s/traces/collector.ndjson" $work)
+      "serviceName" "collector"
+      "profilesVolume" (include "chatbot-mesh.profilesVolume" (dict "root" . "groups" (list "collector" "units")) | fromYamlArray)
+      "podLabels" (dict "monitorPort" (toString .Values.collector.monitorPort))
+      "deploymentAnnotations" $role
+      "serviceAnnotations" $role
+      "podAnnotations" $uiAnnotations
+      "initContainers" $uiInit
+      "extraVolumes" $uiVolumes
+      "extraVolumeMounts" (list (dict "name" "collector-ui" "mountPath" "/collector-ui" "readOnly" true))
+      "extraEnv" (list (dict "name" "COLLECTOR_METRICS_SPOOL_PATH" "value" (printf "%s/metrics/collector.ndjson" $work)))
+      "extraServicePorts" (list (dict "name" "monitor" "port" .Values.collector.monitorPort "targetPort" "monitor" "protocol" "TCP"))) }}
+{{- else }}
+{{/*
+The OpenTelemetry contrib gateway: a different product from the agent collector
+above, selected by collector.implementation. It scrapes Dolt's Prometheus
+surface and relays to an external endpoint, so it stays in this chart.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    {{- toYaml $role | nindent 4 }}
+  name: {{ $fullname }}-collector
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "chatbot-mesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: collector
+  template:
+    metadata:
+      labels:
+        {{- include "chatbot-mesh.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: collector
+    spec:
+      containers:
+        - name: collector
+          image: {{ include "agent-services.pinnedImage" .Values.collector.image | quote }}
+          imagePullPolicy: {{ .Values.collector.image.pullPolicy }}
+          args: ["--config=/etc/collector/config.yaml"]
+          ports:
+            - {name: otlp-grpc, containerPort: {{ .Values.collector.otlpGRPCPort }}}
+            - {name: otlp-http, containerPort: {{ .Values.collector.otlpHTTPPort }}}
+          volumeMounts:
+            - {name: config, mountPath: /etc/collector, readOnly: true}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $fullname }}-collector-contrib
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    {{- toYaml $role | nindent 4 }}
+  name: {{ $fullname }}-collector
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  selector:
+    {{- include "chatbot-mesh.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+  ports:
+    - {name: otlp-grpc, port: {{ .Values.collector.otlpGRPCPort }}, targetPort: otlp-grpc}
+    - {name: otlp-http, port: {{ .Values.collector.otlpHTTPPort }}, targetPort: otlp-http}
+{{- end }}
+{{- end }}

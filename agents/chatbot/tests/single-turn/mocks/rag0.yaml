@@ -1,0 +1,16 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the first declared RAG server: the chatbot's generic rag_query maps
+# $.ids/$.documents/$.distances/$.embedding_model from a 200 (srd002).
+routes:
+  - method: POST
+    path: /api/v1/rag/query
+    responses:
+      - status: 200
+        body:
+          ids: [["rag0-doc-1"]]
+          documents: [["rag0 chunk about the rig"]]
+          distances: [[0.1]]
+          embedding_model: "embed-v4.0"
+          # The level the rag-server reports the filter ran at (srd010 R2.5).
+          clearance_enforced_at: "unclassified"

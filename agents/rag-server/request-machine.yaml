@@ -1,0 +1,76 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chroma-rag-request
+purpose: |-
+  One request-scoped run of the RAG query. The machine_request query endpoint
+  seeds this machine with the request body (query_embeddings, n_results, and the
+  requester's maximum clearance). The collection is create-or-got (carrying the
+  query vector forward), the requested level is resolved to its declared
+  at-or-below window and composed into a Chroma metadata filter, and the
+  collection is then queried with the caller-supplied vector under that filter.
+  The terminal QueryResponded signal maps the retrieved chunks to the HTTP
+  response. No embedding and no answering happen here; the caller supplies the
+  vector and composes any answer.
+
+  The clearance words sit between the resolve and the query on purpose. The
+  filter has to reach Chroma with the query, because a document the store never
+  searched was never a candidate, while a document removed from a result set was
+  scored, ranked, and held (srd010 R2.3). A level the declared set does not
+  recognize reaches ClearanceRefused and no query is issued at all (R4.2).
+initial_state: AwaitingRequest
+budget:
+  # The outer envelope: agent-core requires the query endpoint's 30s request bound and the chroma client's 10s limits to sit strictly below it.
+  command_timeout: 1m
+  max_iterations: 12
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted query endpoint with the request body.}
+  - {name: ResolvingCollection, meaning: Create-or-get the collection and carry the query vector and requested level forward.}
+  - {name: DeclaringClearanceWindows, meaning: The declared ordered clearance set is being rendered as one at-or-below window per level.}
+  - {name: DeclaringRequestedClearance, meaning: The requested level is being put into command state as a candidate for the window lookup.}
+  - {name: ResolvingClearance, meaning: The requested level is being matched against the declared set.}
+  - {name: RenderingClearanceWindow, meaning: The one resolved entry is being rendered as an object the filter and the response address by field.}
+  - {name: ComposingClearanceFilter, meaning: The resolved window is being composed into the Chroma metadata where-filter.}
+  - {name: Querying, meaning: Query the resolved collection with the caller-supplied vector under the clearance filter.}
+  - {name: QueryResponded, meaning: Terminal. The retrieved chunks are ready for the HTTP response., run_status: succeeded}
+  - {name: QueryRejected, meaning: Terminal. Chroma rejected the query vector (for example an embedding-space or dimension mismatch)., run_status: failed}
+  - {name: ClearanceRefused, meaning: "Terminal. The requested level is absent or outside the declared set, so no query was issued.", run_status: failed}
+  - {name: Failed, meaning: Terminal. A Chroma boundary word failed., run_status: failed}
+terminal_states:
+  - QueryResponded
+  - QueryRejected
+  - ClearanceRefused
+  - Failed
+signals:
+  - {name: Seed, trigger: The query endpoint starts a request-scoped run.}
+  - {name: CollectionReady, trigger: The collection was create-or-got and the vector carried forward.}
+  - {name: ClearanceWindowsDeclared, trigger: The declared ordered clearance set was rendered as at-or-below windows.}
+  - {name: RequestedClearanceDeclared, trigger: The requested level was put into command state as a candidate.}
+  - {name: ClearanceResolved, trigger: The requested level matched a declared window.}
+  - {name: ClearanceRefused, trigger: The requested level is absent or outside the declared ordered set.}
+  - {name: ClearanceWindowRendered, trigger: The resolved entry was rendered as an addressable object.}
+  - {name: ClearanceFilterComposed, trigger: The resolved window was composed into the Chroma where-filter.}
+  - {name: QueryResponded, trigger: Chroma returned the retrieved chunks.}
+  - {name: QueryRejected, trigger: Chroma rejected the query vector with a client error.}
+  - {name: CommandError, trigger: A Chroma boundary word failed.}
+transitions:
+  - {state: AwaitingRequest,             signal: Seed,                       next: ResolvingCollection,          action: rag_resolve}
+  - {state: AwaitingRequest,             signal: CommandError,               next: Failed}
+  - {state: ResolvingCollection,         signal: CollectionReady,            next: DeclaringClearanceWindows,    action: declare_clearance_windows}
+  - {state: ResolvingCollection,         signal: CommandError,               next: Failed}
+  - {state: DeclaringClearanceWindows,   signal: ClearanceWindowsDeclared,   next: DeclaringRequestedClearance,  action: declare_requested_clearance}
+  - {state: DeclaringClearanceWindows,   signal: CommandError,               next: Failed}
+  - {state: DeclaringRequestedClearance, signal: RequestedClearanceDeclared, next: ResolvingClearance,           action: resolve_clearance_window}
+  - {state: DeclaringRequestedClearance, signal: CommandError,               next: Failed}
+  # The refusal is a terminal of its own rather than a fall-through to Failed.
+  - {state: ResolvingClearance,          signal: ClearanceResolved,          next: RenderingClearanceWindow,     action: render_clearance_window}
+  - {state: ResolvingClearance,          signal: ClearanceRefused,           next: ClearanceRefused}
+  - {state: ResolvingClearance,          signal: CommandError,               next: Failed}
+  - {state: RenderingClearanceWindow,    signal: ClearanceWindowRendered,    next: ComposingClearanceFilter,     action: compose_clearance_filter}
+  - {state: RenderingClearanceWindow,    signal: CommandError,               next: Failed}
+  - {state: ComposingClearanceFilter,    signal: ClearanceFilterComposed,    next: Querying,                     action: rag_query}
+  - {state: ComposingClearanceFilter,    signal: CommandError,               next: Failed}
+  - {state: Querying,                    signal: QueryResponded,             next: QueryResponded}
+  - {state: Querying,                    signal: QueryRejected,              next: QueryRejected}
+  - {state: Querying,                    signal: CommandError,               next: Failed}

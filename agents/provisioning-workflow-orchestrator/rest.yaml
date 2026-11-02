@@ -1,0 +1,637 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+rest:
+  version: v1
+  auth:
+    none:
+      type: none
+  limits:
+    local_creator_provisioning:
+      # The rollout leg waits on helm upgrade --atomic --wait against the whole
+      # mesh, which outlasts the 130s every hop on this path used to allow: the
+      # applier's helm_upgrade was cancelled mid-flight at ~127s and the intent
+      # answered machine_timeout (GH-196). Every hop that waits on the apply
+      # carries the same budget, because the shortest one decides.
+      #
+      # Separate from local_creator_client because limits are per client: the
+      # rollout poll and the state read share that one, and their machines carry
+      # a short command budget that a ten-minute operation cannot sit inside
+      # (TestChatbotMeshProfileTimeoutEnvelopes).
+      timeout: 600s
+      read_timeout: 600s
+      max_request_bytes: 1048576
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts:
+          - ${CREATOR_HOST:-127.0.0.1}
+        ports: [18110]
+    local_creator_client:
+      timeout: 130s
+      read_timeout: 130s
+      max_request_bytes: 1048576
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        # The creator host is the egress allowlist entry; a values-driven deploy sets
+        # CREATOR_HOST to the creator Service DNS name, defaulting to loopback locally.
+        hosts:
+          - ${CREATOR_HOST:-127.0.0.1}
+        ports: [18110]
+    local_provisioning_workflow_orchestrator_intent:
+      # The rollout leg waits on helm upgrade --atomic --wait against the whole
+      # mesh, which outlasts the 130s every hop on this path used to allow: the
+      # applier's helm_upgrade was cancelled mid-flight at ~127s and the intent
+      # answered machine_timeout (GH-196). Every hop that waits on the apply
+      # carries the same budget, because the shortest one decides.
+      timeout: 600s
+      read_timeout: 600s
+      max_request_bytes: 1048576
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18100]
+        allow_public_listener: true
+    local_provisioning_workflow_orchestrator_control:
+      timeout: 30s
+      read_timeout: 5s
+      max_request_bytes: 16384
+      max_response_bytes: 65536
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18101]
+        allow_public_listener: true
+    local_provisioning_workflow_orchestrator_monitor:
+      timeout: 5s
+      read_timeout: 5s
+      max_request_bytes: 4096
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18102]
+        allow_public_listener: true
+
+  clients:
+    # The intent's own legs: an ingest child run and the rollout it triggers,
+    # both of which wait on real work rather than on a request round trip.
+    creator_provisioning:
+      base_url: ${CREATOR_URL:-http://127.0.0.1:18110}
+      auth_ref: none
+      limits_ref: local_creator_provisioning
+      operations:
+        creator_ingest:
+          # Delegate a corpus-ingest run for the requested directory to the creator
+          # (srd004 R2.1). The creator runs the child, reads the collection back, and
+          # returns the count; a run that wrote nothing is a 422 the creator returns,
+          # mapped to Rejected so the provisioning-workflow-orchestrator does not reconfigure over an empty
+          # source.
+          #
+          # /api/v1/ingest, not /api/v1/instance: the instance endpoint applies a
+          # values document, and every operation posted there took that leg whatever
+          # the operation named, so this delegation ran no child at all and the
+          # count it declares it reads back was never populated (GH-755, GH-762).
+          method: POST
+          path: /api/v1/ingest
+          params:
+            body_schema:
+              type: object
+              # The three the creator's /api/v1/ingest requires, stated as this
+              # client's own requirement so a request missing one is refused
+              # here rather than at the far side. embedding_model was omitted
+              # while the body below sends it unconditionally, so the schema
+              # understated the callee and only this agent's own intake kept an
+              # intent without a family from reaching the creator as a 400.
+              required: [directory, collection, embedding_model]
+              properties:
+                rag_name: {type: string}
+                directory: {type: string}
+                collection: {type: string}
+                embedding_model: {type: string}
+                values: {type: string}
+            body_source: previous_result
+            input_mapping:
+              rag_name: $.rag_name
+              directory: $.directory
+              collection: $.collection
+              embedding_model: $.embedding_model
+              values: $.values
+            # rag_name is accepted on the intent and sent no further: which unit
+            # the ingest targets is deployment configuration on the creator, not
+            # a field of the request. It was carried too, and nothing ever read
+            # $.carried.rag_name.
+            carry_forward: [collection, embedding_model, values]
+          body:
+            directory: "{{ params.directory }}"
+            collection: "{{ params.collection }}"
+            # The family the intent expects. It reaches the creator's schema and,
+            # since GH-205, a word that reads it: the creator compares it against
+            # the family it ingests at and answers 422 on a mismatch. Until then
+            # it stopped at the creator's machine params and nothing that embeds
+            # ever saw it, so an intent expecting the other family got a 200 and
+            # documents srd002 R3.3 excludes from every turn.
+            embedding_model: "{{ params.embedding_model }}"
+          success: {status: [200], signal: IngestReported}
+          failures:
+            # 422 covers both of the creator's rejections -- a run that wrote no
+            # documents, and an expected embedding family this deployment does
+            # not ingest at. Both are the caller's intent falling short rather
+            # than a boundary failing, and both reach Rejected here; the creator's
+            # distinct error codes are what separate them in a trace.
+            - {status: [422], signal: Rejected}
+            # 400 is the creator refusing this request against its own intake
+            # schema -- our body, not the operator's intent -- so it takes
+            # CommandError rather than Rejected: answering 422 would tell the
+            # panel its intent fell short when the fault is ours. Declared for
+            # the reason the creator declares the applier's 500/502: an unmapped
+            # status fails the dispatch with "status 400 is not mapped" and
+            # buries the creator's own reason under a message about the mapping.
+            - {status: [400], signal: CommandError}
+          response:
+            # collection: the creator ingests into the collection this intent
+            # names, handing it to the child as environment (GH-203), and echoes
+            # the name Chroma resolved rather than the one it was asked for.
+            # Carry that back so the caller reads where its documents actually
+            # went rather than assuming its request was honoured verbatim.
+            #
+            # The creator returns the post-run count selected from the terminal
+            # predicate's raw left operand (agent-core srd041 R4.4). Carry that
+            # judged count through this boundary while the status still controls
+            # the branch: 200 advances to rollout and 422 lands in Rejected.
+            output:
+              count: $.count
+              collection: $.collection
+          side_effects:
+            - kind: external_api
+              target: creator.instance
+              state: instance_created
+          reversibility:
+            classification: irreversible
+            undo: irreversible
+            requires_confirmation: true
+        creator_rollout:
+          # Delegate the decided rollout to the creator (srd004 R3.2): the provisioning-workflow-orchestrator
+          # forwards the caller's full desired mesh state as the values-plane document
+          # (srd004 R3.1; srd006 R1.4 content), threaded here from the carried intent.
+          # A values-plane list is replaced wholesale on apply, so the intent carries
+          # the complete desired values, not a delta; the creator applies it through
+          # the applier and returns the reported health.
+          #
+          # This is the ingest leg's rollout: it reads $.carried.values, which
+          # creator_ingest's carry_forward populates. The values-only leg cannot use
+          # it -- with no ingest step ahead of it there is no carried intent -- so it
+          # has its own operation below (GH-755).
+          method: POST
+          path: /api/v1/instance
+          params:
+            body_schema:
+              type: object
+              required: [values]
+              properties:
+                values: {type: string}
+                count: {type: string}
+                collection: {type: string}
+            body_source: previous_result
+            input_mapping:
+              values: $.carried.values
+              # The ingest leg's judged count and the collection the creator wrote,
+              # read off creator_ingest's mapped output. They are carried rather
+              # than sent: the body below does not include them, and the creator
+              # has no use for what it just told us.
+              count: $.mapped.count
+              collection: $.mapped.collection
+            # Carrying them is what puts them in this word's own output, and this
+            # word is the terminal one on the ingest leg. A terminal response body
+            # resolves only $. selectors against the terminal word, so without the
+            # carry the count the creator judged could not reach the caller at all
+            # -- the intent answered with the rollout's health alone (GH-198).
+            carry_forward: [count, collection]
+          body:
+            operation: restart
+            role: chatbot
+            schema_version: "1"
+            content: "{{ params.values }}"
+          success: {status: [200], signal: Reconfigured}
+          failures:
+            # The creator answers 422 when the applier rejected the values document
+            # against the chart's values.schema.json. Mapping it to Rejected keeps a
+            # decided-values fault distinct from a creator that could not be
+            # reached, which is the separation the ingest leg above already makes.
+            - {status: [422], signal: Rejected}
+          response:
+            output:
+              health: $.health
+          side_effects:
+            - kind: external_api
+              target: creator.instance
+              state: rollout_executed
+          reversibility:
+            classification: irreversible
+            undo: irreversible
+            requires_confirmation: true
+        creator_rollout_values:
+          # The panel's values-only apply (srd004 R1.6): the same delegation as
+          # creator_rollout, reading the desired document straight off the seed
+          # rather than from a carried intent. The apply endpoint seeds SeedValues
+          # and never ingests, so nothing populated $.carried and creator_rollout's
+          # selector resolved to nothing -- every panel apply failed in request
+          # rendering with `body field "values" is required` (GH-755).
+          #
+          # Two operations rather than one selector that tries both, because the
+          # two legs genuinely differ in where the document comes from, and which
+          # leg a run took stays readable from the machine (srd004 R1.6, GH-680)
+          # rather than hidden inside a word.
+          method: POST
+          path: /api/v1/instance
+          params:
+            body_schema:
+              type: object
+              required: [values]
+              properties:
+                values: {type: string}
+            body_source: previous_result
+            input_mapping:
+              values: $.values
+          body:
+            operation: restart
+            role: chatbot
+            schema_version: "1"
+            content: "{{ params.values }}"
+          success: {status: [200], signal: Reconfigured}
+          failures:
+            - {status: [422], signal: Rejected}
+          response:
+            output:
+              health: $.health
+          side_effects:
+            - kind: external_api
+              target: creator.instance
+              state: rollout_executed
+          reversibility:
+            classification: irreversible
+            undo: irreversible
+            requires_confirmation: true
+    # The panel's reads. A poll that could hang for ten minutes is not a poll.
+    creator:
+      base_url: ${CREATOR_URL:-http://127.0.0.1:18110}
+      auth_ref: none
+      limits_ref: local_creator_client
+      operations:
+        creator_rollout_status:
+          # Read the rollout status the creator reads from the deployment API, so
+          # the provisioning-workflow-orchestrator can aggregate progress for the panel (srd004 R1.3). A
+          # read: it drives no instance operation and decides nothing. GH-684.
+          method: GET
+          path: /api/v1/rollout
+          params:
+            body_source: none
+          success: {status: [200], signal: StatusRead}
+          response:
+            output:
+              phase: $.phase
+              ready: $.ready
+              desired: $.desired
+              revision: $.revision
+          side_effects:
+            - kind: external_api
+              target: creator.rollout
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        creator_state:
+          # Read the deployed mesh view the creator reads from the deployment API,
+          # so the provisioning-workflow-orchestrator can serve the panel's initial load (srd006 R1.5). A
+          # read: it drives no instance operation and decides nothing. Flat
+          # fields, matching the applier's state_response contract -- they
+          # travel through unchanged rather than being regrouped here (GH-753).
+          method: GET
+          path: /api/v1/state
+          params:
+            body_source: none
+          success: {status: [200], signal: StateRead}
+          response:
+            output:
+              rags: $.rags
+              llmInCluster: $.llmInCluster
+              llmExternalURL: $.llmExternalURL
+              llmChatModel: $.llmChatModel
+              llmEmbedModel: $.llmEmbedModel
+              llmChatModels: $.llmChatModels
+              llmTierModel: $.llmTierModel
+              llmTopology: $.llmTopology
+              paramsNResults: $.paramsNResults
+              paramsChunkCap: $.paramsChunkCap
+              paramsTierDefault: $.paramsTierDefault
+          side_effects:
+            - kind: external_api
+              target: creator.state
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+  servers:
+    provisioning_workflow_orchestrator_intent:
+      # The intent endpoint is served on its own service and port, reached apart from
+      # the chat path (srd004 R4.2); the mesh's authentication boundary is
+      # deployment-realized (a separate ingress route, and the creator alone holds the
+      # deployment-API credential, srd005 R5.1). No runtime input supplies transport
+      # authority; the endpoint accepts a declared intent only (srd004 R1.2).
+      address: ${PROVISIONING_WORKFLOW_ORCHESTRATOR_BIND_HOST:-127.0.0.1}:18100
+      limits_ref: local_provisioning_workflow_orchestrator_intent
+      endpoints:
+        provision:
+          method: POST
+          path: /api/v1/provision
+          binding: machine_request
+          request:
+            # The intent carries the full desired mesh state as values: the operator's
+            # panel serializes the complete desired values-plane document (the whole
+            # ragUnits list, params, and LLM config) that the provisioning-workflow-orchestrator forwards to
+            # the creator and applier (srd004 R3.1). rag_name, directory, and
+            # collection name the new source to ingest before the rollout.
+            #
+            # embedding_model is required because the creator compares it against
+            # the family it ingests at and refuses a mismatch (GH-205). An intent
+            # omitting it could not be compared -- a predicate operand that does
+            # not resolve is a CommandError, not a false comparison -- so the
+            # field is stated here rather than defaulted somewhere the caller
+            # cannot see.
+            body_schema:
+              type: object
+              required: [values, collection, directory, embedding_model]
+              properties:
+                values: {type: string}
+                rag_name: {type: string}
+                collection: {type: string}
+                embedding_model: {type: string}
+                directory: {type: string}
+          machine_request:
+            profile: profile.yaml
+            machine: request-machine.yaml
+            # The run this bounds waits on the creator's ingest child and then on
+            # the rollout that child triggers. At 130s it cancelled the whole
+            # chain mid-upgrade -- the creator's apply_instance and the applier's
+            # helm_upgrade both died on a context this endpoint closed (GH-196).
+            # The run this bounds waits on the creator's ingest child and then on
+            # the rollout that child triggers. At 130s it cancelled the whole
+            # chain mid-upgrade -- the creator's apply_instance and the applier's
+            # helm_upgrade both died on a context this endpoint closed (GH-196).
+            timeout: 600s
+            request:
+              body:
+                values: $.values
+                rag_name: $.rag_name
+                collection: $.collection
+                embedding_model: $.embedding_model
+                directory: $.directory
+            response:
+              terminal_signals:
+                Reconfigured:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    status: reconfigured
+                    health: $.mapped.health
+                    # The ingest leg's judged count and the collection the creator
+                    # wrote, carried this far by creator_rollout so they sit in the
+                    # terminal word's own output and resolve with a plain $.
+                    # selector. The values-only leg runs no ingest, so both are
+                    # absent there rather than wrong.
+                    count: $.carried.count
+                    collection: $.carried.collection
+                Rejected:
+                  status: 422
+                  content_type: application/json
+                  body:
+                    # Rejected is reached from two states by two words: the
+                    # ingest leg's creator_ingest (a run that wrote nothing, or
+                    # an embedding family this deployment does not ingest at)
+                    # and the rollout leg's creator_rollout (the applier
+                    # refusing the values document). A fixed ingest_rejected
+                    # named one of the three and misreported the other two.
+                    #
+                    # The creator already separates them with distinct codes --
+                    # ingest_shortfall, embedding_family_mismatch,
+                    # values_rejected -- and the terminal word here is the
+                    # client operation that carried the 422, so its response
+                    # payload is its own output: $.body reads the creator's
+                    # body, not this agent's.
+                    error: $.body.error
+                    detail: the creator rejected the intent; error names which of its checks refused it
+                CommandError:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    stage: $.failure_stage
+                    message: $.message
+                    operation: $.operation
+        apply:
+          # The provisioning panel's apply. It is the operator's desired-state
+          # decision (srd004 R3.1) and enters the mesh here, the panel's only
+          # provisioning intake (srd004 R1.5, srd003 R4.1). The panel does not reach
+          # the deployment API; the provisioning-workflow-orchestrator orchestrates and the creator alone
+          # calls the apply surface (srd003 R4.4, srd006 R4.1). GH-502.
+          method: POST
+          path: /provisioning/api/apply
+          binding: machine_request
+          request:
+            # A values-only edit. The panel serializes the complete desired
+            # values-plane document and names no new source, so collection and
+            # directory are absent here and required on /api/v1/provision, which
+            # ingests before rolling out (srd004 R1.6).
+            body_schema:
+              type: object
+              required: [values]
+              properties:
+                values: {type: string}
+          machine_request:
+            profile: profile.yaml
+            machine: request-machine.yaml
+            # The run this bounds waits on the creator's ingest child and then on
+            # the rollout that child triggers. At 130s it cancelled the whole
+            # chain mid-upgrade -- the creator's apply_instance and the applier's
+            # helm_upgrade both died on a context this endpoint closed (GH-196).
+            timeout: 600s
+            # Seeding on SeedValues skips the ingest leg. The same machine serves
+            # both intents; the endpoint picks which leg by the seed it sends, so
+            # the branch stays visible in the machine rather than inside a word.
+            initial_signal: SeedValues
+            request:
+              body:
+                values: $.values
+            response:
+              # Keyed by terminal state, where the provision endpoint above keys
+              # by signal. Both separate this machine's three outcomes, so the
+              # difference is which fact is named rather than which one works: a
+              # state is the more specific one, since many signals may reach it,
+              # and agent-core consults the state map first. The older note here
+              # said signal keying could not separate a rejected reconfiguration
+              # from a failed one, which the provision endpoint disproves by
+              # doing exactly that (agent-core srd030 R4.6, GH-615).
+              terminal_states:
+                Reconfigured:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    status: reconfigured
+                    health: $.mapped.health
+                Rejected:
+                  status: 422
+                  content_type: application/json
+                  body:
+                    error: reconfiguration_rejected
+                    detail: the creator rejected the desired values document
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    stage: $.failure_stage
+                    message: $.message
+                    operation: $.operation
+        rollout:
+          # The panel's rollout poll (srd004 R1.3). It reads progress here rather
+          # than from the deployment API, which no browser may reach (srd003 R4.4).
+          # Its own machine, because a poll is a read and must not enter the ingest
+          # or rollout legs of the provisioning machine. GH-684.
+          method: GET
+          path: /provisioning/api/rollout
+          binding: machine_request
+          machine_request:
+            profile: profile.yaml
+            machine: rollout-machine.yaml
+            # Contains the rollout-machine budget below and the creator rollout
+            # hop it calls at 35s, which itself contains the applier's 30s read.
+            timeout: 40s
+            request:
+              body: {}
+            response:
+              terminal_states:
+                StatusRead:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    schema_version: "1"
+                    phase: $.mapped.phase
+                    # The counts the applier reads off the Deployment (srd006
+                    # R3.3), carried through the creator so the panel renders
+                    # every field its RolloutStatus declares. GH-686.
+                    ready: $.mapped.ready
+                    desired: $.mapped.desired
+                    revision: $.mapped.revision
+                # A poll that cannot read the status is an error, not a successful
+                # unknown phase: the panel would otherwise show "progressing"
+                # indefinitely while the read was broken.
+                Failed:
+                  status: 502
+                  content_type: application/json
+                  body:
+                    error: rollout_read_failed
+                    stage: $.failure_stage
+                    message: $.message
+        state:
+          # The panel's initial mesh-view load (srd006 R1.5). It reads here
+          # rather than from the deployment API, which no browser may reach
+          # (srd003 R4.4). Its own machine, because a read must not enter the
+          # ingest or rollout legs of the provisioning machine -- the same
+          # reasoning as the rollout poll (GH-684).
+          method: GET
+          path: /provisioning/api/state
+          binding: machine_request
+          machine_request:
+            profile: profile.yaml
+            machine: state-machine.yaml
+            # Contains the state-machine budget below and the creator state hop
+            # it calls at 20s, so a slow read is reported rather than cut off.
+            timeout: 25s
+            request:
+              body: {}
+            response:
+              # Flat fields, matching the applier's state_response contract
+              # (srd006 deployment_api_contract): machine_request response bodies
+              # map one selector per named field, so a nested llm/params object
+              # cannot be assembled here from several source paths in one step.
+              # provisioningApi.ts reassembles the nested MeshView client-side
+              # from these flat fields (GH-753).
+              terminal_states:
+                StateRead:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    schema_version: "1"
+                    rags: $.mapped.rags
+                    llmInCluster: $.mapped.llmInCluster
+                    llmExternalURL: $.mapped.llmExternalURL
+                    llmChatModel: $.mapped.llmChatModel
+                    llmEmbedModel: $.mapped.llmEmbedModel
+                    llmChatModels: $.mapped.llmChatModels
+                    llmTierModel: $.mapped.llmTierModel
+                    llmTopology: $.mapped.llmTopology
+                    paramsNResults: $.mapped.paramsNResults
+                    paramsChunkCap: $.mapped.paramsChunkCap
+                    paramsTierDefault: $.mapped.paramsTierDefault
+                # A read that cannot reach the mesh view is an error, not a
+                # successful mapped-empty view: the panel would otherwise render
+                # a topology-less mesh as if it were real.
+                Failed:
+                  status: 502
+                  content_type: application/json
+                  body:
+                    error: state_read_failed
+                    stage: $.failure_stage
+                    message: $.message
+
+    provisioning_workflow_orchestrator_control:
+      address: ${PROVISIONING_WORKFLOW_ORCHESTRATOR_BIND_HOST:-127.0.0.1}:18101
+      limits_ref: local_provisioning_workflow_orchestrator_control
+      queue:
+        name: provisioning_workflow_orchestrator_control
+        capacity: 8
+        timeout: 30s
+      shutdown:
+        timeout: 5s
+        drain_policy: drain_then_stop
+      endpoints:
+        health:
+          method: GET
+          path: /api/lifecycle/health
+          binding: health
+
+    monitor:
+      address: ${PROVISIONING_WORKFLOW_ORCHESTRATOR_BIND_HOST:-127.0.0.1}:18102
+      limits_ref: local_provisioning_workflow_orchestrator_monitor
+      lifecycle_exit: {disabled: true}
+      queue:
+        name: provisioning_workflow_orchestrator_monitor
+        capacity: 8
+        overflow: reject
+        timeout: 100ms
+      shutdown:
+        timeout: 2s
+        drain_policy: drain_then_stop
+        stop_listeners: true
+        unblock_await_signal: ServerStopped
+      endpoints:
+        machine_spec:  {method: GET, path: /monitor/machine,       binding: read_state,    monitor_view: machine_spec}
+        current_state: {method: GET, path: /monitor/state,         binding: read_state,    monitor_view: current_state}
+        tools:         {method: GET, path: /monitor/tools,         binding: read_state,    monitor_view: tools}
+        metrics:       {method: GET, path: /monitor/metrics,       binding: read_state,    monitor_view: metrics}
+        recent_events: {method: GET, path: /monitor/events,        binding: read_state,    monitor_view: events}
+        event_stream:  {method: GET, path: /monitor/events/stream, binding: stream_events, monitor_view: events}

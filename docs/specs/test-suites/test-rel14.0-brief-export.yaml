@@ -1,0 +1,173 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel14.0-brief-export
+title: Test Suite for Release 14.0 Brief Export to PDF
+release: "14.0"
+
+traces: [rel14.0-uc001-brief-export]
+
+preconditions:
+  - A composed brief in ministry-template markdown with its structured citations and a conformance verdict, which is the input the analyst edits and approves.
+  - An edited copy of that brief differing from the generated one in a detectable way, so a PDF rendered from the pre-edit generation is distinguishable from one rendered from the approved document.
+  - Hostile .tex fixtures -- one embedding a shell-escape construct, one naming a path outside the working directory, and one that sends the engine into a long run. These stand for what model-composed text over retrieved external content can produce, and they exercise the boundary rather than describing it.
+  - A malformed brief carrying a conformance failure verdict, used to prove the exporter renders it rather than gating on the verdict.
+  - The exporter workload deployed with its NetworkPolicy and its image carrying md-to-tex and the LaTeX engine.
+  - The scenario tiers require no credential and no model provider; the exporter binds none, so every case here runs without one.
+
+test_cases:
+  - use_case: rel14.0-uc001-brief-export
+    name: The analyst edits, approves, and exports, and the PDF corresponds to the approved markdown
+    integration_target: mage integration:exporter
+    status: implemented
+    description: The exported PDF carries the analyst's edits rather than the generated text, and its content, citations, and wording correspond to the approved markdown. The edited copy differs detectably from the generation, so a run that exported the pre-edit draft fails rather than passing on a document that merely looks right.
+    expected:
+      http_status: 200
+      pdf_returned: true
+      pdf_reflects_analyst_edits: true
+      pdf_does_not_reflect_pre_edit_generation: true
+      content_citations_and_wording_correspond_to_approved_markdown: true
+      output_in_ministry_template_shape: true
+    traces:
+      - rel14.0-uc001-brief-export S1
+      - srd013-exporter-agent AC4
+
+  - use_case: rel14.0-uc001-brief-export
+    name: Export is analyst-triggered and runs off the generation turn's latency
+    integration_target: mage integration:exporter
+    status: implemented
+    description: Completing a generation turn triggers no export, and the export occurs only on the analyst's request. The turn's measured latency excludes the render, so a slow export delays no brief reaching an analyst.
+    expected:
+      turn_completion_triggers_no_export: true
+      export_occurs_only_on_analyst_request: true
+      render_duration_excluded_from_turn_latency: true
+      slow_render_does_not_delay_brief_delivery: true
+    traces:
+      - rel14.0-uc001-brief-export S2
+      - srd013-exporter-agent AC4
+
+  - use_case: rel14.0-uc001-brief-export
+    name: The exporter renders what it is given without re-deriving structure or re-running conformance
+    integration_target: mage integration:exporter
+    status: implemented
+    description: The malformed brief carrying a failing verdict is rendered rather than refused, and the exporter neither re-derives the section structure nor re-runs the check. The analyst may knowingly export a flagged draft, and re-running the check would create a second authority for conformance where the specification assigns one.
+    expected:
+      malformed_brief_rendered_not_refused: true
+      export_not_gated_on_conformance_verdict: true
+      conformance_check_not_re_run: true
+      section_structure_not_re_derived_or_repaired: true
+      content_unaltered: true
+    traces:
+      - rel14.0-uc001-brief-export S3
+      - srd013-exporter-agent AC4
+      - srd012-brief-markdown-conformance AC4
+
+  - use_case: rel14.0-uc001-brief-export
+    name: The export surface is request-scoped, terminates in Done or Failed, and retains nothing
+    integration_target: mage integration:exporter
+    status: implemented
+    description: One inbound request binds one run of the export machine over its declared state sequence, the monitor and control servers are present, and the agent holds no brief, .tex, or output after the request completes. A second identical request behaves as the first, with nothing carried between them.
+    expected:
+      one_request_binds_one_request_scoped_run: true
+      machine_sequences_declared_states: true
+      terminates_in_done_or_failed: true
+      monitor_and_control_servers_present: true
+      no_state_retained_between_requests: true
+      pdf_returned_only_on_success: true
+    traces:
+      - rel14.0-uc001-brief-export S4
+      - srd013-exporter-agent AC1
+
+  - use_case: rel14.0-uc001-brief-export
+    name: Both exec words take fixed argv and receive document content as a file
+    integration_target: mage integration:exporter
+    status: implemented
+    description: The recorded invocations of md_to_tex and render_pdf carry the argv declared in configuration, and no part of the brief content, the request body, or any model output appears as an argument, a flag, or a shell string. Content reaches each binary as a file, so no interpolation path exists between the document and the command line.
+    expected:
+      argv_matches_declared_configuration: true
+      no_brief_content_in_argv: true
+      no_request_body_value_in_argv: true
+      no_model_output_in_argv: true
+      content_passed_as_file_not_shell_string: true
+      no_shell_between_document_and_command: true
+    traces:
+      - rel14.0-uc001-brief-export S5
+      - srd013-exporter-agent AC2
+
+  - use_case: rel14.0-uc001-brief-export
+    name: A shell-escape construct written into the .tex does not execute
+    integration_target: mage integration:exporter
+    status: implemented
+    description: The hostile fixture embedding a shell-escape construct renders or fails without running the command it names. This is the property that keeps rendering model-composed content over retrieved external documents from being an execution primitive, so the assertion is that the command did not run rather than that the render succeeded.
+    expected:
+      shell_escape_disabled_in_engine_invocation: true
+      embedded_command_does_not_execute: true
+      no_side_effect_from_the_embedded_command: true
+      assertion_is_non_execution_not_render_success: true
+    traces:
+      - rel14.0-uc001-brief-export S6
+      - srd013-exporter-agent AC2
+
+  - use_case: rel14.0-uc001-brief-export
+    name: An input directive naming a path outside the working directory does not read it
+    integration_target: mage integration:exporter
+    status: implemented
+    description: The fixture naming a path outside the request's working directory and the declared template assets fails to read it. File access confined to those locations is what stops a rendered document from becoming a file-disclosure primitive.
+    expected:
+      file_access_restricted_to_working_directory_and_declared_assets: true
+      outside_path_not_read: true
+      no_file_content_from_outside_appears_in_output: true
+    traces:
+      - rel14.0-uc001-brief-export S7
+      - srd013-exporter-agent AC2
+
+  - use_case: rel14.0-uc001-brief-export
+    name: The exporter binds no clients, is egress-denied, and has one caller
+    integration_target: mage integration:exporter
+    status: implemented
+    description: The shipped profile declares no LLM, retrieval, or provider client, the rendered NetworkPolicy denies egress, the export endpoint is not exposed as a cluster or ingress surface, and the agent is no caller of the deployment API. The render is read from the chart and the profile unexpanded, so this needs no cluster. go test ./magefiles -run '^TestExporterBindsNoClients|^TestExporterPolicyDeniesEgressAndScopesIngress' asserts the clientless REST definition and the rendered NetworkPolicy's denied egress and scoped ingress.
+    expected:
+      no_llm_client_declared: true
+      no_retrieval_client_declared: true
+      no_provider_client_declared: true
+      network_policy_denies_egress: true
+      endpoint_reachable_only_from_chatbot_or_export_action: true
+      not_exposed_as_cluster_or_ingress_surface: true
+      no_lifecycle_or_deployment_authority: true
+      receives_no_clearance_or_identity: true
+    traces:
+      - rel14.0-uc001-brief-export S8
+      - srd013-exporter-agent AC3
+
+  - use_case: rel14.0-uc001-brief-export
+    name: A failure rolls back, returns no partial PDF, and leaves the markdown re-exportable
+    integration_target: mage integration:exporter
+    status: implemented
+    description: A conversion failure, a render failure, and the long-running fixture each terminate in Failed. No .tex, auxiliary file, or partial output survives, no truncated PDF is returned, the diagnostics name the failing stage without carrying brief content into a separately retained surface, and the approved markdown remains available so a failure costs a retry rather than the analyst's edited work.
+    expected:
+      terminates_in_failed: true
+      temporary_files_rolled_back: true
+      no_tex_or_auxiliary_files_left_behind: true
+      no_partial_or_truncated_pdf_returned: true
+      diagnostics_identify_failing_stage_and_cause: true
+      brief_content_absent_from_error_surface: true
+      render_bounded_by_declared_time_and_resource_limits: true
+      approved_markdown_available_for_re_export: true
+    traces:
+      - rel14.0-uc001-brief-export S9
+      - srd013-exporter-agent AC5
+
+  - use_case: rel14.0-uc001-brief-export
+    name: The exporter is its own workload on a sanctioned-divergence image and runs without the Cohere path
+    integration_target: mage integration:exporter
+    status: implemented
+    description: The chart renders a separate exporter Deployment with its own Service, NetworkPolicy, and resource limits, the image adds md-to-tex and the LaTeX engine as a recorded divergence matching the applier's exemption, the binaries and template assets are packaging rather than machine YAML, and a render with the Cohere provider disabled still produces a PDF. go test ./magefiles -run '^TestExporterWorkloadRendersByToggle' asserts the rendered Deployment, Service, and NetworkPolicy on the exporter image; the divergence is recorded in images/exporter.Dockerfile, and the live half runs in mage integration:exporter with no provider bound in the pod.
+    expected:
+      separate_helm_workload_rendered: true
+      own_service_network_policy_and_limits: true
+      image_divergence_recorded_and_sanctioned: true
+      divergence_matches_applier_exemption_pattern: true
+      binaries_and_assets_are_packaging_not_machine_yaml: true
+      exports_with_cohere_provider_disabled: true
+    traces:
+      - rel14.0-uc001-brief-export S10
+      - srd013-exporter-agent AC6

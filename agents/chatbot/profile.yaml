@@ -1,0 +1,32 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: agent-profile
+schema_version: 1
+name: chatbot
+machine: machine.yaml
+tools:
+  - tools.yaml
+tool_declarations:
+  - declarations.yaml
+  - request-declarations.yaml
+  - request-topology-declarations.yaml
+  - request-fanout-declarations.yaml
+  # Declares the harvest's document-embedding word, which uses the library
+  # expansion in provider-rest.yaml (srd052 R3.1).
+  - request-osint-declarations.yaml
+  - /opt/agent-core/tools/builtin/lifecycle/exit-agent.yaml
+rest_definitions:
+  - rest.yaml
+  - embed-rest.yaml
+  # The request machine launches with this profile's REST definitions.
+  - provider-rest.yaml
+  - monitor-rest.yaml
+# The provider libraries the invoke_llm words read their chat dialects from
+# (srd058 R1.1). providers carries the words the release tier switches: the chart
+# rebinds it to the Ollama library with --library when the Cohere provider is
+# off. local carries the words that run on the host model in either tier, and
+# cohere the ones that run at Cohere in either tier.
+libraries:
+  providers: /opt/agent-core/tools/providers/cohere
+  local: /opt/agent-core/tools/providers/ollama
+  cohere: /opt/agent-core/tools/providers/cohere

@@ -1,0 +1,264 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd010-clearance-gated-retrieval
+title: Clearance-Gated Retrieval
+
+role_realization_decision:
+  current_actor: rag-server
+  implemented_responsibility: Filter the served collection to the requester's authorized clearance before the vector search runs, so an over-clearance document is never a retrieval candidate.
+  canonical_role_sub_role: Knowledge Manager / Recommendation Generator.
+  retained_or_proposed_name: >-
+    No new actor. Clearance enforcement extends the `rag-server` query contract;
+    tagging extends whichever path writes the collection -- the `corpus-ingest`
+    wrapper on the agent-driven seed, the store seed on the demo path
+    (srd015 R5.3) -- and propagation extends the `chatbot` turn.
+  authority_boundary: The rag-server enforces the clearance it is given and never widens it. It does not authenticate the analyst, does not issue clearances, and cannot be induced by a model-authored value to serve above the requested level.
+  evidence: [agents/rag-server/request-machine.yaml, agents/corpus-ingest/profile.yaml, magefiles/corpus_seed.go, agents/chatbot/request-machine.yaml, srd010 R1-R6]
+  migration_impact: None. Enforcement is an additive query-contract parameter and an additive ingest metadata field; the one-agent-one-corpus rule and the vector-in fan-out are unchanged.
+
+context: |
+  Retrieval in the mesh is a vector-in query against one Chroma collection
+  (srd001 R2): the chatbot embeds the tasking once and fans that vector out to
+  the selected rag-server agents, each of which returns chunks with embedding
+  metadata. Nothing in that contract knows who is asking.
+
+  DefTech requires that it does. An analyst holds a clearance, the corpus holds
+  documents at several classifications, and an analyst must never receive
+  material above their authorization. Where that check runs decides what can be
+  proven about it. Filtering results after the vector search returns them means
+  the over-clearance documents were candidates, were scored, and were in process
+  memory; suppressing them afterwards leaks their existence through result
+  counts and depends on every downstream step behaving. Filtering before the
+  search means they were never candidates, which is a property a test can assert
+  rather than a behavior a reviewer must trust (ARCHITECTURE design decision 6).
+
+  So clearance becomes three additive things. Whatever writes the collection
+  writes a clearance level onto each document as it does so -- the corpus-ingest
+  wrapper on the agent-driven seed, and the store seed rel10.4 added on the demo
+  path, which writes the level the corpus build already copied off the document's
+  declared front matter. The rag-server query contract gains a clearance
+  parameter it applies as a Chroma metadata filter bound into the query before
+  the vector search. And the chatbot carries the analyst's maximum clearance from
+  the authenticated request context into the fan-out, where it travels as trusted
+  command state rather than as anything a classifier chose.
+
+  Which component writes the tag is not the load-bearing part, by design. What
+  the filter depends on is that the tag is on the record before the search runs
+  and that it came from the document's declared classification rather than from
+  content something read. A requirement naming one writer would have been
+  falsified by rel10.4 without any of those properties changing.
+
+  Enforcement sits on the serving agent rather than the orchestrator on purpose.
+  The chatbot selects sources (srd002 R2.4); if that selection is ever wrong, or
+  over-broad, or influenced by a tasking crafted to widen it, the rag-server
+  still refuses to return what the requester is not cleared for.
+
+problem: |
+  The mesh must enforce per-clearance access across a corpus of mixed
+  classification, and it must do so in a way an access-control test can prove
+  rather than sample. Three questions need answering that srd001 and srd002 do
+  not cover.
+
+  Where does a document's clearance come from, and when is it written? Where is
+  the check applied, and is it applied early enough that an over-clearance
+  document is never a candidate rather than a discarded result? And where does
+  the requester's clearance come from, given that a value chosen by a language
+  model or supplied in a request body is exactly the value an adversary would
+  choose?
+
+  The answers also have to fail in the safe direction. A missing clearance tag,
+  an unparseable level, an absent request context, or a retrieval path that
+  cannot apply the filter must all end in serving less, not more. A gate that
+  opens when it breaks is not a gate, and the clearance-isolation criterion
+  demands zero unauthorized cross-clearance retrievals rather than few.
+
+goals:
+  - G1: Define an ordered clearance model and require every ingested document to carry a clearance level as collection metadata.
+  - G2: Extend the srd001 vector-in query contract with a clearance parameter applied as a metadata filter before the vector search, so an over-clearance document is never a retrieval candidate.
+  - G3: Derive the requester's maximum clearance from the authenticated request context and carry it through the fan-out as trusted command state, never as a model-selected or request-body value.
+  - G4: Fail closed on every clearance error, so a missing tag, an unparseable level, an absent context, or an unenforceable filter serves less rather than more.
+  - G5: Make cross-clearance isolation provable, with response metadata and audit evidence an access-control test reads to assert zero unauthorized retrievals.
+  - G6: Record the agent-core capability the filter depends on, and state the platform ask plainly if the runtime cannot yet bind it.
+
+requirements:
+  R1:
+    title: Clearance model and ingest tagging
+    items:
+      - R1.1: The application SHALL define clearance levels as a declared, totally ordered set, so "at or below" is a decidable comparison rather than a per-document judgment.
+      - R1.2: Whatever path writes a document into a served collection SHALL write a clearance level onto it as collection metadata, as it writes the record, from the document's declared classification rather than from document content a model read. The mesh has two such paths -- the corpus-ingest wrapper and the srd015 R5.3 store seed -- and this requirement binds both; naming one would leave the other unconstrained while appearing to cover it.
+      - R1.3: A document whose clearance level is absent, unrecognized, or outside the declared ordered set SHALL be tagged at the highest declared level, so an untagged document is retrievable only by a fully cleared requester.
+      - R1.4: Clearance tagging SHALL be additive metadata on whichever write path carries it, and SHALL NOT alter the canonical ingest machine's listing, embedding, or threading behavior (srd001 R4.1). On the agent-driven path that means extending the corpus-ingest wrapper rather than the library machine; on the store-seed path the machine is not involved at all.
+      - R1.5: The clearance level SHALL be collection metadata on the stored record, so the filter is evaluated by the vector store rather than reconstructed by the agent after retrieval.
+  R2:
+    title: Pre-retrieval clearance filter
+    items:
+      - R2.1: The rag-server query contract (srd001 R2.1) SHALL accept a maximum clearance level alongside query_embeddings and n_results.
+      - R2.2: The rag-server SHALL apply that level as a Chroma metadata where-filter bound into the query request, restricting the searched set to documents at or below it.
+      - R2.3: The filter SHALL be applied before the vector search executes, so an over-clearance document is never scored, never ranked, and never a candidate; filtering, redacting, or reranking results after retrieval SHALL NOT satisfy this requirement.
+      - R2.4: n_results SHALL be satisfied from within the filtered set, so a cleared result is never displaced by an over-clearance document that was retrieved and then removed.
+      - R2.5: The query response SHALL report the clearance level the filter was applied at, so a caller confirms enforcement occurred rather than assuming it.
+  R3:
+    title: Clearance provenance and propagation
+    items:
+      - R3.1: The analyst's maximum clearance SHALL be derived from the authenticated request context at the chatbot's request boundary.
+      - R3.2: The clearance SHALL reach the fan-out as trusted command state (agent-core srd038) and SHALL be bound into every rag-server query in the for_each (srd002 R3.1) without per-source variation.
+      - R3.3: No classifier output, prompt, tasking text, conversation history, or request body field SHALL supply, raise, or override the clearance level. The tier and source selectors SHALL have no path to it.
+      - R3.4: Source selection (srd002 R2.4) SHALL remain independent of clearance, so an over-selected or manipulated source list changes which collections are queried but never what the requester is cleared to receive from them.
+      - R3.5: The clearance level SHALL NOT be rendered into any prompt sent to a model, so it is enforced as a query parameter rather than as an instruction a model may disregard.
+  R4:
+    title: Fail-closed behavior
+    items:
+      - R4.1: A request whose authenticated context carries no clearance SHALL be treated as holding the lowest declared level, not as unrestricted.
+      - R4.2: A rag-server that cannot apply the clearance filter -- because the parameter is absent, unparseable, outside the declared set, or unbindable by the runtime -- SHALL reject the query rather than serve an unfiltered result.
+      - R4.3: A rejected-for-clearance source SHALL degrade the turn the way a failed source does (srd002 R3.2), so the answer composes from the remaining sources; it SHALL NOT fail the turn and SHALL NOT retry without the filter.
+      - R4.4: Clearance enforcement SHALL NOT be disableable by request, by prompt, or by a per-turn override; a deployment-level configuration that removes enforcement SHALL NOT exist.
+  R5:
+    title: Evidence and audit
+    items:
+      - R5.1: Response metadata SHALL report the enforced clearance level and any source rejected for clearance, distinguishably from the composed, embedding-excluded, vector-rejected, and degraded outcomes srd002 R3.4 already separates.
+      - R5.2: Each clearance-filtered query SHALL be attributable in the exported trace (agent-core srd016), so an auditor reconstructs which level a turn ran at from telemetry rather than from application logs.
+      - R5.3: The audit record SHALL name the level enforced and the outcome; it SHALL NOT record the content, identifiers, or count of documents excluded by the filter, because that count leaks the existence of material the requester is not cleared to know about.
+      - R5.4: The clearance-isolation evidence SHALL be an access-control test that runs the same tasking at two clearance levels over a corpus containing a document above the lower level, asserting the cleared requester receives it and the uncleared requester never had it as a candidate.
+      - R5.5: The access-control test SHALL assert zero unauthorized cross-clearance retrievals across the declared level pairs rather than sampling one pair.
+  R6:
+    title: Platform dependency
+    items:
+      - R6.1: The clearance filter SHALL depend on the agent-core Chroma query operation accepting a metadata where-filter bound from command_state, the way query_embeddings is bound through the single-token reshape (srd001 R2.4, agent-core srd028 R12.5).
+      - R6.2: That capability SHALL be verified against the runtime before rel11.0 is scheduled. If the runtime cannot bind it, the gap SHALL be raised as an agent-core requirement rather than worked around with application Go, because a filter the application applies after the query returns violates R2.3.
+      - R6.3: The clearance parameter SHALL be declared configuration on the query operation. Its presence, name, and binding SHALL NOT be model-authored, and the fixed method, path, auth, and allowlist of the Chroma operation SHALL be unchanged (srd002 R6.1).
+
+non_goals:
+  - Authenticate the analyst or issue clearances; srd010 consumes an authenticated request context and does not define the identity provider, the credential format, or the clearance authority.
+  - Define the classification scheme itself; the ordered level set is application configuration, and mapping a ministry's real classifications onto it is a deployment concern.
+  - Per-document access-control lists, compartments, need-to-know caveats, or releasability markings; the model here is one ordered dimension.
+  - Redact, summarize, or partially serve an over-clearance document; the gate excludes, and there is no partial-disclosure path.
+  - Clearance-gate the OSINT search branch; external results are public by construction and their control is the approved-domain allowlist in srd011.
+  - Change the vector-in fan-out shape, the one-agent-one-corpus rule, or the embedding path; srd010 adds a query parameter, not a topology.
+  - Define Go package APIs for the agent-core command-state, REST client, or Chroma binding runtime.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: Clearance levels are a declared totally ordered set, every path that writes a document into a served collection writes a level onto it from its declared classification rather than from content, an absent or unrecognized level defaults to the highest, the tag is stored collection metadata, and the canonical ingest machine is otherwise unchanged.
+    traces: [R1.1, R1.2, R1.3, R1.4, R1.5]
+  - id: AC2
+    criterion: The srd001 vector-in query contract is extended with a maximum clearance level applied as a Chroma where-filter before the vector search, n_results is satisfied from within the filtered set, the enforced level is reported back, and post-retrieval filtering or reranking is explicitly insufficient.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5]
+  - id: AC3
+    criterion: Clearance is derived from the authenticated request context, travels as trusted command state bound uniformly into every fan-out query, is unreachable by classifier output or request body, is never rendered into a prompt, and is independent of source selection so an over-selected source list cannot widen it.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5]
+  - id: AC4
+    criterion: Every clearance error serves less rather than more -- a missing context clearance means the lowest level, an inapplicable filter rejects the query rather than serving unfiltered, a clearance rejection degrades the turn without retrying unfiltered, and no request, prompt, or deployment setting disables enforcement.
+    traces: [R4.1, R4.2, R4.3, R4.4]
+  - id: AC5
+    criterion: Response metadata and traces make the enforced level and clearance rejections distinguishable without recording what was excluded, and the access-control test runs one tasking at two clearance levels across the declared level pairs, asserting the over-clearance document was never a candidate for the uncleared requester. This is the clearance-isolation success criterion and the rel11.0 tracer, proving zero unauthorized cross-clearance retrievals.
+    traces: [R5.1, R5.2, R5.3, R5.4, R5.5]
+  - id: AC6
+    criterion: The dependency on an agent-core Chroma metadata where-filter bound from command_state is stated, is verified before rel11.0 is scheduled, and resolves as an agent-core requirement rather than an application-side post-query filter if the runtime cannot bind it; the filter parameter stays declared configuration with the Chroma operation's transport authority unchanged.
+    traces: [R6.1, R6.2, R6.3]
+
+depends_on:
+  # R2 extends the vector-in query contract with a clearance parameter and a
+  # pre-search metadata filter; R1 extends the ingest boundary with a metadata
+  # tag. Neither changes the one-agent-one-corpus rule or the chunk response shape.
+  - srd_id: srd001-rag-server-agent
+    symbols_used: [R2, R4]
+  # R3 binds the clearance into the existing fan-out and relies on the srd002
+  # degradation and response-metadata contracts; the turn shape is unchanged.
+  - srd_id: srd002-chatbot-agent
+    symbols_used: [R3, R6]
+
+platform_dependencies:
+  # agent-core runtime contracts this enforcement builds on. External references,
+  # owned by agent-core, not part of this application's corpus.
+  - srd_id: srd028-rest-client-tools
+    provider: agent-core
+    symbols_used: [R12]
+  - srd_id: srd038-command-state-store
+    provider: agent-core
+    symbols_used: [R1]
+  - srd_id: srd016-traceparent-propagation
+    provider: agent-core
+    symbols_used: [R1]
+
+related_agents:
+  - agent: corpus-ingest
+    role: Writes the clearance metadata the filter reads (R1) on the agent-driven
+      seed path, which `mage seed` and `mage integration:chroma` take. The mesh
+      wrapper supplies the tagging parameterization; the canonical library ingest
+      machine is unchanged, consistent with the srd001 ingest boundary. The demo
+      path writes the same metadata from the chunk store instead (srd015 R5.3),
+      so R1 binds a property of the record rather than a component.
+
+implementation_status:
+  implemented:
+    - >-
+      rel11.0 (Clearance-gated retrieval): the ingest clearance tag, the
+      rag-server metadata where-filter applied before the vector search, and the
+      analyst's maximum clearance carried through the fan-out from the
+      authenticated request context (R1 through R5). mage integration:clearance
+      runs the tracer over a corpus graded across all four declared levels: the
+      cleared leg composes the restricted document and the uncleared leg answers
+      from the rest of the corpus without it, and the assertion that separates
+      this from a post-retrieval removal reads the issued query rather than the
+      answer. The sweep reports zero unauthorized retrievals across all six
+      declared level pairs rather than the endpoints alone.
+    - >-
+      R1.2 binds both write paths, and they carry different levels for a reason
+      the requirement anticipates. The store seed (srd015 R5.3) writes each
+      document's declared classification, which is where a graded corpus comes
+      from. The agent-driven corpus-ingest path writes the highest declared
+      level, because the canonical ingest machine carries a document's text and
+      its id and nothing else -- no source path, no front matter -- so on that
+      path a declared classification is absent, and R1.3 tags an absent level
+      highest. The consequence is deliberate: a corpus seeded through mage seed
+      is reachable only by a fully cleared requester. Extending the canonical
+      machine to carry front matter is what R1.4 forbids, and reading the text
+      to infer a level is what R1.2 forbids.
+    - >-
+      The where-filter binds through the form R6.2 verified, with one correction
+      the implementation found: command-state selectors walk maps only, so the
+      window lookup's array result is rendered as an object before the filter
+      and the response read it. The at-or-below window is a declared table
+      rather than a computed comparison, which makes an unrecognized level match
+      nothing and refuse (R4.2) rather than resolve to a default.
+  verified:
+    - >-
+      R6.1 and R6.2 are discharged; rel11.0 is unblocked and needs no agent-core
+      change (GH-55). The runtime binds an object-valued metadata where-filter
+      from command state today. Two agent-core behaviors compose to give it. The
+      command-state selector resolves a $from(label).path selector to whatever
+      typed value sits at that path, including a nested map (srd028 R13.1); and
+      the body renderer's single-token raw passthrough returns the param's raw
+      typed value unchanged for any type, not only scalars and the flat numeric
+      vector R12.5 uses as its example. Neither the runtime-input authority
+      check nor the declared-param check type-gates a body param, so a `where`
+      property declared in body_schema is an ordinary declared param.
+    - >-
+      The binding form R2.2 implements: declare `where` as an object property in
+      the rag_query body_schema, select it through input_mapping as
+      `$from(<label>).where` under body_source command_state, and place the bare
+      single token `"{{ params.where }}"` as the body's `where` value. The token
+      must stand alone -- embedding it in a larger string renders the map
+      through Go's default formatting instead of as JSON, which Chroma cannot
+      evaluate. n_results already binds through this same pattern in
+      agents/rag-server/rest.yaml, so the clearance filter follows an
+      established shape rather than a new one.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: Enforce per-clearance access provably, before retrieval rather than after"] --> Goals["Goals: Clearance-Gated Retrieval"]
+      Goals --> R1["R1: Clearance model and ingest tagging"]
+      Goals --> R2["R2: Pre-retrieval clearance filter"]
+      Goals --> R3["R3: Clearance provenance and propagation"]
+      Goals --> R4["R4: Fail-closed behavior"]
+      Goals --> R5["R5: Evidence and audit"]
+      Goals --> R6["R6: Platform dependency"]
+      R1 --> AC1["AC1: ordered levels, ingest-time tagging, untagged defaults highest"]
+      R2 --> AC2["AC2: where-filter before the vector search (srd001 R2 extension)"]
+      R3 --> AC3["AC3: clearance from authenticated context, never model-selected"]
+      R4 --> AC4["AC4: every error serves less, never more"]
+      R5 --> AC5["AC5: two-level access-control proof, zero cross-clearance retrievals (rel11.0)"]
+      R6 --> AC6["AC6: agent-core where-filter binding verified, not worked around"]
+    ```

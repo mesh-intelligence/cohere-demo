@@ -1,0 +1,47 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-export-relay
+purpose: |-
+  One request-scoped relay of the analyst's approved brief markdown to the
+  exporter agent (srd013 R4.1, R4.2, GH-352). The SPA's export action arrives
+  at this agent's origin -- the exporter's NetworkPolicy admits exactly this
+  caller and no browser or ingress path (srd013 R3.2, R3.3) -- and the relay
+  forwards the document through the one declared exporter operation and maps
+  the rendered PDF back.
+
+  The relay adds nothing to the document and reads nothing from it: the body
+  reaches the operation through declared selectors, no clearance, identity, or
+  history rides along (srd013 R3.5), and a failed render maps to its own
+  terminal state so the endpoint reports export_failed exactly as the exporter
+  does, with the cause in the trace rather than the body (srd013 R5.3).
+initial_state: AwaitingExport
+budget:
+  # Strictly above the exporter client's 130s authority (the envelope rule),
+  # which itself sits above the exporter endpoint's 120s bound: a pathological
+  # render fails inside the exporter's machine first, and this relay reports
+  # it rather than racing it.
+  command_timeout: 150s
+  max_iterations: 4
+states:
+  - {name: AwaitingExport, meaning: Seeded by the trusted export endpoint with the approved brief markdown.}
+  - {name: Relaying, meaning: The one declared exporter operation is rendering the document.}
+  - {name: Rendered, meaning: Terminal. The exporter returned the encoded PDF., run_status: succeeded}
+  - {name: RenderFailed, meaning: Terminal. The exporter failed the render and rolled its workspace back., run_status: failed}
+  - {name: Failed, meaning: Terminal. The relay could not reach the exporter., run_status: failed}
+terminal_states:
+  - Rendered
+  - RenderFailed
+  - Failed
+signals:
+  - {name: Seed, trigger: The export endpoint starts a request-scoped run.}
+  - {name: ExportRendered, trigger: The exporter answered 200 with the encoded document.}
+  - {name: ExportFailed, trigger: The exporter answered 500; the render failed and was rolled back.}
+  - {name: CommandError, trigger: The relay word could not be built or the transport failed.}
+transitions:
+  - {state: AwaitingExport, signal: Seed, next: Relaying, action: relay_export}
+  - {state: AwaitingExport, signal: CommandError, next: Failed}
+  - {state: Relaying, signal: ExportRendered, next: Rendered}
+  - {state: Relaying, signal: ExportFailed, next: RenderFailed}
+  - {state: Relaying, signal: CommandError, next: Failed}

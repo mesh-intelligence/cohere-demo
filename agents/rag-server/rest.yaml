@@ -1,0 +1,798 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+rest:
+  version: v1
+  auth:
+    none:
+      type: none
+  limits:
+    local_rag_client:
+      timeout: 10s
+      read_timeout: 10s
+      max_request_bytes: 1048576
+      # 4 MiB, sized by the largest read this client carries rather than by the query: the envelope listing behind the facet vocabulary returns every document's full text, about 2 MB on the committed corpus, and a 1 MiB cap failed that read while every smaller one passed.
+      max_response_bytes: 4194304
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        # The Chroma host is the egress allowlist entry; a values-driven deploy sets CHROMA_HOST to the Chroma Service DNS name (srd003 R2), defaulting to loopback for a local run.
+        hosts:
+          - ${CHROMA_HOST:-127.0.0.1}
+        # Env-driven with the host it belongs to.
+        ports:
+          - ${CHROMA_PORT:-8000}
+    local_rag_requests:
+      timeout: 10s
+      read_timeout: 5s
+      max_request_bytes: 1048576
+      # Sized with the chroma client's response bound above: the envelope listing this listener serves back is the same ~2 MB payload the client read, and a listener bound below the client's turned that read into an unmapped 502 after the client-side fix.
+      max_response_bytes: 4194304
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18085]
+        # A Service routes to the pod IP, so the deploy binds 0.0.0.0 (RAG_BIND_HOST);
+        # the public-listener guard is opted into here, and stays loopback locally.
+        allow_public_listener: true
+    local_rag_control:
+      timeout: 30s
+      read_timeout: 5s
+      max_request_bytes: 16384
+      max_response_bytes: 65536
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18086]
+        allow_public_listener: true
+    local_rag_monitor:
+      timeout: 5s
+      read_timeout: 5s
+      max_request_bytes: 4096
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18087]
+        allow_public_listener: true
+
+  clients:
+    chroma:
+      base_url: ${CHROMA_URL:-http://127.0.0.1:8000}
+      auth_ref: none
+      limits_ref: local_rag_client
+      operations:
+        # The scratch-ingest resolve (GH-459): same get_or_create, no seeded
+        # inputs -- the collection name is declared and the id is the output.
+        rag_resolve_ingest_collection:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections
+          params:
+            body_schema: {type: object, properties: {}}
+            body_source: command_state
+            input_mapping: {}
+          body:
+            name: ${RAG_COLLECTION:-corpus}
+            get_or_create: true
+          success: {status: [200, 201], signal: CollectionReady}
+          response:
+            output:
+              collection_id: $.id
+          side_effects:
+            - kind: external_api
+              target: chroma.collection
+              state: collection_upserted
+          reversibility:
+            classification: reversible
+            undo: noop
+        # The batched scratch add (GH-459): parallel arrays straight from the validated payload; the floor metadata was rendered by this agent's own declared template, never by the caller.
+        rag_add_ingest_records:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/add
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [ids, documents, embeddings, metadatas]
+              properties:
+                ids: {type: array}
+                documents: {type: array}
+                embeddings: {type: array}
+                metadatas: {type: array}
+            body_source: command_state
+            input_mapping:
+              collection: $from(rag_resolve_ingest).body.mapped.collection_id
+              ids: $from(compose_add_payload).body.ids
+              documents: $from(compose_add_payload).body.documents
+              embeddings: $from(compose_add_payload).body.embeddings
+              metadatas: $from(compose_add_payload).body.metadatas
+          body:
+            ids: "{{ params.ids }}"
+            documents: "{{ params.documents }}"
+            embeddings: "{{ params.embeddings }}"
+            metadatas: "{{ params.metadatas }}"
+          success: {status: [200, 201], signal: RecordsAdded}
+          side_effects:
+            - kind: external_api
+              target: chroma.records
+              state: records_added
+          reversibility:
+            classification: compensatable
+            undo: rag_delete_ingest_records
+          compensation:
+            operation: rag_delete_ingest_records
+            reason: Delete the inserted scratch record ids from the collection.
+        # The add's compensation (GH-459): executed from the add's own rollback receipt, as the canonical ingest's delete is, so a compensation needs no command state to run.
+        rag_delete_ingest_records:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/delete
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: {type: array}
+          body:
+            ids: "{{ params.ids }}"
+          success: {status: [200], signal: RecordsDeleted}
+          side_effects:
+            - kind: external_api
+              target: chroma.records
+              state: records_deleted
+          reversibility:
+            classification: irreversible
+            undo: irreversible
+            requires_confirmation: true
+        # The scratch purge (GH-648): drop every row the harvest workflow ingested. The where filter is this agent's own floor marker (corpus web-harvest), never caller input.
+        rag_purge_harvest_records:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/delete
+          params:
+            path:
+              collection: {type: string}
+            body_schema: {type: object, properties: {}}
+            body_source: command_state
+            input_mapping:
+              collection: $from(rag_resolve_ingest).body.mapped.collection_id
+          body:
+            where:
+              corpus: web-harvest
+          success: {status: [200], signal: RecordsPurged}
+          side_effects:
+            - kind: external_api
+              target: chroma.records
+              state: records_deleted
+          reversibility:
+            classification: irreversible
+            undo: irreversible
+            requires_confirmation: true
+        rag_resolve_collection:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections
+          params:
+            body_schema:
+              type: object
+              required: [query_embeddings, n_results]
+              properties:
+                query_embeddings: {type: array}
+                n_results: {type: integer, minimum: 1}
+                # Carried, not sent: the collection resolve has no use for the level, but the clearance words that follow it read it from here rather than re-reading the seeded body.
+                max_clearance: {type: string}
+            body_source: previous_result
+            input_mapping:
+              query_embeddings: $.query_embeddings
+              n_results: $.n_results
+              max_clearance: $.max_clearance
+            carry_forward: [query_embeddings, n_results, max_clearance]
+          body:
+            name: ${RAG_COLLECTION:-corpus}
+            get_or_create: true
+          success: {status: [200, 201], signal: CollectionReady}
+          response:
+            output:
+              collection_id: $.id
+          side_effects:
+            - kind: external_api
+              target: chroma.collection
+              state: collection_upserted
+          reversibility:
+            classification: reversible
+            undo: noop
+        rag_resolve_collection_faceted:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections
+          params:
+            body_schema:
+              type: object
+              required: [query_embeddings, n_results, facet_where, keyword]
+              properties:
+                query_embeddings: {type: array}
+                n_results: {type: integer, minimum: 1}
+                # Carried, not sent: the collection resolve has no use for the level, but the clearance words that follow it read it from here rather than re-reading the seeded body.
+                max_clearance: {type: string}
+                # Carried, not sent: the facet constraint and the keyword ride
+                # to the faceted compose and query words (srd016 R4.2).
+                facet_where: {type: object}
+                keyword: {type: string}
+            body_source: previous_result
+            input_mapping:
+              query_embeddings: $.query_embeddings
+              n_results: $.n_results
+              max_clearance: $.max_clearance
+              facet_where: $.facet_where
+              keyword: $.keyword
+            carry_forward: [query_embeddings, n_results, max_clearance, facet_where, keyword]
+          body:
+            name: ${RAG_COLLECTION:-corpus}
+            get_or_create: true
+          success: {status: [200, 201], signal: CollectionReady}
+          response:
+            output:
+              collection_id: $.id
+          side_effects:
+            - kind: external_api
+              target: chroma.collection
+              state: collection_upserted
+          reversibility:
+            classification: reversible
+            undo: noop
+        rag_query:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/query
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [query_embeddings, n_results, where]
+              properties:
+                query_embeddings: {type: array}
+                n_results: {type: integer, minimum: 1}
+                # The clearance filter (srd010 R2.2).
+                where: {type: object}
+                # Declared so the mapping has a target, carried so the terminal response can report it, and absent from the body below because Chroma has no use for it: the level rides through this word to the caller rather than into the query.
+                clearance_enforced_at: {type: string}
+            # command_state rather than previous_result: the clearance words run between the resolve and this query, so a positional $.
+            body_source: command_state
+            input_mapping:
+              collection: $from(rag_resolve).body.mapped.collection_id
+              query_embeddings: $from(rag_resolve).body.carried.query_embeddings
+              n_results: $from(rag_resolve).body.carried.n_results
+              where: $from(compose_clearance_filter).body.where
+              clearance_enforced_at: $from(render_clearance_window).body.level
+            # The enforced level rides to the terminal response (R2.5), so a
+            # caller confirms enforcement rather than assuming it.
+            carry_forward: [clearance_enforced_at]
+          body:
+            # Wrapped into a one-row batch, because the caller sends one flat vector and Chroma queries take a list of them.
+            query_embeddings: ["{{ params.query_embeddings }}"]
+            n_results: "{{ params.n_results }}"
+            # The token stands alone deliberately.
+            where: "{{ params.where }}"
+            include: ["documents", "distances", "metadatas"]
+          success: {status: [200], signal: QueryResponded}
+          failures:
+            - {status: [400, 422], signal: QueryRejected}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              distances: $.distances
+              # The chunks' declared metadata, projected so the interface can fill the source-evaluation table and the classification banner from the composed chunks (srd016 R3.4).
+              metadatas: $.metadatas
+          side_effects:
+            - kind: external_api
+              target: chroma.query
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        rag_query_faceted:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/query
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [query_embeddings, n_results, where, keyword]
+              properties:
+                query_embeddings: {type: array}
+                n_results: {type: integer, minimum: 1}
+                # The conjoined clearance-and-facet filter (srd010 R2.2, srd016 R4.2).
+                where: {type: object}
+                # The keyword text constraint.
+                keyword: {type: string}
+                clearance_enforced_at: {type: string}
+            body_source: command_state
+            input_mapping:
+              collection: $from(rag_resolve).body.mapped.collection_id
+              query_embeddings: $from(rag_resolve).body.carried.query_embeddings
+              n_results: $from(rag_resolve).body.carried.n_results
+              keyword: $from(rag_resolve).body.carried.keyword
+              where: $from(compose_faceted_query_filter).body.where
+              clearance_enforced_at: $from(render_clearance_window).body.level
+            carry_forward: [clearance_enforced_at]
+          body:
+            query_embeddings: ["{{ params.query_embeddings }}"]
+            n_results: "{{ params.n_results }}"
+            # The token stands alone deliberately, as on rag_query: embedded in a larger string the map renders through Go's default formatting instead of JSON, which Chroma cannot evaluate.
+            where: "{{ params.where }}"
+            # The keyword constrains the chunk text with the search rather than after it (srd016 R4.2): the store's metadata carries no keyword vocabulary the where-filter could match, so the text itself is the pre-search operand.
+            where_document:
+              "$contains": "{{ params.keyword }}"
+            include: ["documents", "distances", "metadatas"]
+          success: {status: [200], signal: QueryResponded}
+          failures:
+            - {status: [400, 422], signal: QueryRejected}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              distances: $.distances
+              metadatas: $.metadatas
+          side_effects:
+            - kind: external_api
+              target: chroma.query
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+        # The document collection's resolve.
+        rag_resolve_document_collection:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections
+          params:
+            body_schema:
+              type: object
+              required: [max_clearance]
+              properties:
+                # Carried, not sent: the resolve has no use for these, and the words after it read them from here rather than re-reading the seeded body, the way the retrieval resolve carries its vector.
+                max_clearance: {type: string}
+                record_ids: {type: array}
+                document_filter: {type: object}
+            body_source: previous_result
+            input_mapping:
+              max_clearance: $.max_clearance
+              record_ids: $.record_ids
+              document_filter: $.document_filter
+            carry_forward: [max_clearance, record_ids, document_filter]
+          body:
+            name: ${RAG_DOCUMENT_COLLECTION:-corpus_documents}
+            get_or_create: true
+          success: {status: [200, 201], signal: CollectionReady}
+          response:
+            output:
+              collection_id: $.id
+          side_effects:
+            - kind: external_api
+              target: chroma.collection
+              state: collection_upserted
+          reversibility:
+            classification: reversible
+            undo: noop
+
+        # A read by identifier, under the clearance filter.
+        rag_get_by_ids:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/get
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [ids, where]
+              properties:
+                ids: {type: array}
+                where: {type: object}
+                clearance_enforced_at: {type: string}
+            body_source: command_state
+            input_mapping:
+              collection: $from(rag_resolve_documents).body.mapped.collection_id
+              ids: $from(rag_resolve_documents).body.carried.record_ids
+              where: $from(compose_clearance_filter).body.where
+              clearance_enforced_at: $from(render_clearance_window).body.level
+            carry_forward: [clearance_enforced_at]
+          body:
+            ids: "{{ params.ids }}"
+            # The token stands alone so the map reaches Chroma as JSON rather than through Go's default map formatting, the same constraint the query operation's filter carries (srd010 R2.2).
+            where: "{{ params.where }}"
+            include: ["documents", "metadatas"]
+          success: {status: [200], signal: DocumentsRead}
+          failures:
+            - {status: [400, 422], signal: ReadRejected}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              metadatas: $.metadatas
+          side_effects:
+            - kind: external_api
+              target: chroma.get
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+        # A read by metadata filter, under the same clearance window.
+        rag_get_by_filter:
+          method: POST
+          path: /api/v2/tenants/default_tenant/databases/default_database/collections/{collection}/get
+          params:
+            path:
+              collection: {type: string}
+            body_schema:
+              type: object
+              required: [where]
+              properties:
+                where: {type: object}
+                clearance_enforced_at: {type: string}
+            body_source: command_state
+            input_mapping:
+              collection: $from(rag_resolve_documents).body.mapped.collection_id
+              where: $from(compose_document_filter).body.where
+              clearance_enforced_at: $from(render_clearance_window).body.level
+            carry_forward: [clearance_enforced_at]
+          body:
+            where: "{{ params.where }}"
+            include: ["documents", "metadatas"]
+          success: {status: [200], signal: DocumentsRead}
+          failures:
+            - {status: [400, 422], signal: ReadRejected}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              metadatas: $.metadatas
+          side_effects:
+            - kind: external_api
+              target: chroma.get
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+  servers:
+    chroma_rag_requests:
+      address: ${RAG_BIND_HOST:-127.0.0.1}:18085
+      limits_ref: local_rag_requests
+      endpoints:
+        # The scratch ingest (GH-459): the chatbot's harvest workflow is the
+        # only caller, and the floor metadata is this machine's own.
+        ingest:
+          method: POST
+          path: /api/v1/rag/ingest
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [rows]
+              properties:
+                rows: {type: array}
+          machine_request:
+            profile: profile.yaml
+            machine: ingest-machine.yaml
+            timeout: 60s
+            request:
+              body:
+                rows: $.rows
+            response:
+              terminal_states:
+                IngestServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    ingested_ids: $.ingested_ids
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        # The scratch purge (GH-648): the chatbot's reset relay is the only caller; the scope is declared on this side, never accepted from the request.
+        purge_harvest:
+          method: POST
+          path: /api/v1/rag/purge-harvest
+          binding: machine_request
+          request:
+            body_schema: {type: object, properties: {reason: {type: string}}}
+          machine_request:
+            profile: profile.yaml
+            machine: purge-harvest-machine.yaml
+            timeout: 30s
+            request:
+              body:
+                reason: $.reason
+            response:
+              terminal_states:
+                PurgeServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    purged: $.purged
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        query:
+          method: POST
+          path: /api/v1/rag/query
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              # The level is part of the query contract (srd010 R2.1), so a query without one is malformed rather than under-specified and is turned away here before a run starts.
+              required: [query_embeddings, n_results, max_clearance]
+              properties:
+                query_embeddings: {type: array}
+                n_results: {type: integer, minimum: 1}
+                max_clearance: {type: string}
+          machine_request:
+            profile: profile.yaml
+            machine: request-machine.yaml
+            # Contains the machine budget below, which in turn contains the two sequential chroma operations the query leg runs at 10s each.
+            timeout: 30s
+            request:
+              body:
+                query_embeddings: $.query_embeddings
+                n_results: $.n_results
+                max_clearance: $.max_clearance
+            response:
+              terminal_signals:
+                QueryResponded:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    ids: $.mapped.ids
+                    documents: $.mapped.documents
+                    distances: $.mapped.distances
+                    # The chunks' declared metadata, served so the caller can project it into the composed source outcomes (srd016 R3.4).
+                    metadatas: $.mapped.metadatas
+                    embedding_model: ${RAG_EMBEDDING_MODEL:-qwen3-embedding:8b}
+                    # srd010 R2.5.
+                    clearance_enforced_at: $.carried.clearance_enforced_at
+                # srd010 R4.2.
+                ClearanceRefused:
+                  status: 403
+                  content_type: application/json
+                  body:
+                    error: clearance_refused
+                    detail: the request carried no clearance level the declared ordered set recognizes, so no query was issued
+                QueryRejected:
+                  status: 400
+                  content_type: application/json
+                  body:
+                    error: query_rejected
+                    detail: the query embedding was rejected by the collection (for example an embedding-space or dimension mismatch)
+                CommandError:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    stage: $.failure_stage
+                    message: $.message
+                    operation: $.operation
+
+        # The faceted query boundary (srd016 R4).
+        query_faceted:
+          method: POST
+          path: /api/v1/rag/query-faceted
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [query_embeddings, n_results, max_clearance, facet_where, keyword]
+              properties:
+                query_embeddings: {type: array}
+                n_results: {type: integer, minimum: 1}
+                max_clearance: {type: string}
+                facet_where: {type: object}
+                keyword: {type: string}
+          machine_request:
+            profile: profile.yaml
+            machine: query-faceted-machine.yaml
+            timeout: 30s
+            request:
+              body:
+                query_embeddings: $.query_embeddings
+                n_results: $.n_results
+                max_clearance: $.max_clearance
+                facet_where: $.facet_where
+                keyword: $.keyword
+            response:
+              terminal_signals:
+                QueryResponded:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    ids: $.mapped.ids
+                    documents: $.mapped.documents
+                    distances: $.mapped.distances
+                    metadatas: $.mapped.metadatas
+                    embedding_model: ${RAG_EMBEDDING_MODEL:-qwen3-embedding:8b}
+                    # srd010 R2.5, unchanged by faceting: the level reported is what was enforced, and nothing here or anywhere in the faceted path reports a withheld count (srd016 R7.3).
+                    clearance_enforced_at: $.carried.clearance_enforced_at
+                ClearanceRefused:
+                  status: 403
+                  content_type: application/json
+                  body:
+                    error: clearance_refused
+                    detail: the request carried no clearance level the declared ordered set recognizes, so no query was issued
+                QueryRejected:
+                  status: 400
+                  content_type: application/json
+                  body:
+                    error: query_rejected
+                    detail: the query embedding was rejected by the collection (for example an embedding-space or dimension mismatch)
+                CommandError:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    stage: $.failure_stage
+                    message: $.message
+                    operation: $.operation
+
+        # The identifier-in read boundary (srd016 R5.1).
+        documents_by_id:
+          method: POST
+          path: /api/v1/rag/documents
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              # The level is part of the read contract exactly as it is part of the query contract (srd010 R2.1), so a read without one is malformed rather than under-specified and is turned away before a run starts.
+              required: [record_ids, max_clearance]
+              properties:
+                record_ids: {type: array}
+                max_clearance: {type: string}
+          machine_request:
+            profile: profile.yaml
+            machine: document-machine.yaml
+            # The same 30s the query endpoint carries, for the same reason: two sequential chroma operations at 10s each, and an endpoint that expires first turns a slow store into a request timeout carrying none of the machine's account of what happened.
+            timeout: 30s
+            request:
+              body:
+                record_ids: $.record_ids
+                max_clearance: $.max_clearance
+            response:
+              terminal_signals:
+                DocumentsRead:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    ids: $.mapped.ids
+                    documents: $.mapped.documents
+                    # The records' declared metadata, carrying the lineage the interface reconstructs the chunk-to-document relationship from.
+                    metadatas: $.mapped.metadatas
+                    clearance_enforced_at: $.carried.clearance_enforced_at
+                # An identifier the requester is not cleared for is not a refusal -- the filter excludes it and it comes back as an empty id list, which reads as absent (srd016 R5.7).
+                ClearanceRefused:
+                  status: 403
+                  content_type: application/json
+                  body:
+                    error: clearance_refused
+                    detail: the request carried no clearance level the declared ordered set recognizes, so no read was issued
+                ReadRejected:
+                  status: 400
+                  content_type: application/json
+                  body:
+                    error: read_rejected
+                    detail: the collection rejected the read as malformed
+                CommandError:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    stage: $.failure_stage
+                    message: $.message
+                    operation: $.operation
+
+        # The filter-in read boundary.
+        documents_by_filter:
+          method: POST
+          path: /api/v1/rag/documents/query
+          binding: machine_request
+          request:
+            body_schema:
+              # The caller's constraint is required and must carry at least one field.
+              type: object
+              required: [document_filter, max_clearance]
+              properties:
+                document_filter: {type: object, minProperties: 1}
+                max_clearance: {type: string}
+          machine_request:
+            profile: profile.yaml
+            machine: document-filter-machine.yaml
+            timeout: 30s
+            request:
+              body:
+                document_filter: $.document_filter
+                max_clearance: $.max_clearance
+            response:
+              terminal_signals:
+                DocumentsRead:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    ids: $.mapped.ids
+                    documents: $.mapped.documents
+                    metadatas: $.mapped.metadatas
+                    clearance_enforced_at: $.carried.clearance_enforced_at
+                ClearanceRefused:
+                  status: 403
+                  content_type: application/json
+                  body:
+                    error: clearance_refused
+                    detail: the request carried no clearance level the declared ordered set recognizes, so no read was issued
+                ReadRejected:
+                  status: 400
+                  content_type: application/json
+                  body:
+                    error: read_rejected
+                    detail: the collection rejected the read as malformed
+                CommandError:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    stage: $.failure_stage
+                    message: $.message
+                    operation: $.operation
+
+
+    chroma_rag_control:
+      address: ${RAG_BIND_HOST:-127.0.0.1}:18086
+      limits_ref: local_rag_control
+      queue:
+        name: chroma_rag_control
+        capacity: 8
+        timeout: 30s
+      shutdown:
+        timeout: 5s
+        drain_policy: drain_then_stop
+      endpoints:
+        health:
+          method: GET
+          path: /api/lifecycle/health
+          binding: health
+
+    monitor:
+      address: ${RAG_BIND_HOST:-127.0.0.1}:18087
+      limits_ref: local_rag_monitor
+      lifecycle_exit: {disabled: true}
+      queue:
+        name: chroma_rag_monitor
+        capacity: 8
+        overflow: reject
+        timeout: 100ms
+      shutdown:
+        timeout: 2s
+        drain_policy: drain_then_stop
+        stop_listeners: true
+        unblock_await_signal: ServerStopped
+      endpoints:
+        machine_spec:  {method: GET, path: /monitor/machine,       binding: read_state,    monitor_view: machine_spec}
+        # Every declared machine as authored, for the fleet observer's
+        # declared-machines read (srd033, GH-428/GH-431).
+        declared_machines: {method: GET, path: /monitor/machines, binding: read_state, monitor_view: declared_machines}
+        declared_tools: {method: GET, path: /monitor/tools/declared, binding: read_state, monitor_view: declared_tools}
+        current_state: {method: GET, path: /monitor/state,         binding: read_state,    monitor_view: current_state}
+        tools:         {method: GET, path: /monitor/tools,         binding: read_state,    monitor_view: tools}
+        metrics:       {method: GET, path: /monitor/metrics,       binding: read_state,    monitor_view: metrics}
+        recent_events: {method: GET, path: /monitor/events,        binding: read_state,    monitor_view: events}
+        event_stream:  {method: GET, path: /monitor/events/stream, binding: stream_events, monitor_view: events}

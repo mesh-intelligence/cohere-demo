@@ -1,0 +1,23 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: cohere-fallback-declarations-types
+types:
+  - name: DriveChatTurnOutput
+    schema:
+      properties:
+        answer:
+          type: string
+      type: object
+  - name: ProbeOutput
+    description: The probe operation response envelope; the scenario asserts on its status, not its body.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object
+          properties:
+            probe:
+              description: The probe field the mock echoes.

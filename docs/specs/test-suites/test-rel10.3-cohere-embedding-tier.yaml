@@ -1,0 +1,191 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel10.3-cohere-embedding-tier
+title: Test Suite for Release 10.3 Cohere Embedding Tier
+release: "10.3"
+
+traces: [rel10.3-uc001-cohere-embedding-tier]
+
+preconditions:
+  - The rel10.0 Cohere provider is standing, so the declared client, its credential reference, and its egress allowlist already exist and the embedding operation joins them rather than introducing a second client.
+  - Every served collection has been reseeded with the Cohere embedding family before the repoint lands. An unseeded mesh passes the answer assertions and fails the source-survival assertion, which is the ordering this suite exists to enforce.
+  - The live tiers require COHERE_API_KEY exported by the operator. The credential is operator-supplied and gitignored, read by no code in the repository.
+  - The scenario tiers require no credential and no network; their mocks stand where the declared client points, reached by the environment overrides the scenario supplies.
+  - Host Ollama holds the tier-selector and chat models, so the composition path is unchanged from rel10.0 while the embedding path moves.
+
+test_cases:
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The provider's embedding response shape is established against the real API
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A live call to the declared embeddings operation records the structure the response carries, how many results one text yields, and the dimension of the returned vector. This runs before the normalization word is written, so the declaration is authored against an observed shape rather than a read one. No scenario critic can substitute, because a fixture returns whatever shape it declares, so a mock written from the same reading that produced the declaration confirms the declaration against itself.
+    expected:
+      http_status: 200
+      response_shape_recorded: true
+      results_per_text_recorded: true
+      vector_dimension_recorded: true
+      skips_without_credential: true
+      skip_names_variable: COHERE_API_KEY
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S4
+      - srd009-cohere-provider AC2
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The embeddings operation is fixed declared configuration
+    go_test: go test ./magefiles -run '^TestCohereEmbedOperationIsPinned$|^TestCohereEmbedOperationComesFromTheProvidersLibrary$|^TestCohereEmbedOperationRejectsARuntimeAuthority$|^TestCohereEmbedOperationRejectsOneFailureSignal$|^TestCohereEmbedModelIsAnEnvironmentReference$|^TestCohereCredentialAbsentFromShippedProfiles$'
+    status: implemented
+    description: The shipped profile declares the embeddings operation on the existing Cohere client with a fixed method and path, no runtime-supplied authority, failure statuses mapped to distinct signals, and a model identity that is an environment reference rather than a resolved literal. The check reads the profile unexpanded and needs neither credential nor network, so it runs where the live tiers skip.
+    expected:
+      operation_declared: true
+      method_and_path_pinned: true
+      base_url_source_absent: true
+      failure_signals_distinct: true
+      model_is_environment_reference: true
+      credential_literal_absent: true
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S5
+      - srd009-cohere-provider AC1
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The query and document input types are declared distinctly
+    go_test: go test ./magefiles -run '^TestCohereEmbedDeclaresTheQueryInputType$|^TestCohereEmbedInputTypeIsTheQuerySide$|^TestCohereEmbedDocumentOperationIsPinned$|^TestCohereEmbedInputTypesAreTheDeclaredPair$|^TestCohereEmbedInputTypesDiffer$'
+    status: implemented
+    description: The query-side and document-side embedding declarations name different input types. This is a structural assertion over two declarations, not a behavioral one, and it is deliberately weak, because a mismatch produces well-formed vectors of the correct dimension on both sides and degrades only retrieval quality, which no test in this release measures.
+    expected:
+      query_input_type_declared: true
+      document_input_type_declared: true
+      input_types_differ: true
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S5
+      - srd009-cohere-provider AC2
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The normalization yields a flat vector the fan-out accepts
+    integration_target: mage integration:rig
+    status: implemented
+    description: The cohere-embed scenario critic drives a turn against a mock standing where the declared client points, with the mock returning the shape the live tier observed. The critic compares the value reaching the RAG mock's query_embeddings against a known vector, so a normalization that nested, flattened wrongly, or serialized the value fails rather than merely returning something array-shaped.
+    expected:
+      http_status: 200
+      fanout_value_is_flat_numeric_array: true
+      fanout_value_matches_known_vector: true
+      fanout_value_is_serialized_string: false
+      live_network_calls: 0
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S2
+      - srd009-cohere-provider AC2
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The critic fails when the normalization is removed
+    integration_target: mage integration:rig
+    status: implemented
+    description: Removing the normalization word from the chain makes the cohere-embed critic fail. A critic that passes whether or not the word runs is not evidence that the word works, and the assertion above cannot distinguish the two without this check.
+    expected:
+      critic_fails_without_normalizer: true
+      failure_names_the_shape_mismatch: true
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S2
+      - srd009-cohere-provider AC2
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: A malformed vector stops the turn rather than reaching the fan-out
+    integration_target: mage integration:rig
+    status: implemented
+    description: A mock returning more results than the request asked for drives the validation word to reject rather than to pass a malformed value through. The single-result assumption in the normalization is load-bearing, and this is what makes its violation a clean stop instead of a corrupt query vector. The critic reads both mock request logs to place the stop, asserting the embedding endpoint was called once and no source was queried; that the turn ended is not evidence on its own, because every fault before the fan-out ends it the same way and the response reports command_error for all of them.
+    expected:
+      validation_rejects: true
+      malformed_vector_reaches_fanout: false
+      turn_does_not_answer_on_a_corrupt_vector: true
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S2
+      - rel10.3-uc001-cohere-embedding-tier S7
+      - srd009-cohere-provider AC2
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: No source is excluded by the embedding-model comparison
+    integration_target: mage integration:embeddingExclusion
+    status: implemented
+    description: The exclusion proof runs with the query identity set to the Cohere embedding family against sources reporting the same identity, and no source is dropped. The same target with a foreign identity still excludes, so the check proves the comparison is live rather than disabled. This is the release's central assertion and the one an unseeded mesh fails while every other test in this suite passes.
+    expected:
+      matching_source_survives: true
+      foreign_source_excluded: true
+      exclusion_comparison_active: true
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S3
+      - srd009-cohere-provider AC2
+      - srd002-chatbot-agent AC1
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: A tasking is embedded by Cohere and answers from retrieved documents
+    integration_target: mage integration:chatbot
+    status: implemented
+    description: An end-to-end turn across the mesh topology reports the Cohere embeddings operation as the word that computed the query vector, and the answer draws on documents the fan-out retrieved. The document count is asserted rather than the presence of composed sources, because a rag-server bound to an empty collection answers with an empty document list and faults nowhere, so a composed-sources assertion passes on a mesh that retrieved nothing.
+    expected:
+      http_status: 200
+      answer_non_empty: true
+      embedding_word_dispatched: cohere_embeddings_operation
+      retrieved_document_count_non_zero: true
+      ollama_embedding_word_dispatched: false
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S1
+      - rel10.3-uc001-cohere-embedding-tier S3
+      - srd009-cohere-provider AC2
+      - srd002-chatbot-agent AC1
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: An embedding provider failure is distinguishable from an empty retrieval
+    integration_target: mage integration:rig
+    status: implemented
+    description: The cohere-embed-refused scenario refuses the embeddings call with a rate-limit status, and the critic passes only when the turn stopped and the provider was reached. The mock scripts the refusal ahead of a success and repeats its last response, so the critic's own probe reads the refusal back when the turn stopped for some other reason. Both an embedding failure and an empty corpus produce an answerless retrieval, and the probe is what separates them.
+    expected:
+      provider_failure_signal_distinct: true
+      outcome_names_provider_refusal: true
+      indistinguishable_from_empty_retrieval: false
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S7
+      - srd009-cohere-provider AC1
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The Ollama embedding path remains declared and selectable
+    integration_target: mage integration:rig
+    status: implemented
+    description: The Ollama embedding client and its word remain in the shipped profile after the repoint, and the existing single-turn, degraded-rag, cohere-command, and cohere-fallback critics pass unmodified. Their passing is what makes the configuration-choice claim checkable rather than asserted.
+    expected:
+      ollama_embedding_client_declared: true
+      ollama_embedding_word_declared: true
+      existing_critics_verdict: ScenarioPassed
+      existing_scenarios_modified: false
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S6
+      - srd009-cohere-provider AC2
+      - srd009-cohere-provider AC6
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The chart carries the embedding configuration and rejects it when disabled
+    go_test: go test ./magefiles -run '^TestNeitherRestHalfHandWritesAProviderOperation$|^TestChartRendersCohereClientAndSecretReference$|^TestChartOmitsCohereWhenDisabled$|^TestChartAcceptsNoCohereCredentialValue$|^TestChartSchemaRejectsUnknownValues$'
+    status: implemented
+    description: An enabled render declares the embedding model environment alongside the chat model and the co-generated profile carries the embeddings operation, while a disabled render carries none of them. The values schema is closed, so the new value is rejected unless the schema declares it, and no credential value reaches a manifest.
+    expected:
+      enabled_render_declares_embed_model: true
+      enabled_render_declares_embed_operation: true
+      disabled_render_identical: true
+      schema_accepts_embed_model: true
+      credential_value_in_manifests: false
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S5
+      - rel10.3-uc001-cohere-embedding-tier S6
+      - srd009-cohere-provider AC6
+
+  - use_case: rel10.3-uc001-cohere-embedding-tier
+    name: The deployed mesh answers a tasking embedded by Cohere
+    integration_target: mage app:verify
+    status: implemented
+    description: The verification target asserts the deployed turn's query vector came from the Cohere embeddings operation and that the answer drew on retrieved documents, so the release tracer is checked against a real deployment rather than only against the local rig. The retrieved-document assertion carries over from rel09.9 unchanged, for the same reason it was written that way there. The query-side proof reads metadata.query_embedding_model, which the chatbot renders from the same environment reference its embed request body uses; the corpus-side proof is that no source lands in embedding_model_excluded, which is what separates a reseeded mesh from a repointed one.
+    expected:
+      http_status: 200
+      embedding_word_dispatched: cohere_embeddings_operation
+      retrieved_document_count_non_zero: true
+      prior_assertion_unchanged: true
+    traces:
+      - rel10.3-uc001-cohere-embedding-tier S1
+      - rel10.3-uc001-cohere-embedding-tier S3
+      - srd009-cohere-provider AC2

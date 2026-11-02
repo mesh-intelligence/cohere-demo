@@ -1,0 +1,123 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: cohere-embed-malformed-critic
+purpose: |-
+  Critiques the turn's refusal to fan out a malformed query vector. The mock
+  embedding provider returns two rows for one text, which the capture word's
+  item template turns into two concatenated JSON objects, and the validation
+  word rejects.
+
+  This critic passes when the subject breaks, which inverts the usual reading
+  and is the point. A turn that answered here would have queried every source
+  with a vector belonging to no embedding space, retrieved whatever came back,
+  and composed a confident answer over it -- worse than a failed turn, because
+  nothing in the response says the retrieval was meaningless.
+
+  That the turn stopped is not enough to conclude the vector is why. Every
+  fault reachable before the fan-out ends the turn the same way, and the
+  response says only command_error whichever it was, so an outcome-only
+  assertion passes on a run that never embedded anything. The mock request logs
+  settle it: the turn called the embedding endpoint exactly once and never
+  reached rag0, which places the stop between the two -- the window the capture
+  and validation words occupy.
+
+  Each word runs on the way into the state that consumes its output, so a
+  signal decides whether the next read happens at all.
+configuration:
+  machine: machine.yaml
+  tools: tools.yaml
+initial_state: Idle
+budget:
+  command_timeout: 2m
+  max_iterations: 12
+states:
+  - name: Idle
+    meaning: Before the chatbot is driven.
+  - name: Checking
+    meaning: The turn has run; its outcome decides whether the logs are read.
+  - name: ReadingEmbedLog
+    meaning: The embedding mock's request log is being read.
+  - name: AssertingEmbedCall
+    meaning: The recorded embedding call count is being compared against one.
+  - name: ReadingRagLog
+    meaning: The first RAG mock's request log is being read.
+  - name: AssertingRagUntouched
+    meaning: The recorded RAG call count is being compared against zero.
+  - name: Passed
+    run_status: succeeded
+    meaning: Terminal. The turn embedded once, stopped, and never reached the fan-out.
+  - name: Failed
+    run_status: failed
+    meaning: Terminal. The turn answered, never embedded, or carried on into the fan-out.
+terminal_states: [Passed, Failed]
+signals:
+  - name: Seed
+    trigger: Loop initialization.
+  - name: SubjectBroke
+    trigger: The chatbot reported a command error, which is the expected outcome here.
+  - name: SubjectAnswered
+    trigger: The chatbot answered, so the malformed vector was not rejected.
+  - name: EmbedLogRead
+    trigger: The embedding mock returned its recorded requests.
+  - name: EmbedCalledOnce
+    trigger: The mock recorded exactly one request, so the turn reached the provider and stopped there.
+  - name: EmbedCallCountWrong
+    trigger: The mock recorded no request, or more than one, so the turn stopped somewhere else.
+  - name: RagLogRead
+    trigger: The RAG mock returned its recorded requests.
+  - name: RagUntouched
+    trigger: The RAG mock recorded no request, so the malformed vector never reached the fan-out.
+  - name: RagQueried
+    trigger: The RAG mock recorded a request, so the turn carried on past the validation word.
+  - name: CommandError
+    trigger: The chatbot or a mock was unreachable, or a value could not be read.
+transitions:
+  - state: Idle
+    signal: Seed
+    next: Checking
+    action: drive_chat_turn
+  - state: Checking
+    signal: SubjectBroke
+    next: ReadingEmbedLog
+    action: read_embed_request_log
+  - state: Checking
+    signal: SubjectAnswered
+    next: Failed
+  - state: Checking
+    signal: CommandError
+    next: Failed
+  - state: ReadingEmbedLog
+    signal: EmbedLogRead
+    next: AssertingEmbedCall
+    action: assert_embed_called_once
+  - state: ReadingEmbedLog
+    signal: CommandError
+    next: Failed
+  - state: AssertingEmbedCall
+    signal: EmbedCalledOnce
+    next: ReadingRagLog
+    action: read_rag_request_log
+  - state: AssertingEmbedCall
+    signal: EmbedCallCountWrong
+    next: Failed
+  - state: AssertingEmbedCall
+    signal: CommandError
+    next: Failed
+  - state: ReadingRagLog
+    signal: RagLogRead
+    next: AssertingRagUntouched
+    action: assert_rag_untouched
+  - state: ReadingRagLog
+    signal: CommandError
+    next: Failed
+  - state: AssertingRagUntouched
+    signal: RagUntouched
+    next: Passed
+  - state: AssertingRagUntouched
+    signal: RagQueried
+    next: Failed
+  - state: AssertingRagUntouched
+    signal: CommandError
+    next: Failed

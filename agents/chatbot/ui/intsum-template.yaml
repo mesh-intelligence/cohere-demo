@@ -1,0 +1,118 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The ministry INTSUM template, interface representation (srd016 R2).
+#
+# This declares structure and nothing else: no content, no example text, and
+# nothing a renderer owns. ARCHITECTURE decision 12 records that the template
+# lives in three representations -- this one, the markdown structure rel12.2
+# validates, and the LaTeX rel14.0 renders -- and carries the drift risk rather
+# than building a shared abstraction first. This file is the one the form
+# renders from, and it is the artifact rel12.2 derives its structural schema
+# from rather than authoring a second list.
+#
+# Each section declares where its content comes from, because the two sources
+# fail differently. A composed section is prose the provider wrote under a
+# heading; it is absent when the provider omitted the heading. A derived section
+# is assembled from response metadata; it is absent when the turn composed no
+# sources. Declaring the source per section is what lets the form say which of
+# the two happened instead of rendering the same blank for both (srd016 R3.2).
+id: ministry-intsum
+title: Ministry INTSUM Form
+version: "1"
+source_owner: agents/chatbot
+
+sections:
+  - id: classification-banner
+    label: Classification
+    order: 0
+    source: derived
+    derived_from: composed_source_clearance
+    required: true
+
+  - id: header
+    label: Header
+    order: 1
+    source: derived
+    derived_from: turn_context
+    required: true
+    fields:
+      - id: date_time_group
+        label: DTG
+      - id: originator
+        label: Originator
+      - id: tasking
+        label: Tasking
+
+  - id: bluf
+    label: Bottom Line Up Front
+    order: 2
+    source: composed_markdown
+    required: true
+    # The headings a provider may write this section under. Declared rather
+    # than inferred, so a heading the template does not name is reported as
+    # unmatched instead of being guessed into a section (srd012 R1.3). The
+    # composition prompt asks for "Key Judgements" today; the aliases are what
+    # let the form fill from turns the deployment already produces while the
+    # prompt is still to be driven from this artifact (srd012 R1.2).
+    headings:
+      - Bottom Line Up Front
+      - BLUF
+      - Key Judgements
+      - Key Judgments
+
+  - id: threat-activity
+    label: Threat Activity
+    order: 3
+    source: composed_markdown
+    required: true
+    headings:
+      - Threat Activity
+      - Assessment
+      - Supporting Reporting
+
+  - id: source-evaluation
+    label: Source Evaluation
+    order: 4
+    source: derived
+    derived_from: composed_source_admiralty
+    required: true
+    columns:
+      - id: source
+        label: Source
+      - id: classification
+        label: Classification
+      - id: reliability
+        label: Reliability
+      - id: credibility
+        label: Credibility
+
+  - id: gaps
+    label: Gaps
+    order: 5
+    source: composed_markdown
+    required: true
+    headings:
+      - Gaps
+      - Intelligence Gaps
+
+  - id: outlook
+    label: Outlook
+    order: 6
+    source: composed_markdown
+    required: false
+    headings:
+      - Outlook
+      - Assessment Outlook
+
+  - id: citation-index
+    label: Citation Index
+    order: 7
+    source: derived
+    derived_from: response_citations
+    required: true
+    columns:
+      - id: record
+        label: Record
+      - id: assertions
+        label: Assertions

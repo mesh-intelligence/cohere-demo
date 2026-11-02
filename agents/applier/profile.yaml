@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: agent-profile
+schema_version: 1
+name: applier
+machine: ../../catalog/applier/machine.yaml
+tools:
+  - ../../catalog/applier/tools.yaml
+tool_declarations:
+  - ../../catalog/applier/declarations.yaml
+  - /opt/agent-core/tools/builtin/lifecycle/exit-agent.yaml
+rest_definitions:
+  - rest.yaml

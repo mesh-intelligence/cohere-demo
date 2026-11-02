@@ -1,0 +1,39 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The export request's non-exec words: the file write that lands the approved
+# markdown in the workspace. The seed's content and the fixed path arrive
+# through the endpoint's trusted request binding (srd013 R2.3): the document
+# reaches every later binary as this file, and nothing downstream reads the
+# request body again.
+kind: tool-declaration
+schema_version: 1
+unit: exporter-export-declarations
+imports:
+  - export-declarations-types.yaml
+tools:
+  - name: write_brief
+    type: builtin
+    init: file_write
+    category: word
+    visibility: internal
+    description: Write the approved brief markdown to the fixed export workspace path.
+    problem: |
+      The rendering binaries take files, not request bodies (srd013 R2.3).
+      This word is the one place the brief's content leaves the request seed,
+      and the path it lands at is selected by the trusted binding rather than
+      by anything in the document.
+    output:
+      description: Plain-text write confirmation.
+    side_effects:
+      - {kind: filesystem_write, target: workspace_file, description: Creates or replaces the brief markdown the rendering words read.}
+    reversibility: {classification: reversible}
+    undo:
+      strategy: workspace_restore
+      description: Restore the workspace ref captured before the write.
+    errors:
+      - {signal: ToolFailed, condition: The brief cannot be written, message_shape: "write_brief: <error>", state_after_failure: No rendering word runs.}
+    signature:
+      input: builtin.Message<exporter-export-declarations-types.WriteBriefInput>
+      emits:
+        - {signal: ToolDone, message: builtin.Message<builtin.Text>}
+        - {signal: ToolFailed, message: builtin.Message<builtin.Text>}

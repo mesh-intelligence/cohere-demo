@@ -1,0 +1,191 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-harvest-request
+purpose: |-
+  See GH-459: the scratch harvest/ingest workflow. The retrieval tier owns
+  the write and enforces the clearance floor; the next demo seed drops the
+  collection and everything harvested with it.
+
+  The search terms are the Command model's distillation of the query, as on
+  the research turn, with the raw text as the declared fallback. Failed
+  embeds are collected and reported, never ingested; an empty search answers
+  with a zero harvest rather than an error.
+initial_state: AwaitingRequest
+budget:
+  # One search under the engine's authority, one embed per result under the
+  # provider's 60s ceiling, and one relay per declared unit.
+  command_timeout: 3m
+  max_iterations: 32
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted harvest endpoint with the query.}
+  - {name: DeclaringQuestion, meaning: The query is being declared for the derivation and the search to read.}
+  - {name: ComposingSearchTerms, meaning: The search-terms prompt is being composed from the declared query.}
+  - {name: DerivingSearchTerms, meaning: The Command model is distilling the query into one web search.}
+  - {name: ProjectingSearchTerms, meaning: The forced tool call's arguments string is being unwrapped (GH-612).}
+  - {name: ParsingSearchTerms, meaning: The proposed queries are being schema-validated (GH-612).}
+  - {name: FlatteningSearchRows, meaning: The per-query search results are being flattened into one row set (GH-612).}
+  - {name: ScreeningSearchRows, meaning: The flattened rows are being partitioned on snippet presence (GH-612).}
+  - {name: SeedingSearchTerms, meaning: The raw query is standing in as the search terms after a failed derivation.}
+  - {name: Searching, meaning: The declared engine is answering the derived search.}
+  - {name: PartitioningSearchResults, meaning: Rows without a snippet are being split out before anything embeds.}
+  - {name: CheckingResults, meaning: An empty result set routes to a zero harvest rather than an error.}
+  - {name: EmbeddingResults, meaning: One sequential for_each is embedding each result as a search document.}
+  - {name: PartitioningEmbeds, meaning: Entered when the embed fan-out is collected; failed embeds are being split out.}
+  - {name: MarshallingRows, meaning: The embedded results are being rendered and validated as the ingest batch.}
+  - {name: DeclaringTopology, meaning: The trusted RAG topology is being declared for the relay fan-out.}
+  - {name: Ingesting, meaning: One sequential for_each is relaying the batch to each declared unit's ingest surface.}
+  - {name: ComposingResponse, meaning: The harvest receipt is being wrapped for the HTTP reply.}
+  - {name: HarvestServed, meaning: Terminal. The receipt is ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. The search or a boundary word failed before anything could be reported., run_status: failed}
+terminal_states:
+  - HarvestServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The harvest endpoint starts a request-scoped run.}
+  - {name: QuestionDeclared, trigger: The query was declared.}
+  - {name: SearchTermsPromptComposed, trigger: The search-terms prompt was composed.}
+  - {name: LLMResponded, trigger: The Command model returned the distilled search.}
+  - {name: SearchQueriesDeclared, trigger: The raw question was seeded as the one-query fallback (GH-612).}
+  - {name: SearchToolArgumentsProjected, trigger: The forced tool call's arguments string was unwrapped from the provider response (GH-612).}
+  - {name: SearchTermsParsed, trigger: The proposed queries validated against the schema (GH-612).}
+  - {name: ParseFailed, trigger: The tool call's arguments failed schema validation; the fallback seeds one query (GH-612).}
+  - {name: SearchesCollected, trigger: The per-query searches joined (GH-612).}
+  - {name: SearchRowsFlattened, trigger: The per-query result lists flattened into one row set (GH-612).}
+  - {name: SearchResponded, trigger: The engine answered.}
+  - {name: SearchResultsPartitioned, trigger: The snippet-bearing rows were split from the empty ones.}
+  - {name: OsintResultsEmpty, trigger: The search returned nothing to harvest.}
+  - {name: OsintResultsPresent, trigger: Snippet-bearing rows are ready to embed.}
+  - {name: DocumentEmbedded, trigger: A result embedded as a search document.}
+  - {name: ProviderUnauthorized, trigger: The embeddings provider refused the credential.}
+  - {name: ProviderThrottled, trigger: The embeddings provider rate-limited the call.}
+  - {name: ProviderUnavailable, trigger: The embeddings provider was unreachable or failing.}
+  - {name: ProviderRefused, trigger: The embeddings provider endpoint fell outside the client allowlist.}
+  - {name: HarvestEmbedsCollected, trigger: The embed fan-out was collected.}
+  - {name: HarvestEmbedsPartitioned, trigger: Failed embeds were split out.}
+  - {name: HarvestRowsMarshalled, trigger: The ingest batch rendered and validated.}
+  - {name: RagTopologyDeclared, trigger: The trusted topology was declared.}
+  - {name: RowsIngested, trigger: A unit acknowledged the batch.}
+  - {name: IngestFailed, trigger: A unit refused the batch.}
+  - {name: HarvestIngestsCollected, trigger: The relay fan-out was collected.}
+  - {name: HarvestResponseComposed, trigger: The receipt was composed.}
+  - {name: CommandError, trigger: A boundary word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: DeclaringQuestion, action: declare_harvest_question, label: declare_question}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  # The derivation and its fallback, exactly as on the research turn.
+  - {state: DeclaringQuestion, signal: QuestionDeclared, next: ComposingSearchTerms, action: compose_search_terms_prompt}
+  - {state: DeclaringQuestion, signal: CommandError, next: Failed}
+  - {state: ComposingSearchTerms, signal: SearchTermsPromptComposed, next: DerivingSearchTerms, action: derive_search_terms_via_tool, label: search_tool}
+  - {state: ComposingSearchTerms, signal: CommandError, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  - {state: DerivingSearchTerms, signal: LLMResponded, next: ProjectingSearchTerms, action: project_search_terms}
+  - {state: DerivingSearchTerms, signal: ProviderUnauthorized, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  - {state: DerivingSearchTerms, signal: ProviderThrottled, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  - {state: DerivingSearchTerms, signal: ProviderUnavailable, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  - {state: DerivingSearchTerms, signal: CommandError, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  - {state: ProjectingSearchTerms, signal: SearchToolArgumentsProjected, next: ParsingSearchTerms, action: parse_search_terms, label: search_queries}
+  - {state: ProjectingSearchTerms, signal: CommandError, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  # The queries fan (GH-612): one declared search per model-proposed query, the
+  # embed fan's own as/join contract. The item label reuses search_terms so the
+  # declared search operation's input mapping is untouched.
+  - state: ParsingSearchTerms
+    signal: SearchTermsParsed
+    next: Searching
+    action: osint_search
+    label: osint_search
+    for_each:
+      items: $from(search_queries).body.queries
+      as: search_terms
+      mode: sequential
+      failure: collect_all
+      continue_on: [SearchResponded, CommandError]
+      join:
+        next: FlatteningSearchRows
+        label: osint_searches
+        signals:
+          all_success: SearchesCollected
+          partial: SearchesCollected
+          failed: SearchesCollected
+          empty: SearchesCollected
+  - {state: ParsingSearchTerms, signal: ParseFailed, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  - {state: ParsingSearchTerms, signal: CommandError, next: SeedingSearchTerms, action: declare_search_queries_fallback, label: search_queries}
+  - state: SeedingSearchTerms
+    signal: SearchQueriesDeclared
+    next: Searching
+    action: osint_search
+    label: osint_search
+    for_each:
+      items: $from(search_queries).body.queries
+      as: search_terms
+      mode: sequential
+      failure: collect_all
+      continue_on: [SearchResponded, CommandError]
+      join:
+        next: FlatteningSearchRows
+        label: osint_searches
+        signals:
+          all_success: SearchesCollected
+          partial: SearchesCollected
+          failed: SearchesCollected
+          empty: SearchesCollected
+  - {state: SeedingSearchTerms, signal: CommandError, next: Failed}
+  - {state: Searching, signal: CommandError, next: Failed}
+  - {state: FlatteningSearchRows, signal: SearchesCollected, next: PartitioningSearchResults, action: flatten_search_rows, label: search_rows}
+  - {state: FlatteningSearchRows, signal: CommandError, next: Failed}
+  - {state: PartitioningSearchResults, signal: SearchRowsFlattened, next: ScreeningSearchRows, action: partition_search_rows, label: partition_search_results}
+  - {state: PartitioningSearchResults, signal: CommandError, next: Failed}
+  - {state: ScreeningSearchRows, signal: SearchResultsPartitioned, next: CheckingResults, action: check_osint_results}
+  - {state: ScreeningSearchRows, signal: CommandError, next: Failed}
+  # An empty search is a zero harvest, reported as such.
+  - {state: CheckingResults, signal: OsintResultsEmpty, next: ComposingResponse, action: compose_harvest_response, label: harvest_response}
+  - {state: CheckingResults, signal: CommandError, next: Failed}
+  - state: CheckingResults
+    signal: OsintResultsPresent
+    next: EmbeddingResults
+    action: embed_harvest_result
+    label: harvest_embed
+    for_each:
+      items: $from(partition_search_results).body.matched
+      as: harvest_result
+      mode: sequential
+      failure: collect_all
+      continue_on: [DocumentEmbedded, ProviderUnauthorized, ProviderThrottled, ProviderUnavailable, ProviderRefused, CommandError]
+      join:
+        next: PartitioningEmbeds
+        label: harvest_embeds
+        signals:
+          all_success: HarvestEmbedsCollected
+          partial: HarvestEmbedsCollected
+          failed: HarvestEmbedsCollected
+          empty: HarvestEmbedsCollected
+  - {state: EmbeddingResults, signal: CommandError, next: Failed}
+  - {state: PartitioningEmbeds, signal: HarvestEmbedsCollected, next: MarshallingRows, action: partition_harvest_embeds}
+  - {state: PartitioningEmbeds, signal: CommandError, next: Failed}
+  - {state: MarshallingRows, signal: HarvestEmbedsPartitioned, next: DeclaringTopology, action: marshal_harvest_rows}
+  - {state: MarshallingRows, signal: CommandError, next: Failed}
+  - {state: DeclaringTopology, signal: HarvestRowsMarshalled, next: Ingesting, action: declare_rag_topology}
+  - {state: DeclaringTopology, signal: CommandError, next: Failed}
+  - state: Ingesting
+    signal: RagTopologyDeclared
+    next: Ingesting
+    action: rag_ingest
+    label: rag_ingest
+    for_each:
+      items: $from(declare_rag_topology).body.items
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      continue_on: [RowsIngested, IngestFailed, CommandError]
+      join:
+        next: ComposingResponse
+        label: harvest_ingests
+        signals:
+          all_success: HarvestIngestsCollected
+          partial: HarvestIngestsCollected
+          failed: HarvestIngestsCollected
+          empty: HarvestIngestsCollected
+  - {state: Ingesting, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: HarvestIngestsCollected, next: ComposingResponse, action: compose_harvest_response, label: harvest_response}
+  - {state: ComposingResponse, signal: HarvestResponseComposed, next: HarvestServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

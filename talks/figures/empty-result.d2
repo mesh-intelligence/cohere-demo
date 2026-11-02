@@ -1,0 +1,53 @@
+direction: right
+
+vars: {
+  d2-config: {
+    theme-id: 0
+    pad: 6
+  }
+}
+
+classes: {
+  step: {
+    style: {
+      border-radius: 8
+      fill: "#f6f8fb"
+      stroke: "#7a8699"
+      font-size: 19
+    }
+  }
+  model: {
+    style: {
+      border-radius: 8
+      fill: "#f1eafc"
+      stroke: "#7d33f2"
+      font-size: 19
+      font-color: "#4b2d91"
+    }
+  }
+}
+
+(* -> *)[*].style.stroke: "#7a8699"
+
+tasking: Tasking\n"... in\n1968 ..." {
+  shape: page
+  style: {fill: "#fbfcfe"; stroke: "#3d70b8"; font-size: 19}
+}
+propose: Command A\nproposes\n19680101 -\n19681231 {
+  class: model
+}
+retrieve: Faceted\nretrieval finds\nzero chunks\nin the window {
+  class: step
+}
+compose: Command A\ncomposes only\nfrom supplied\ndocuments {
+  class: model
+}
+intsum: “Not available\nin supplied\ndocuments”\nzero claims,\nzero citations {
+  shape: page
+  style: {fill: "#fdf3f3"; stroke: "#b05252"; font-size: 19}
+}
+
+tasking -> propose
+propose -> retrieve
+retrieve -> compose: zero documents {style.font-size: 16}
+compose -> intsum: an honest\nempty {style.font-size: 16}

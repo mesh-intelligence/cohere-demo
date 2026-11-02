@@ -1,0 +1,20 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+unit: mesh-corpus-ingest-embed-rest
+# The document-embedding operation comes from the provider library the profile
+# binds to the embedder root (srd058 R4.2), not the providers root the catalog's
+# file-selection chat reads: a deployment that embeds at Cohere still selects
+# files with its Ollama chat model, so the two rebind separately. The fragment
+# reads the document text and its path from the read_resource Result and carries
+# both forward. The model is the mesh's embedding identity, which the creator
+# sets per ingest so the vectors match the RAG unit that serves them. The
+# endpoint is the library's own, and also its allowlist (srd058 R1.6): the
+# fragment reads no environment, so the chart renders allow arguments for the
+# child's embedder where it differs from the library default.
+expand:
+  - fragment: /opt/embedder/embed-document-fragment.yaml
+    args: {input_selector: $.raw, id_selector: $.path, model: "${CORPUS_EMBEDDING_MODEL:-qwen3-embedding:8b}"}
+rest:
+  version: v1

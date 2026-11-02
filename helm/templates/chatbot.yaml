@@ -1,0 +1,396 @@
+{{/* Copyright (c) 2026 Mesh Intelligence Inc. */}}
+{{/* SPDX-License-Identifier: MIT-0 */}}
+{{- $fullname := include "chatbot-mesh.fullname" . -}}
+{{- $uiArchive := .Values.chatbot.uiArchiveConfigMap | default "" -}}
+{{/*
+The single-page application ships in its own ConfigMap rather than in the shared
+profiles object every agent pod mounts. The bundle was a quarter of that object
+on its own -- more than the three largest declaration files combined -- and only
+the chatbot serves it, so charging it to a shared mount pushed every other agent
+toward the 1 MiB limit for bytes none of them read (GH-131). The observer UI was
+already arranged this way; this repeats it for the chatbot. With
+chatbot.uiArchiveConfigMap set, the bundle instead arrives as a checksum-verified
+out-of-release archive, as the observer and collector UIs do, and neither the
+chart files nor this rendered ConfigMap carry it in the release Secret (GH-309).
+*/}}
+{{- if not $uiArchive }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-chatbot-ui
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chatbot
+data:
+  {{- range $path, $_ := .Files.Glob "profiles/agents/chatbot/ui/app/dist/**" }}
+  {{- $relative := $path | trimPrefix "profiles/agents/chatbot/ui/app/dist/" }}
+  {{ printf "agents__chatbot__ui__app__dist__%s" ($relative | replace "/" "__") }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    mesh.cohere-demo/role: "Serves the analyst chat boundary: embeds the tasking, fans out to the RAG units, calls Cohere for rerank and brief composition, and serves this SPA."
+  name: {{ $fullname }}-chatbot
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chatbot
+spec:
+  replicas: {{ .Values.chatbot.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Keep a Ready replacement behind the Service while the old pod drains
+      # its active machine_request responses (GH-812).
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "chatbot-mesh.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: chatbot
+  template:
+    metadata:
+      labels:
+        {{- include "chatbot-mesh.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: chatbot
+        # The observer's monitor fan-in reads this pod's monitor port from a
+        # label, because a pod's container ports live in an array the
+        # command-state selector grammar cannot address (srd008 R2.1, GH-1319).
+        # The key carries no dot so the dotted selector can reach it.
+        monitorPort: {{ .Values.chatbot.ports.monitor | quote }}
+      annotations:
+        # Roll the chatbot when its co-generated profile ConfigMap changes, so a
+        # values-driven RAG add/remove re-renders the profile and rolls the pod
+        # (srd015 R3.2). The lifecycle hook below drains active request machines
+        # before this pod exits. Repointing a RAG does not touch the ConfigMap,
+        # so it does not roll the chatbot (R3.1).
+        checksum/profiles: {{ include "chatbot-mesh.profilesChecksum" (dict "root" $ "groups" (list "chatbot")) }}
+        {{- if $uiArchive }}
+        checksum/chatbot-ui-archive: {{ required "chatbot.uiArchiveChecksum is required with chatbot.uiArchiveConfigMap" .Values.chatbot.uiArchiveChecksum | quote }}
+        {{- end }}
+    spec:
+      {{- with include "chatbot-mesh.imagePullSecrets" $ }}{{ . | nindent 6 }}{{ end }}
+      # The chat endpoint allows 200 seconds per request (GH-225) and its
+      # declared shutdown allows 205 seconds to drain. Kubernetes must not
+      # SIGKILL the old pod before that contract can finish (GH-812).
+      terminationGracePeriodSeconds: 220
+      {{- if or .Values.validateProfiles .Values.ollama.enabled .Values.dolt.enabled $uiArchive }}
+      initContainers:
+        {{- if $uiArchive }}
+        - name: stage-chatbot-ui
+          image: {{ include "chatbot-mesh.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - >-
+              echo '{{ .Values.chatbot.uiArchiveChecksum }}  /chatbot-ui-src/assets.tgz' |
+              sha256sum -c - &&
+              tar -xzf /chatbot-ui-src/assets.tgz -C /chatbot-ui &&
+              cd /chatbot-ui &&
+              sha256sum -c .inventory.sha256 &&
+              rm .inventory.sha256
+          volumeMounts:
+            - {name: chatbot-ui-source, mountPath: /chatbot-ui-src, readOnly: true}
+            - {name: chatbot-ui, mountPath: /chatbot-ui}
+        {{- end }}
+        {{- if .Values.validateProfiles }}
+        # Fail the rollout before the chatbot serves if the co-generated rest.yaml
+        # is invalid (srd015 R2.2). Validate-only: loads and validates the profile,
+        # machine, and REST definitions, then exits 0/1 without binding servers.
+        - name: validate-config
+          image: {{ include "chatbot-mesh.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--profile"
+            - "{{ .Values.profiles.mountPath }}/agents/chatbot/profile.yaml"
+            {{- include "chatbot-mesh.chatProviderArgs" . | nindent 12 }}
+            - "--validate-config"
+          volumeMounts:
+            - {name: profiles, mountPath: {{ .Values.profiles.mountPath }}, readOnly: true}
+        {{- end }}
+        {{- include "chatbot-mesh.llmReadyInit" . | nindent 8 }}
+        {{- if .Values.dolt.enabled }}
+        # CREATE DATABASE is Dolt's repository-creation operation. Running it
+        # over the SQL service makes initialization independent of the server's
+        # persistent volume layout; IF NOT EXISTS makes pod restarts and Helm
+        # upgrades safe.
+        - name: initialize-dolt-database
+          image: "{{ .Values.dolt.image.repository }}:{{ .Values.dolt.image.tag }}"
+          imagePullPolicy: {{ .Values.dolt.image.pullPolicy }}
+          command: ["dolt"]
+          args:
+            - {{ printf "--host=%s-dolt" $fullname | quote }}
+            - {{ printf "--port=%v" .Values.dolt.port | quote }}
+            - --no-tls
+            - sql
+            - -q
+            - {{ printf "CREATE DATABASE IF NOT EXISTS `%s`" .Values.dolt.database | quote }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: chatbot
+          image: {{ include "chatbot-mesh.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--profile"
+            - "{{ .Values.profiles.mountPath }}/agents/chatbot/profile.yaml"
+            {{- include "chatbot-mesh.chatProviderArgs" . | nindent 12 }}
+            - "--directory"
+            - "{{ .Values.profiles.workMountPath }}"
+            {{- with include "chatbot-mesh.doltDSN" . }}
+            - "--dolt-dsn"
+            - {{ . | quote }}
+            {{- end }}
+            {{- with include "chatbot-mesh.otlpEndpoint" . }}
+            - "--otel-otlp-endpoint"
+            - {{ . | quote }}
+            - "--otel-service-name"
+            - "chatbot"
+            {{- end }}
+            {{- with include "chatbot-mesh.otlpMetricEndpoint" . }}
+            - "--otel-metric-otlp-endpoint"
+            - {{ . | quote }}
+            {{- end }}
+            {{- if and .Values.telemetry .Values.telemetry.capture (ne .Values.telemetry.capture "off") }}
+            - "--telemetry-capture"
+            - {{ .Values.telemetry.capture | quote }}
+            {{- end }}
+          env:
+            {{- with include "chatbot-mesh.integrationResourceAttributes" . }}
+            - {name: OTEL_RESOURCE_ATTRIBUTES, value: {{ . | quote }}}
+            {{- end }}
+            # The staged tool declarations reach the LLM provider through this
+            # reference. The chart co-generates the REST client's base_url, but
+            # the declarations are mounted verbatim, so their localhost default
+            # is correct only where the agent shares a host with Ollama, which a
+            # pod never does (srd013 R5.7, GH-728).
+            - name: OLLAMA_URL
+              value: {{ include "chatbot-mesh.llmURL" . | quote }}
+            # The local profile resolves agents/chatbot/ui/app/dist from the
+            # checkout. In a pod the bundle arrives on its own ConfigMap mounted
+            # beside the profiles projection (GH-131), so the root moves with it.
+            - name: CHATBOT_UI_ROOT
+              value: "/chatbot-ui"
+            # declare_query_model puts the query embedding model identity into
+            # command state for the per-RAG comparison, and it lives in the
+            # verbatim-mounted request declarations. Without this its packaged
+            # default would be compared against a deployment that embedded with a
+            # different model, excluding every source. The co-generated
+            # embed_query request body reads the same value (srd002 R3.3, GH-765).
+            - name: CHATBOT_EMBEDDING_MODEL
+              value: {{ .Values.chatbot.embeddingModel | quote }}
+{{- if .Values.cohere.enabled }}
+            # The Cohere endpoint and the egress allowlist that guards it are
+            # one values-driven pair, so an in-boundary deployment differs from
+            # the hosted endpoint by values alone (srd009 R1.2, R1.4). The
+            # co-generated rest.yaml carries the same four, and the verbatim
+            # declarations read them here.
+            - name: COHERE_BASE_URL
+              value: {{ .Values.cohere.baseURL | quote }}
+            - name: COHERE_HOST
+              value: {{ .Values.cohere.host | quote }}
+            - name: COHERE_SCHEME
+              value: {{ .Values.cohere.scheme | quote }}
+            - name: COHERE_PORT
+              value: {{ .Values.cohere.port | quote }}
+            - name: COHERE_CHAT_MODEL
+              value: {{ .Values.cohere.model | quote }}
+            - name: COHERE_CLASSIFIER_MODEL
+              value: {{ .Values.cohere.classifierModel | quote }}
+            # Read by the verbatim declarations: declare_query_model renders this
+            # identity into command state for the srd002 R3.3 per-source
+            # comparison, and the co-generated rest.yaml sends the same value.
+            - name: COHERE_EMBED_MODEL
+              value: {{ .Values.cohere.embedModel | quote }}
+            # The rerank pass reads both: the model it scores with, and the
+            # composition budget it asks the provider for (srd009 R5.3).
+            - name: COHERE_RERANK_MODEL
+              value: {{ .Values.cohere.rerankModel | quote }}
+            - name: COHERE_RERANK_TOP_N
+              value: {{ .Values.cohere.rerankTopN | quote }}
+            # Referenced, never rendered: the chart accepts a Secret name, not a
+            # credential, so no value reaches a manifest or `helm get values`
+            # (srd009 R1.3).
+            - name: COHERE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cohere.existingSecret | quote }}
+                  key: {{ .Values.cohere.secretKey | quote }}
+{{- end }}
+{{- if and .Values.osint.enabled (eq .Values.osint.engine "serpapi") }}
+            # Referenced, never rendered, exactly as the Cohere credential is.
+            - name: SERPAPI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.osint.serpapi.existingSecret | quote }}
+                  key: {{ .Values.osint.serpapi.secretKey | quote }}
+{{- end }}
+            # The mounted declarations keep local-development defaults, while a
+            # chart deployment selects every required LLM from ollama.models.
+            # With one chat model both answer words use it; with several, the
+            # fast word uses the first and the deep word uses the last.
+            - name: CHATBOT_TIER_MODEL
+              value: {{ .Values.ollama.models.tier | quote }}
+            - name: CHATBOT_FAST_MODEL
+              value: {{ first .Values.ollama.models.chat | quote }}
+            - name: CHATBOT_DEEP_MODEL
+              value: {{ last .Values.ollama.models.chat | quote }}
+          ports:
+            - {name: chat, containerPort: {{ .Values.chatbot.ports.chat }}}
+            - {name: control, containerPort: {{ .Values.chatbot.ports.control }}}
+            - {name: monitor, containerPort: {{ .Values.chatbot.ports.monitor }}}
+          lifecycle:
+            preStop:
+              exec:
+                # Ask the host machine to execute its declared shutdown path,
+                # then keep the preStop hook alive until the process has closed
+                # its control listener. SIGTERM arrives only after this hook.
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    set -eu
+                    base="http://127.0.0.1:{{ .Values.chatbot.ports.control }}/api/lifecycle"
+                    wget -qO- --header='Content-Type: application/json' \
+                      --post-data='{"reason":"kubernetes rollout","status":"success"}' \
+                      "$base/exit" >/dev/null
+                    while wget -qO- "$base/health" >/dev/null 2>&1; do
+                      sleep 1
+                    done
+          readinessProbe:
+            httpGet: {path: /api/lifecycle/health, port: control}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.chatbot.resources | nindent 12 }}
+          volumeMounts:
+            - {name: profiles, mountPath: {{ .Values.profiles.mountPath }}, readOnly: true}
+            # Mounted beside the profiles projection rather than inside it.
+            # Nesting the bundle under the profiles mount needs kubelet to create
+            # a mountpoint within a read-only projection, and the parent
+            # agents/chatbot/ui/app/ no longer exists there once the dist keys are
+            # excluded, so the pod fails to start. CHATBOT_UI_ROOT points here.
+            - {name: chatbot-ui, mountPath: "/chatbot-ui", readOnly: true}
+            - {name: work, mountPath: {{ .Values.profiles.workMountPath }}}
+      volumes:
+        {{- include "chatbot-mesh.profilesVolume" (dict "root" $ "groups" (list "chatbot")) | nindent 8 }}
+        # The ConfigMap keys carry their path flattened with double underscores,
+        # so the items mapping restores the real layout the SPA is served from --
+        # index.html at the root and its bundle under assets/. Without it every
+        # file lands under its flattened key name and the panel 404s.
+        - name: chatbot-ui
+          {{- if $uiArchive }}
+          emptyDir: {}
+        - name: chatbot-ui-source
+          configMap:
+            name: {{ $uiArchive }}
+            items:
+              - {key: assets.tgz, path: assets.tgz}
+          {{- else }}
+          projected:
+            defaultMode: 0444
+            sources:
+              - configMap:
+                  name: {{ $fullname }}-chatbot-ui
+                  items:
+                    {{- range $path, $_ := .Files.Glob "profiles/agents/chatbot/ui/app/dist/**" }}
+                    {{- $relative := $path | trimPrefix "profiles/agents/chatbot/ui/app/dist/" }}
+                    - key: {{ printf "agents__chatbot__ui__app__dist__%s" ($relative | replace "/" "__") }}
+                      path: {{ $relative }}
+                    {{- end }}
+          {{- end }}
+        - name: work
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    mesh.cohere-demo/role: "Serves the analyst chat boundary: embeds the tasking, fans out to the RAG units, calls Cohere for rerank and brief composition, and serves this SPA."
+  name: {{ $fullname }}-chatbot
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chatbot
+spec:
+  selector:
+    {{- include "chatbot-mesh.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: chatbot
+  ports:
+    - {name: chat, port: {{ .Values.chatbot.ports.chat }}, targetPort: chat}
+    - {name: control, port: {{ .Values.chatbot.ports.control }}, targetPort: control}
+    - {name: monitor, port: {{ .Values.chatbot.ports.monitor }}, targetPort: monitor}
+{{- /* On GKE the chatbot's edge is Terraform's (infra/gcp/modules/exposure):
+       a Gateway whose HTTPRoute strips the Google front end and IAP headers,
+       which an Ingress cannot do (#885). The chart renders no Ingress there. */}}
+{{- if and .Values.ingress.enabled (not .Values.ingress.gke.enabled) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}-chatbot
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chatbot
+  {{- $annotations := deepCopy (.Values.ingress.annotations | default dict) }}
+  {{- with $annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          {{- if and .Values.controlPlane.enabled .Values.ingress.expose.provisioning }}
+          # The provisioning panel submits its intent same-origin at /provisioning,
+          # so its POST apply avoids the GET-only monitor_proxy and no call crosses
+          # origin (srd003 R4.1). Matched before / so the chatbot never sees a
+          # provisioning request.
+          #
+          # The backend is the provisioning-workflow-orchestrator, not the applier. Routing browser
+          # traffic at the applier's apply Service was GH-502: the applier
+          # NetworkPolicy admits only creator-labelled pods, so an ingress
+          # controller could never reach it and the shipped route was dead wherever
+          # policy is enforced. The intent now enters at the provisioning-workflow-orchestrator, which
+          # orchestrates the creator, which alone calls the apply surface
+          # (srd003 R4.4, srd004 R1.5, srd006 R4.1).
+          #
+          # Gated on controlPlane rather than applier: without the provisioning-workflow-orchestrator
+          # there is no legitimate provisioning intake, and rendering a route to a
+          # surface the policy blocks is what made the defect invisible.
+          {{- /* ingress.expose.provisioning keeps the control plane internal
+                 where the host is public (#813): the orchestrator still runs,
+                 unrouted. */}}
+          - path: /provisioning
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-provisioning-workflow-orchestrator
+                port: {name: intent}
+          {{- end }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-chatbot
+                port: {name: chat}
+    {{- if and .Values.collector.enabled .Values.ingress.expose.collector }}
+    # The collector's trace query surface, on its own host (srd042).
+    - host: {{ .Values.ingress.collectorHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-collector
+                port: {name: query}
+    {{- end }}
+{{- end }}

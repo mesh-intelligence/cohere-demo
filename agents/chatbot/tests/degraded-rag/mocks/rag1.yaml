@@ -1,0 +1,15 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the second RAG server, same contract as rag0.
+routes:
+  - method: POST
+    path: /api/v1/rag/query
+    responses:
+      - status: 200
+        body:
+          ids: [["rag1-doc-1"]]
+          documents: [["rag1 chunk about the mocks"]]
+          distances: [[0.2]]
+          embedding_model: "embed-v4.0"
+          # The level the rag-server reports the filter ran at (srd010 R2.5).
+          clearance_enforced_at: "unclassified"

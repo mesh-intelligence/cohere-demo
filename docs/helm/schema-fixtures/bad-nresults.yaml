@@ -1,0 +1,5 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# nResults must be >= 1 (MeshView.Validate: params.nResults must be > 0).
+applier:
+  params: {nResults: 0}

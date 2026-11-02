@@ -1,0 +1,125 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The exporter's REST surface (srd013 R1.1, R1.3): one export endpoint over
+# the request-scoped export machine, plus the control and monitor servers
+# every mesh agent runs. This file declares NO clients -- the exporter calls
+# nothing (srd013 R3.1), and the workload's NetworkPolicy denies its egress
+# besides (R3.2). Every listener binds loopback by default and the pod's
+# Service in the cluster; nothing here is an ingress surface (R3.3).
+kind: rest-definition
+schema_version: 1
+rest:
+  version: v1
+  auth:
+    none:
+      type: none
+  limits:
+    local_exporter_export:
+      # Above the export machine's 90s render bound (srd013 R5.4), below the
+      # host budget: a pathological document fails inside the machine, not at
+      # the listener.
+      timeout: 120s
+      read_timeout: 120s
+      # An approved brief is markdown of a few hundred kilobytes at most; the
+      # response carries one base64-encoded PDF.
+      max_request_bytes: 1048576
+      max_response_bytes: 8388608
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18120]
+        allow_public_listener: true
+    local_exporter_control:
+      timeout: 30s
+      read_timeout: 5s
+      max_request_bytes: 16384
+      max_response_bytes: 65536
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18121]
+        allow_public_listener: true
+  servers:
+    exporter_export:
+      # The export boundary (srd013 R1.1): one POST binds one request-scoped
+      # run of the export machine. The body carries the approved,
+      # analyst-edited markdown and nothing else -- no clearance level, no
+      # identity, no authenticated context reaches this agent (R3.5), and
+      # export is the analyst's post-approval act rather than a turn stage
+      # (R4.1, R4.2).
+      address: ${EXPORTER_BIND_HOST:-127.0.0.1}:18120
+      limits_ref: local_exporter_export
+      endpoints:
+        export:
+          method: POST
+          path: /export/api/pdf
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [schema_version, content]
+              properties:
+                schema_version: {type: string}
+                content: {type: string}
+          machine_request:
+            profile: export-profile.yaml
+            # Bounds one write -> convert -> render -> encode cycle; the
+            # machine's own 90s command budget fails a pathological render
+            # first (srd013 R5.4).
+            timeout: 120s
+            request:
+              body:
+                content: $.content
+                # The brief lands at the fixed workspace path. Binding the
+                # path here keeps it trusted configuration: nothing in the
+                # document or the request selects where it is written, and
+                # the rendering words read the same expansion (srd013 R2.3).
+                path: ${EXPORTER_WORK_DIR:-/work}/export/brief.md
+            response:
+              # Keyed by terminal state: every word on the export path emits
+              # only ToolDone or ToolFailed, so signal keying could not
+              # separate the stages (the applier's GH-615 shape).
+              terminal_states:
+                Done:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    schema_version: "1"
+                    status: rendered
+                    # The final word is the encoder, so the last output's
+                    # captured stdout is the complete document (srd013 R1.5).
+                    pdf_base64: $.output
+                # The failing stage and cause live in the trace the server
+                # attaches (terminal signal and trace id resolve to the
+                # failing word's span), not in the body: engine output quotes
+                # the document, and srd013 R5.3 bars retaining brief content
+                # in an error surface apart from the brief itself.
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    schema_version: "1"
+                    status: failed
+                    error: export_failed
+
+    exporter_control:
+      address: ${EXPORTER_BIND_HOST:-127.0.0.1}:18121
+      limits_ref: local_exporter_control
+      queue:
+        name: exporter_control
+        capacity: 8
+        timeout: 30s
+      shutdown:
+        timeout: 5s
+        drain_policy: drain_then_stop
+      endpoints:
+        health:
+          method: GET
+          path: /api/lifecycle/health
+          binding: health
+

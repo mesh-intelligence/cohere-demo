@@ -1,0 +1,87 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chroma-document-request
+purpose: |-
+  One request-scoped read of the document collection by identifier. The
+  machine_request endpoint seeds it with the record identifiers and the
+  requester's maximum clearance. The document collection is create-or-got, the
+  requested level is resolved to its declared at-or-below window and composed
+  into a Chroma metadata filter, and the named records are read under that
+  filter.
+
+  This is the identifier-in boundary that sits beside the vector-in one
+  (srd016 R5.1). It runs the same five clearance words the query machine runs,
+  in the same order, so the two paths cannot disagree about what a level
+  admits -- a filter on one path and not the other is the release undoing
+  rel11.0 while appearing to extend it.
+
+  The filter reaches the store beside the identifiers rather than being applied
+  to what comes back. An identifier the requester is not cleared for is
+  excluded by the store and returns an empty id list, which is what srd016 R5.7
+  requires: absent rather than refused, because a refusal a requester can tell
+  apart from a miss confirms the document exists.
+initial_state: AwaitingRequest
+budget:
+  # The same envelope shape the query machine carries: the endpoint's 30s bound
+  # and the chroma client's 10s limits sit strictly below this. Two sequential
+  # Chroma operations plus the local clearance composition.
+  command_timeout: 1m
+  max_iterations: 12
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted read endpoint with the identifiers and the requested level.}
+  - {name: ResolvingCollection, meaning: Create-or-get the document collection and carry the identifiers and requested level forward.}
+  - {name: DeclaringClearanceWindows, meaning: The declared ordered clearance set is being rendered as one at-or-below window per level.}
+  - {name: DeclaringRequestedClearance, meaning: The requested level is being put into command state as a candidate for the window lookup.}
+  - {name: ResolvingClearance, meaning: The requested level is being matched against the declared set.}
+  - {name: RenderingClearanceWindow, meaning: The one resolved entry is being rendered as an object the filter and the response address by field.}
+  - {name: ComposingClearanceFilter, meaning: The resolved window is being composed into the Chroma metadata where-filter.}
+  - {name: Reading, meaning: Read the named records from the resolved collection under the clearance filter.}
+  - {name: DocumentsRead, meaning: Terminal. The records are ready for the HTTP response., run_status: succeeded}
+  - {name: ReadRejected, meaning: Terminal. Chroma rejected the read as malformed., run_status: failed}
+  - {name: ClearanceRefused, meaning: "Terminal. The requested level is absent or outside the declared set, so no read was issued.", run_status: failed}
+  - {name: Failed, meaning: Terminal. A Chroma boundary word failed., run_status: failed}
+terminal_states:
+  - DocumentsRead
+  - ReadRejected
+  - ClearanceRefused
+  - Failed
+signals:
+  - {name: Seed, trigger: The read endpoint starts a request-scoped run.}
+  - {name: CollectionReady, trigger: The document collection was create-or-got and the read parameters carried forward.}
+  - {name: ClearanceWindowsDeclared, trigger: The declared ordered clearance set was rendered as at-or-below windows.}
+  - {name: RequestedClearanceDeclared, trigger: The requested level was put into command state as a candidate.}
+  - {name: ClearanceResolved, trigger: The requested level matched a declared window.}
+  - {name: ClearanceRefused, trigger: The requested level is absent or outside the declared ordered set.}
+  - {name: ClearanceWindowRendered, trigger: The resolved entry was rendered as an addressable object.}
+  - {name: ClearanceFilterComposed, trigger: The resolved window was composed into the Chroma where-filter.}
+  - {name: DocumentsRead, trigger: Chroma returned the records.}
+  - {name: ReadRejected, trigger: Chroma rejected the read with a client error.}
+  - {name: CommandError, trigger: A Chroma boundary word failed.}
+transitions:
+  - {state: AwaitingRequest,             signal: Seed,                       next: ResolvingCollection,          action: rag_resolve_documents, label: rag_resolve}
+  # Labeled rag_resolve so the shared clearance words read the carried level
+  # through the selector both query machines bind; without it the level never
+  # resolved, every read fail-closed to a refusal, and the boundary was
+  # unusable at any level.
+  - {state: AwaitingRequest,             signal: CommandError,               next: Failed}
+  - {state: ResolvingCollection,         signal: CollectionReady,            next: DeclaringClearanceWindows,    action: declare_clearance_windows}
+  - {state: ResolvingCollection,         signal: CommandError,               next: Failed}
+  - {state: DeclaringClearanceWindows,   signal: ClearanceWindowsDeclared,   next: DeclaringRequestedClearance,  action: declare_requested_clearance}
+  - {state: DeclaringClearanceWindows,   signal: CommandError,               next: Failed}
+  - {state: DeclaringRequestedClearance, signal: RequestedClearanceDeclared, next: ResolvingClearance,           action: resolve_clearance_window}
+  - {state: DeclaringRequestedClearance, signal: CommandError,               next: Failed}
+  # The refusal is its own terminal, as on the query path. A caller has to tell
+  # "this read refused the level" from "this read broke", and only the first
+  # means the boundary is working correctly (srd010 R4.2, R4.3).
+  - {state: ResolvingClearance,          signal: ClearanceResolved,          next: RenderingClearanceWindow,     action: render_clearance_window}
+  - {state: ResolvingClearance,          signal: ClearanceRefused,           next: ClearanceRefused}
+  - {state: ResolvingClearance,          signal: CommandError,               next: Failed}
+  - {state: RenderingClearanceWindow,    signal: ClearanceWindowRendered,    next: ComposingClearanceFilter,     action: compose_clearance_filter}
+  - {state: RenderingClearanceWindow,    signal: CommandError,               next: Failed}
+  - {state: ComposingClearanceFilter,    signal: ClearanceFilterComposed,    next: Reading,                      action: rag_get_documents_by_ids}
+  - {state: ComposingClearanceFilter,    signal: CommandError,               next: Failed}
+  - {state: Reading,                     signal: DocumentsRead,              next: DocumentsRead}
+  - {state: Reading,                     signal: ReadRejected,               next: ReadRejected}
+  - {state: Reading,                     signal: CommandError,               next: Failed}

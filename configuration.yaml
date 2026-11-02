@@ -1,0 +1,75 @@
+# Orchestrator configuration for cohere-demo.
+#
+# cohere-demo has no compiled binary: the deliverable is a mesh of declarative
+# agent profiles plus the Go magefiles that build and verify it. main_package,
+# version_file, and seed_files are therefore empty, and go_source_dirs points at
+# magefiles/ rather than cmd/. cobbler-scaffold tolerates a binary-less project:
+# Build and Install skip when main_package is empty, BuildAll skips when no cmd/
+# exists, and no config validation requires those fields.
+
+project:
+    module_path: github.com/petar-djukic/cohere-demo
+    binary_name: ""
+    binary_dir: bin
+    main_package: ""
+    go_source_dirs:
+        - magefiles/
+    version_file: ""
+    magefiles_dir: magefiles
+    spec_globs: {}
+    context_sources: |
+        docs/VISION.yaml
+        docs/ARCHITECTURE.yaml
+        docs/SPECIFICATIONS.yaml
+        docs/road-map.yaml
+        docs/specs/software-requirements/srd*.yaml
+        docs/specs/use-cases/rel*.yaml
+        docs/specs/test-suites/test-rel*.yaml
+        docs/constitutions/profile-style.yaml
+    context_exclude: |
+        docs/constitutions/design.yaml
+        docs/constitutions/execution.yaml
+        docs/constitutions/go-style.yaml
+        docs/constitutions/interface.yaml
+        docs/constitutions/planning.yaml
+        docs/constitutions/testing.yaml
+        docs/SPECIFICATIONS.yaml
+        docs/prompts/
+        docs/guides/
+    seed_files: {}
+generation:
+    prefix: generation-
+    cycles: 0
+    branch: ""
+    cleanup_dirs: []
+    preserve_sources: true
+cobbler:
+    mode: sdk
+    dir: .cobbler/
+    issues_repo: petar-djukic/cohere-demo
+    beads_dir: ""
+    max_stitch_issues: 0
+    max_stitch_issues_per_cycle: 10
+    max_measure_issues: 1
+    user_prompt: ""
+    measure_prompt: docs/prompts/measure.yaml
+    stitch_prompt: docs/prompts/stitch.yaml
+    planning_constitution: docs/constitutions/planning.yaml
+    execution_constitution: docs/constitutions/execution.yaml
+    design_constitution: docs/constitutions/design.yaml
+    go_style_constitution: docs/constitutions/go-style.yaml
+    estimated_lines_min: 250
+    estimated_lines_max: 350
+    history_dir: history
+claude:
+    args:
+        - --dangerously-skip-permissions
+        - -p
+        - --verbose
+        - --output-format
+        - stream-json
+    silence_agent: true
+    secrets_dir: .secrets
+    default_token_file: claude.json
+    token_file: ""
+    max_time_sec: 300

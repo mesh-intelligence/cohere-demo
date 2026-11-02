@@ -1,0 +1,2097 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-request-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - request-declarations-types.yaml
+tools:
+  - name: embed_query
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Embed the incoming chat message once at the embedding provider.
+    problem: The RAG server is vector-in, so the chatbot must compute the query vector at a provider.
+    goals:
+      - Read the message from the seeded request body and embed it.
+      - Return the message embedding and carry the message text forward.
+    requirements:
+      input:
+        - The message is selected from the seeded request parameters.
+      output:
+        - Output includes the mapped embedding vector and the carried message.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+        - An endpoint outside the client allowlist emits ProviderRefused.
+    non_goals:
+      - Does not author or alter the embedding vector.
+      - Does not accept runtime method, URL, host, or auth overrides.
+    output:
+      description: Mapped message embedding with the carried message.
+    side_effects:
+      - kind: external_api
+        target: ollama.embeddings
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Computing an embedding does not mutate state.
+    # The bound library's query embedder (embed-rest.yaml, srd058 R4.2): Ollama
+    # or Cohere, whichever library the providers root binds.
+    config:
+      rest_ref: query_embedder
+      operation: embed_query
+    signature:
+      input: builtin.Message<chatbot-request-declarations-types.EmbedQueryInput>
+      emits:
+        - {signal: QueryEmbedded, message: builtin.Message<chatbot-request-declarations-types.EmbedQueryOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The Cohere query-embedding chain (srd009 R2.1), and what the request machine dispatches on Seed since rel10.3 repointed the query embedding onto it.
+  - name: embed_query_cohere
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Embed the incoming chat message once at the Cohere embeddings operation.
+    problem: The RAG server is vector-in, and the Cohere model stack embeds through /v2/embed rather than the Ollama legacy endpoint.
+    goals:
+      - Read the message from the seeded request body and embed it as a search query.
+      - Return the embedding rows and carry the message forward under the key the Ollama word already uses.
+    requirements:
+      input:
+        - The message is selected from the seeded request parameters.
+      output:
+        - Output includes the mapped embedding rows and the carried message.
+      errors:
+        - A transport, authentication, or rate-limit failure emits its own provider signal.
+        - An endpoint outside the client allowlist emits ProviderRefused.
+        - Request, egress, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not author or alter the embedding vector.
+      - Does not accept runtime method, URL, host, credential, or model overrides.
+      - Does not replace embed_query, which stays declared and selectable (srd009 R2.3).
+    output:
+      description: Mapped Cohere embedding rows with the carried message.
+    side_effects:
+      - kind: external_api
+        target: cohere.embed
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Computing an embedding does not mutate state.
+    # The same library operation embed_query dispatches (srd058 R4.2); the
+    # providers root the chatbot profiles bind to Cohere selects the provider.
+    config:
+      rest_ref: query_embedder
+      operation: embed_query
+    signature:
+      input: builtin.Message<chatbot-request-declarations-types.EmbedQueryCohereInput>
+      emits:
+        - {signal: QueryEmbedded, message: builtin.Message<chatbot-request-declarations-types.EmbedQueryCohereOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: capture_request
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Capture the seeded request fields under the shared query_embedding label (GH-635).
+    problem: The embed used to run first because its REST carry was the only way request fields entered command state; with the embed moved behind source selection, this word is the intake -- it publishes the same carried shape under the same label, so every carried.* consumer reads on unchanged.
+    goals:
+      - Publish input, max_clearance, facets, reader_clearance_rank, prior_brief, and prior_record_ids exactly where the embed carry used to put them.
+    requirements:
+      input:
+        - Every field is selected from the seeded request body; an absent field renders empty, which the carried.* predicates already treat as absent.
+      output:
+        - A JSON object whose carried field holds the request's declared fields.
+      errors:
+        - Selector failures emit CommandError and the turn fails at intake.
+    non_goals:
+      - Does not embed, validate clearance, or read any header the endpoint did not seed.
+    output: {description: The carried request fields.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Capturing changes no external state.}
+    config:
+      signal: RequestCaptured
+      inputs:
+        # The machine seed nests the request body under parameters
+        # (requestSeed in agent-core); REST previous_result bindings read the
+        # payload directly, which is why the old embed carry never saw this.
+        input: $.message
+        max_clearance: $.max_clearance
+        facets: $.facets
+        reader_clearance_rank: $.reader_clearance_rank
+        prior_brief: $.prior_brief
+        prior_record_ids: $.prior_record_ids
+      template: '{"carried": {"input": {{ json input }}, "max_clearance": {{ json max_clearance }}, "facets": {{ json facets }}, "reader_clearance_rank": {{ json reader_clearance_rank }}, "prior_brief": {{ json prior_brief }}, "prior_record_ids": {{ json prior_record_ids }}}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RequestCaptured, message: builtin.Message<chatbot-request-declarations-types.CaptureRequestOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: capture_query_vector_cohere
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Unwrap the single Cohere embedding row into the flat vector the fan-out sends.
+    problem: |
+      The provider returns embeddings.float as an array of rows, one per text,
+      while the rag client's query_embeddings mapping takes the flat vector the
+      Ollama /api/embeddings response returns directly. Selector paths walk maps
+      only, so the row cannot be indexed in the response mapping.
+    goals:
+      - Render the one row the request asked for as a JSON vector.
+      - Present the Cohere embedding path to the fan-out in the Ollama path's shape.
+    requirements:
+      input:
+        - The embedding rows are selected from the embedding word's result under the query_embedding label.
+      output:
+        - Output is a JSON object whose embedding field is the flat vector.
+      errors:
+        - A rows selector that does not resolve to an array emits CommandError.
+    non_goals:
+      - Does not normalize, truncate, or reduce the vector.
+      - Does not decide which model produced it; declare_query_model does that.
+    output: {description: JSON object carrying the flat query vector.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Unwrapping a vector changes no external state.}
+    config:
+      items: $from(query_vector_call).body.mapped.embedding
+      # The object wrapper sits in the item template rather than in a following compose word.
+      item_template: '{"embedding": {{ json . }}}'
+      separator: ""
+      signal: QueryVectorCaptured
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryVectorCaptured, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: capture_query_vector_ollama
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Present the flat Ollama embedding as the query vector object the fan-out sends.
+    problem: |
+      The two providers do not answer in one shape, which is why swapping the
+      embedding word alone does not switch the tier. Cohere returns
+      embeddings.float as rows and needs the row unwrapped; Ollama returns the
+      vector flat at .embedding and needs only the object wrapper. Rendering
+      each item of a flat vector would emit one object per number, so the Ollama
+      path composes where the Cohere path iterates.
+    goals:
+      - Wrap the flat vector in the object parse_query_vector validates.
+      - Reach that object in the shape the Cohere path produces, so no later word can tell which ran.
+    requirements:
+      input:
+        - The flat vector is selected from the embedding word's mapped output.
+      output:
+        - Output is a JSON object whose embedding field is the flat vector.
+      errors:
+        - A selector that does not resolve emits CommandError.
+    non_goals:
+      - Does not normalize, truncate, or reduce the vector.
+      - Does not decide which model produced it; declare_query_model does that.
+    output: {description: JSON object carrying the flat query vector.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Wrapping a vector changes no external state.}
+    config:
+      signal: QueryVectorCaptured
+      inputs:
+        vector: $from(query_vector_call).body.mapped.embedding
+      template: '{"embedding": {{ json vector }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryVectorCaptured, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_requested_clearance
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Put the clearance the authenticated request context carried into command state.
+    problem: |
+      The level has to reach the fan-out from the request boundary and from
+      nowhere else. Reading it once, here, is what leaves the tier selector, the
+      source selector, the tasking, and the history with no path to it.
+    goals:
+      - Read the level the request context carried, unmodified.
+      - Present it in the shape the level lookup consumes.
+    requirements:
+      input:
+        - The level comes from the carried request context and from no other source.
+      output:
+        - names holds exactly the level the context carried.
+      errors:
+        - Rendering is deterministic; an absent level renders as an unmatchable name.
+    non_goals:
+      - Does not validate, raise, or default the level.
+      - Does not read the tasking text, the history, or any request body field.
+    output:
+      description: The requested level as a candidate array.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring the requested level changes no external state.}
+    config:
+      signal: RequestedClearanceDeclared
+      inputs:
+        # Addressed by label, so this reads whichever embedding word ran and never learns which provider answered -- the same indirection declare_question takes.
+        level: $from(query_embedding).body.carried.max_clearance
+      template: '{"names": [{{ json level }}]}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RequestedClearanceDeclared, message: builtin.Message<chatbot-request-declarations-types.DeclareRequestedClearanceOutput>}
+  - name: declare_clearance_levels
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Declare the ordered clearance set this deployment recognizes.
+    problem: A level the set does not carry must be recognized as unrecognized before it reaches the fan-out.
+    goals:
+      - Declare the totally ordered clearance set as trusted profile configuration.
+      - Carry the lowest level, which is what an absent context clearance falls back to.
+    requirements:
+      input:
+        - The level set is trusted profile configuration, not request or model input.
+      output:
+        - Output carries the declared level names and the lowest of them.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not decide which level applies to a request.
+    output:
+      description: The declared ordered clearance set.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring the level set changes no external state.}
+    config:
+      signal: ClearanceLevelsDeclared
+      inputs: {}
+      # The same ordered set corpus/corpus.yaml declares and the rag-server enforces against (srd010 R1.1).
+      template: |
+        {
+          "names": ["unclassified", "restricted", "confidential", "secret"],
+          "items": [
+            {"level": "unclassified"},
+            {"level": "restricted"},
+            {"level": "confidential"},
+            {"level": "secret"}
+          ]
+        }
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceLevelsDeclared, message: builtin.Message<chatbot-request-declarations-types.DeclareClearanceLevelsOutput>}
+  - name: resolve_analyst_clearance
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Decide whether the context's level is one this deployment declares.
+    problem: |
+      A context carrying no level, or one outside the declared set, must run at
+      the lowest level rather than unrestricted. Membership is the whole check,
+      so both cases land in the same non-matching outcome.
+    goals:
+      - Match the context's level against the declared ordered set.
+      - Send an absent or unrecognized level to the lowest declared level.
+    requirements:
+      input:
+        - Candidates are the context's level; the vocabulary is the declared level set.
+      output:
+        - matched holds the declared level, or the outcome routes to the lowest.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not raise a level, and does not treat an absent one as unrestricted.
+    output:
+      description: The matched declared level.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Resolving a level changes no external state.}
+    config:
+      candidates: $from(declare_requested_clearance).body.names
+      vocabulary: $from(declare_clearance_levels).body.items
+      match_field: level
+      all_matched: ClearanceAccepted
+      # srd010 R4.1.
+      partial: ClearanceDefaulted
+      empty: ClearanceDefaulted
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ClearanceAccepted, message: builtin.Message<chatbot-request-declarations-types.ResolveAnalystClearanceOutput>}
+        - {signal: ClearanceDefaulted, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_analyst_clearance
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the accepted level as an object the fan-out and the response address by field.
+    problem: |
+      The level lookup answers with an array, and command-state selectors walk
+      maps only. Rendering the one matched entry puts the level back on an
+      addressable path.
+    goals:
+      - Carry the accepted level forward under the shared clearance label.
+    requirements:
+      input:
+        - The entry comes from the resolved level and carries the declared name.
+      output:
+        - Output is an object carrying the level the turn runs at.
+      errors:
+        - Rendering is deterministic.
+    non_goals:
+      - Does not choose or widen the level.
+    output:
+      description: The level this turn runs at.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering a level changes no external state.}
+    config:
+      items: $from(resolve_analyst_clearance).body.selected
+      item_template: '{"level": {{ json level }}}'
+      separator: ""
+      signal: AnalystClearanceRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: AnalystClearanceRendered, message: builtin.Message<chatbot-request-declarations-types.AnalystClearance>}
+  - name: declare_lowest_clearance
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Run the turn at the lowest declared level when the context carried none this deployment recognizes.
+    problem: |
+      This is the fail-closed leg. It produces the same shape the accepted leg
+      does, under the same label, so the fan-out binds one selector and cannot
+      tell which leg ran -- which is what keeps the default from being a
+      special case anything downstream has to remember.
+    goals:
+      - Carry the lowest declared level forward under the shared clearance label.
+    requirements:
+      input:
+        - The level is trusted profile configuration.
+      output:
+        - Output is an object carrying the lowest declared level.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not read the request, and does not report why the default applied.
+    output:
+      description: The lowest declared level.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring a level changes no external state.}
+    config:
+      signal: AnalystClearanceRendered
+      inputs: {}
+      # The first entry of the declared ordered set above. Kept in step with it.
+      template: '{"level": "unclassified"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: AnalystClearanceRendered, message: builtin.Message<chatbot-request-declarations-types.AnalystClearance>}
+  - name: declare_question
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Put the tasking text into command state under a provider-neutral name.
+    problem: |
+      The prompts and the fan-out all need the original tasking, and each read it
+      from the embedding word's carried input. That made four words name the
+      embedding provider, so repointing the embed word -- a configuration choice
+      under srd009 R2.3 -- meant editing four selectors across three files that
+      the chart packages verbatim. The tasking is not a fact about the provider,
+      so it is declared here once and read from here everywhere.
+    goals:
+      - Render the tasking as a command-state value no later word has to trace back to a provider.
+      - Leave the capture words the only readers of the embedding response itself.
+    requirements:
+      input:
+        - The tasking is selected from the embedding word's carried input.
+      output:
+        - Output is a JSON object whose question field is the tasking.
+      errors:
+        - A selector that does not resolve emits CommandError.
+    non_goals:
+      - Does not read, normalize, or validate the vector; the capture words do that.
+      - Does not choose the embedding model; declare_query_model does that.
+    output:
+      description: The tasking the turn is answering.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering the tasking changes no external state.}
+    config:
+      signal: QuestionDeclared
+      inputs:
+        # Addressed by label, so this reads whichever embedding word ran, kept deliberately: this is the selector the four downstream words used, so moving it here changes which word resolves it and not whether it resolves.
+        question: $from(query_embedding).body.carried.input
+      # json rather than bare interpolation: a tasking carrying a quote would
+      # otherwise close the string and render malformed JSON.
+      template: |-
+        {"question": {{ json question }}}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QuestionDeclared, message: builtin.Message<chatbot-request-declarations-types.DeclareQuestionOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_query_vector
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Validate the captured query vector into addressable command state.
+    problem: The rag client maps query_embeddings from command state, and a rendered vector reaches the wire as text rather than as an array.
+    goals:
+      - Confirm the captured value is a numeric array before it is fanned out.
+      - Put the vector where the rag operation's input_mapping can address it.
+    requirements:
+      input:
+        - Source is the captured query vector object.
+      output:
+        - Valid output contains embedding as an array of numbers.
+      errors:
+        - A malformed or non-numeric vector emits ParseFailed rather than reaching the fan-out.
+    non_goals:
+      - Does not repair JSON or alter the vector.
+      - Does not check the vector's dimension against the served collections; the srd002 R3.3 comparison does that.
+    output: {description: Validated query vector.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      source: $from(query_vector).$
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          embedding:
+            type: array
+            items: {type: number}
+            minItems: 1
+        required: [embedding]
+      parsed: QueryVectorParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryVectorParsed, message: builtin.Message<chatbot-request-declarations-types.ParseQueryVectorOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_query_model
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Put the query embedding model identity into command state.
+    problem: |
+      srd002 R3.3 excludes a RAG whose reported embedding model does not match the
+      query embedding's model, so the comparison needs the query's model identity as
+      an addressable command-state value. The provider's embed response carries the
+      vector and no model echo, so the identity is the model this agent asks the
+      provider for, declared here from the same environment reference the
+      embed_query_cohere request body uses.
+    goals:
+      - Render the configured query embedding model identity as a command-state value.
+      - Keep the identity addressable as $from(declare_query_model).body.model for each per-RAG comparison.
+    requirements:
+      input:
+        - The identity is configuration, not runtime input; no selector is read.
+      output:
+        - Output is a JSON object whose model field names the query embedding model.
+      errors:
+        - Rendering a configured constant does not fail.
+    non_goals:
+      - Does not call the embedding provider or read the vector.
+      - Does not choose the model the request body sends; both read one environment reference.
+    output:
+      description: The query embedding model identity.
+    side_effects: []
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Rendering a configured constant has no durable effect.
+    config:
+      signal: QueryModelDeclared
+      inputs: {}
+      template: |
+        {"model": "${COHERE_EMBED_MODEL:-embed-v4.0}"}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: QueryModelDeclared, message: builtin.Message<chatbot-request-declarations-types.DeclareQueryModelOutput>}
+  - name: compose_source_selection_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the original question and the human-readable declared source catalog.
+    problem: Source selection must reason over per-turn intent and topology descriptions without exposing trusted targets.
+    goals:
+      - Read the original question and the catalog rendered by the trusted topology declaration.
+      - Expose source names and descriptions to the classifier, but no REST authority or target configuration.
+    requirements:
+      input:
+        - The question comes from declare_question and the catalog comes from declare_rag_topology.
+      output:
+        - Output contains the original question and every declared source name and description.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not select sources or expose base URLs, collections, or embedding configuration.
+    output: {description: Source-classifier input.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Prompt composition changes no external state.}
+    config:
+      signal: SourceSelectionComposed
+      inputs:
+        question: $from(declare_question).body.question
+        catalog: $from(declare_rag_topology).body.catalog
+      template: |-
+        Question:
+        {{ question }}
+
+        Declared source catalog:
+        {{ catalog }}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SourceSelectionComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_sources
+    type: builtin
+    init: invoke_llm
+    visibility: internal
+    category: boundary
+    description: Select declared RAG source names for the original user question.
+    problem: A turn should query only corpora relevant to the question while retaining safe full-fan-out fallback.
+    goals:
+      - Read the original question and rendered source catalog in one classifier message.
+      - Return only a JSON object containing a names array.
+      - Remain independent from the already-tested select_tier classifier contract.
+    requirements:
+      input:
+        - user_prompt_from must read compose_source_selection_prompt.
+        - The prompt contains only source names and descriptions, never target fields.
+      output:
+        - A successful response is passed to parse_source_selection for schema validation.
+      errors:
+        - Provider setup, model discovery, and chat failures emit CommandError for full-set fallback.
+    non_goals:
+      - Does not select a chat-LLM tier, query RAG, or author a URL or endpoint.
+    output:
+      description: Raw source-selector response.
+    side_effects:
+      - {kind: external_api_call, target: llm.chat, description: Classifies the question against declared source descriptions.}
+      - {kind: state_mutation, target: conversation_history, state: appended, description: Appends the source-selector response after success.}
+    reversibility: {classification: reversible, requires_confirmation: false}
+    undo:
+      strategy: conversation_truncate
+      description: Restore conversation history captured before the source-selector call.
+      requires: [conversation_checkpoint]
+    config:
+      # The classifier runs on the light Cohere model: probed against the live API, command-r7b returns the exact {"names":[...]} contract where the flagship rewrote the question (GH-425).
+      model: "${COHERE_CLASSIFIER_MODEL:-command-r7b-12-2024}"
+      dialect: /opt/providers/chat-dialect.yaml
+      provider_url: "${COHERE_BASE_URL:-https://api.cohere.com}"
+      manifest_state: CapturingSourceSelection
+      response_profile: cohere
+      user_prompt_from: "$from(compose_source_selection_prompt)"
+      answer_only: true
+      max_time: 60
+      llm_timeout: 60
+      # This inline system_prompt is the single source of the source-selector
+      # prompt; no external copy exists.
+      system_prompt: |
+        You select which declared RAG sources should be queried for a user's
+        question. The message contains the original question and a catalog of
+        source names with human-readable descriptions.
+
+        Return exactly one JSON object with one field named "names". Its value
+        must be an array of source-name strings. Select every source needed to
+        answer the question; a question spanning corpora may select all sources.
+        Use only names shown in the catalog. Select a source only when its
+        description directly covers the question. Do not include sources merely
+        because they might contain generally useful context. If exactly one
+        description directly covers the question, return exactly that one name.
+
+        Do not answer the question. Do not emit markdown, commentary, tool calls,
+        endpoints, URLs, collections, or configuration. Example:
+        {"names":["rag0"]}
+    signature:
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: wrap_source_selection_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the composed question-and-catalog prompt as the object the tool-call operation selects from.
+    problem: REST input mappings take labeled path selectors only, and the composed prompt is a bare string; the wrapper gives it the one-field object shape the select_sources_tool operation reads (GH-607).
+    goals:
+      - Publish the composed prompt under a prompt field.
+    requirements:
+      input:
+        - The composed prompt is selected whole from compose_source_selection_prompt.
+      output:
+        - A JSON object whose prompt field carries the composed prompt.
+      errors:
+        - Selector failures emit CommandError; the machine degrades to full-set fallback.
+    non_goals:
+      - Does not alter, truncate, or extend the prompt.
+    output: {description: One-field object carrying the composed prompt.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Wrapping changes no external state.}
+    config:
+      signal: SourceSelectionWrapped
+      inputs:
+        # The current-value selector: this word runs immediately after
+        # compose_source_selection_prompt, whose output is the bare prompt
+        # string a labeled path selector cannot address (the
+        # declare_revision_question wrap_question precedent).
+        prompt: $.
+      template: '{"prompt": {{ json prompt }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SourceSelectionWrapped, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_sources_via_tool
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Select declared RAG source names through a forced native tool call (GH-607).
+    problem: A turn should query only corpora relevant to the question, and a prompt-engineered JSON contract is a parse the provider's tool calling makes unnecessary -- the declared select_sources tool's arguments arrive schema-enforced by the API.
+    goals:
+      - Submit the question and rendered source catalog to the declared select_sources_tool chat operation.
+      - Force exactly one tool call whose arguments carry the names array.
+    requirements:
+      input:
+        - The composed question-and-catalog prompt is selected from command state; it contains only source names and descriptions, never target fields.
+      output:
+        - Output is the provider's tool_calls array; project_tool_arguments unwraps the single call's arguments for parse_source_selection.
+      errors:
+        - Provider failures emit their mapped provider signals; the machine degrades to full-set fallback.
+    non_goals:
+      - Does not select a chat-LLM tier, query RAG, or author a URL or endpoint.
+      - Does not run an agentic loop; the tool call is one structured decision at this fixed step.
+    output:
+      description: The provider response's tool_calls array under mapped.
+    side_effects:
+      - {kind: external_api, target: cohere.chat, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Read-only.}
+    config:
+      rest_ref: cohere
+      operation: select_sources_tool
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<chatbot-request-declarations-types.SelectSourcesViaToolOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: project_tool_arguments
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Unwrap the forced tool call's arguments string for schema validation.
+    problem: Selector paths walk maps only, so the single tool call cannot be indexed in the response mapping; the arguments string has to be projected out of the array before parse_source_selection can validate it (the capture_query_vector_cohere precedent).
+    goals:
+      - Render the one tool call's arguments as the raw JSON string the parser expects.
+    requirements:
+      input:
+        - The tool_calls array is selected from the select_sources result.
+      output:
+        - Output is the arguments JSON string of the single forced call.
+      errors:
+        - A selector that does not resolve to an array emits CommandError for full-set fallback.
+    non_goals:
+      - Does not validate the names; parse_source_selection and constrain_source_selection do.
+    output: {description: The tool call's arguments JSON string.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(select_sources_via_tool).body.mapped.tool_calls
+      item_template: '{{ function.arguments }}'
+      separator: ""
+      signal: ToolArgumentsProjected
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ToolArgumentsProjected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_source_selection
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Parse source-classifier output as a names-only JSON object.
+    problem: Model text must be structurally valid before any declared-vocabulary lookup.
+    goals:
+      - Validate exactly the shape used by source selection.
+      - Route malformed or schema-invalid content to full-set fallback.
+    requirements:
+      input:
+        - Source is the classifier response text, read as the previous result.
+      output:
+        - Valid output contains names as an array of strings.
+    non_goals:
+      - Does not repair JSON, trust names, or inspect target data.
+    output: {description: Validated source names.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      source: $.output
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          names:
+            type: array
+            items: {type: string}
+          # Proposed collection tiers (GH-694): optional, enum-fenced so a
+          # hallucinated tier fails the parse into the full-set fallback
+          # rather than blanking retrieval with a filter that matches nothing.
+          source_types:
+            type: array
+            items: {type: string, enum: [humint, osint_assessment, osint_news, sigint_event, sigint_series]}
+          # Proposed reporting window (GH-730): range-fenced YYYYMMDD integers.
+          date_from: {type: integer, minimum: 19000101, maximum: 21001231}
+          date_to: {type: integer, minimum: 19000101, maximum: 21001231}
+        required: [names]
+      parsed: SourcesParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SourcesParsed, message: builtin.Message<chatbot-request-declarations-types.ParseSourceSelectionOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: constrain_source_selection
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Resolve model-selected names only to matching trusted topology entries.
+    problem: Untrusted names must never provide or influence a REST target.
+    goals:
+      - Drop undeclared names.
+      - Return selected entries copied only from the trusted topology vocabulary.
+    requirements:
+      input:
+        - Candidate names are schema-validated model output.
+        - Vocabulary entries are the trusted declared topology.
+      output:
+        - selected contains only trusted topology objects.
+    non_goals:
+      - Does not copy any field from model output except names used for membership checks.
+    output: {description: Trusted selected topology entries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Set selection changes no external state.}
+    config:
+      candidates: $from(parse_source_selection).body.names
+      vocabulary: $from(declare_rag_topology).body.items
+      match_field: name
+      all_matched: SourcesSelected
+      partial: SourcesPartiallySelected
+      empty: SourcesEmpty
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SourcesSelected, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: SourcesPartiallySelected, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: SourcesEmpty, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_all_sources
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: word
+    description: Select every trusted topology entry as the safe source-router fallback.
+    problem: Classifier, parse, empty, and only-undeclared outcomes must preserve prior full fan-out behavior.
+    goals:
+      - Resolve every trusted declared name back to its trusted topology entry.
+      - Produce the same selected shape as constrain_source_selection.
+    requirements:
+      input:
+        - Both names and topology entries come from declare_rag_topology.
+      output:
+        - selected equals the complete declared topology in declaration order.
+    non_goals:
+      - Does not read model output or synthesize target data.
+    output: {description: Complete trusted topology selection.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Set selection changes no external state.}
+    config:
+      candidates: $from(declare_rag_topology).body.names
+      vocabulary: $from(declare_rag_topology).body.items
+      match_field: name
+      all_matched: SourcesSelected
+      partial: SourcesSelected
+      empty: SourcesSelected
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SourcesSelected, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: report_source_selection
+    type: builtin
+    init: select_subset
+    visibility: internal
+    category: response
+    description: Derive declared source names absent from the trusted selected set.
+    problem: Not-selected sources must be distinct from queried sources later excluded or degraded.
+    goals:
+      - Compare all declared names with the constrained matched-name set.
+      - Report only names; do not expose topology target fields.
+    requirements:
+      input:
+        - Candidates are all trusted declared names and vocabulary is the constrained matched-name set.
+      output:
+        - unmatched is the ordered declared-but-not-selected name array.
+    non_goals:
+      - Does not influence retrieval or resolve a target.
+    output: {description: Declared selected and not-selected names.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Reporting changes no external state.}
+    config:
+      candidates: $from(declare_rag_topology).body.names
+      vocabulary: $from(selected_sources).body.matched
+      match_field: name
+      all_matched: SourceSelectionReported
+      partial: SourceSelectionReported
+      empty: SourceSelectionReported
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SourceSelectionReported, message: builtin.Message<builtin-types-collections.SubsetSelection>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_cohere_tier_choice
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Declare the Cohere Command tier as this turn's composition word, deterministically.
+    problem: On a Cohere-provisioned mesh the composition tier is policy, not a per-question judgment -- a classifier chose the local tier on a model's mood, and the brief lost its documents grounding and citations for no stated reason.
+    goals:
+      - Emit the same tool-call envelope select_tier's classifier would, naming invoke_cohere_command, so parse_tier and the $tool dispatch are unchanged.
+      - Make every grounded turn on the Cohere machine compose at the Command tier; the fast and deep words remain reachable as the declared failure fallbacks alone.
+    requirements:
+      output:
+        - The literal tool-call envelope parse_tier validates against the Answering manifest.
+    non_goals:
+      - Does not appear on the Ollama machine variant, whose tier stays classified by select_tier.
+    output:
+      description: The tool-call envelope naming the Cohere composition word.
+    config:
+      signal: LLMResponded
+      template: |-
+        [tool_call]
+        {"tool": "invoke_cohere_command"}
+        [/tool_call]
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: select_tier
+    type: builtin
+    init: invoke_llm
+    visibility: internal
+    category: boundary
+    description: Classify the original user question to one chat-LLM word with a small fast model.
+    problem: The turn must select a chat-LLM word by query difficulty before answering (srd002 R2).
+    goals:
+      - Read the original user question and emit one tool call over the chat-LLM vocabulary.
+      - Use a small fast classifier model so tier selection is cheap relative to the answer.
+      - Keep the tier-selector prompt and model profile-owned.
+    requirements:
+      input:
+        - must read the original question from embed_query through command state
+        - must use the configured small model against local Ollama
+      output:
+        - must emit LLMResponded with a tool call selecting invoke_llm_fast, invoke_llm_deep, or invoke_cohere_command
+        - must emit CommandError for provider setup, model discovery, or chat failures
+      side_effects:
+        - must call local Ollama POST /api/chat
+      undo:
+        - must restore conversation history from the pre-call snapshot
+      errors:
+        - Provider setup, model discovery, and chat failures emit CommandError.
+    non_goals:
+      - Does not answer the user; it only picks the chat-LLM word.
+      - Does not call embedding or RAG endpoints.
+    output:
+      description: Raw tier-selector response text carrying one chat-LLM tool call.
+    side_effects:
+      - kind: external_api_call
+        target: ollama.chat
+        description: Sends the original user question to the configured local classifier model.
+      - kind: state_mutation
+        target: conversation_history
+        state: appended
+        description: Appends the tier-selector response after a successful provider call.
+    reversibility:
+      classification: reversible
+      requires_confirmation: false
+    undo:
+      strategy: conversation_truncate
+      description: Restore conversation history captured before the tier-selector call.
+      requires: [conversation_checkpoint]
+    errors:
+      - signal: CommandError
+        condition: provider configuration is invalid, the model is unavailable, or the model call fails
+        message_shape: 'invoke_llm: <provider/model>: <error>'
+        state_after_failure: conversation history is unchanged unless the provider response was already appended
+    relationships:
+      after:
+        - compose_prompt
+    config:
+      model: "${CHATBOT_TIER_MODEL:-qwen2.5:3b}"
+      dialect: /opt/local/chat-dialect.yaml
+      provider_url: "${OLLAMA_URL:-http://localhost:11434}"
+      # manifest_state is the tool manifest the tier selector selects over and the state parse_tier validates the chosen word against (parse_response's StateFunc tracks the most recent invoke_llm manifest state).
+      manifest_state: Answering
+      response_profile: qwen
+      # Select from the original user question, not the composed grounding prompt
+      # (the grounding wrapper biases a small classifier toward the fast word).
+      user_prompt_from: "$from(declare_question).body.question"
+      max_time: 60
+      llm_timeout: 60
+      # This inline system_prompt is the single source of the classifier
+      # prompt and the chat-LLM word descriptions.
+      system_prompt: |
+        You select one chat-LLM word for a user's question. The user question
+        arrives as the message. Pick exactly one word by what the question asks
+        for:
+
+        - invoke_llm_fast: a small fast model. Use it for short, factual lookups
+          the retrieved chunks answer directly.
+        - invoke_llm_deep: a larger model. Use it for multi-part, analytical, or
+          synthesis questions that reason over several chunks.
+        - invoke_cohere_command: composes a structured command-staff brief. Use it when
+          the question asks for a brief, an assessment, or a written summary
+          across the reporting rather than for an answer to a question.
+
+        Do not answer the question yourself. Emit exactly one tool call and
+        nothing else. For a short factual lookup emit:
+
+        [tool_call]
+        {"tool":"invoke_llm_fast","parameters":{}}
+        [/tool_call]
+
+        For a multi-part, analytical, or synthesis question emit:
+
+        [tool_call]
+        {"tool":"invoke_llm_deep","parameters":{}}
+        [/tool_call]
+
+        For a tasking that asks for a brief or an assessment emit:
+
+        [tool_call]
+        {"tool":"invoke_cohere_command","parameters":{}}
+        [/tool_call]
+    signature:
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_tier
+    type: builtin
+    init: parse_response
+    visibility: internal
+    category: word
+    description: Parse the tier-selector response into one chat-LLM tool call.
+    problem: The $tool dispatch needs one validated chat-LLM word parsed from the tier-selector response.
+    goals:
+      - Extract the single tool call the tier selector emitted.
+      - Emit ToolDone with the chosen chat-LLM word, or ParseFailed on a misparse or out-of-vocabulary pick.
+    requirements:
+      input:
+        - must read the tier-selector response from the previous Result
+        - must validate the chosen tool against the chat-LLM vocabulary available in the Answering manifest state
+      output:
+        - must emit ToolDone with the parsed chat-LLM tool call
+        - must emit ParseFailed when the response is malformed or names an unavailable word
+      errors:
+        - A malformed or out-of-vocabulary response emits ParseFailed so the turn falls back to the default word.
+    non_goals:
+      - Does not call any provider.
+      - Does not answer the user.
+    output:
+      description: Plain-text parsed chat-LLM tool call or completion summary.
+    side_effects: []
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Parsing a response has no durable effect.
+    config:
+      manifest_state: Answering
+      response_profile: qwen
+    signature:
+      emits:
+        - {signal: ToolDone, message: builtin.Message<builtin.Text>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: TaskCompleted, message: builtin.Message<builtin.Text>}
+  - name: invoke_llm_fast
+    type: builtin
+    init: invoke_llm
+    visibility: external
+    category: boundary
+    description: Answer the question over the composed grounding prompt with a small fast model.
+    problem: Short factual questions the chunks answer directly do not need a large model.
+    goals:
+      - Answer grounded in the retrieved chunks, citing the chunk record ids.
+      - Read the composed grounding prompt through command-state $from(compose_prompt).
+      - Serve as the default chat-LLM word on a tier-selector misparse or error.
+    requirements:
+      input:
+        - must read the composed grounding prompt from command state (user_prompt_from)
+        - must use the configured small model against local Ollama
+      output:
+        - must emit LLMResponded when the model returns answer text
+        - must emit CommandError for provider setup, model discovery, or chat failures
+      side_effects:
+        - must call local Ollama POST /api/chat
+      undo:
+        - must restore conversation history from the pre-call snapshot
+      errors:
+        - Provider setup, model discovery, and chat failures emit CommandError.
+    non_goals:
+      - Does not call embedding or RAG endpoints directly.
+      - Does not author or alter the retrieved chunks.
+    output:
+      description: Raw model response text.
+    side_effects:
+      - kind: external_api_call
+        target: ollama.chat
+        description: Sends the composed grounding prompt to the configured local model.
+      - kind: state_mutation
+        target: conversation_history
+        state: appended
+        description: Appends the model response after a successful provider call.
+    reversibility:
+      classification: reversible
+      requires_confirmation: false
+    undo:
+      strategy: conversation_truncate
+      description: Restore conversation history captured before the model call.
+      requires: [conversation_checkpoint]
+    errors:
+      - signal: CommandError
+        condition: provider configuration is invalid, the model is unavailable, or the model call fails
+        message_shape: 'invoke_llm: <provider/model>: <error>'
+        state_after_failure: conversation history is unchanged unless the provider response was already appended
+    relationships:
+      after:
+        - compose_prompt
+        - parse_tier
+    config:
+      model: "${CHATBOT_FAST_MODEL:-qwen2.5:3b}"
+      dialect: /opt/local/chat-dialect.yaml
+      provider_url: "${OLLAMA_URL:-http://localhost:11434}"
+      manifest_state: Answering
+      response_profile: qwen
+      user_prompt_from: "$from(compose_prompt)"
+      answer_only: true
+      max_time: 120
+      llm_timeout: 120
+      system_prompt: |
+        You are a chatbot that answers a user's question using only the corpus
+        chunks retrieved from a RAG server. The user question and the retrieved
+        chunks arrive together in the message as a composed grounding prompt.
+
+        Rules:
+        - Answer only from the retrieved chunks. Do not use outside knowledge.
+        - If the retrieved chunks do not contain the answer, say so plainly.
+        - Cite the chunk identity (the record id) for each claim you make.
+        - Keep the answer concise and grounded; do not speculate beyond the chunks.
+    signature:
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: invoke_llm_deep
+    type: builtin
+    init: invoke_llm
+    visibility: external
+    category: boundary
+    description: Answer the question over the composed grounding prompt with a larger model.
+    problem: Multi-part or analytical questions need a larger model to reason over several chunks.
+    goals:
+      - Answer grounded in the retrieved chunks, citing the chunk record ids.
+      - Read the composed grounding prompt through command-state $from(compose_prompt).
+      - Handle the analytical questions the tier selector sends its way.
+    requirements:
+      input:
+        - must read the composed grounding prompt from command state (user_prompt_from)
+        - must use the configured larger model against local Ollama
+      output:
+        - must emit LLMResponded when the model returns answer text
+        - must emit CommandError for provider setup, model discovery, or chat failures
+      side_effects:
+        - must call local Ollama POST /api/chat
+      undo:
+        - must restore conversation history from the pre-call snapshot
+      errors:
+        - Provider setup, model discovery, and chat failures emit CommandError.
+    non_goals:
+      - Does not call embedding or RAG endpoints directly.
+      - Does not author or alter the retrieved chunks.
+    output:
+      description: Raw model response text.
+    side_effects:
+      - kind: external_api_call
+        target: ollama.chat
+        description: Sends the composed grounding prompt to the configured local model.
+      - kind: state_mutation
+        target: conversation_history
+        state: appended
+        description: Appends the model response after a successful provider call.
+    reversibility:
+      classification: reversible
+      requires_confirmation: false
+    undo:
+      strategy: conversation_truncate
+      description: Restore conversation history captured before the model call.
+      requires: [conversation_checkpoint]
+    errors:
+      - signal: CommandError
+        condition: provider configuration is invalid, the model is unavailable, or the model call fails
+        message_shape: 'invoke_llm: <provider/model>: <error>'
+        state_after_failure: conversation history is unchanged unless the provider response was already appended
+    relationships:
+      after:
+        - compose_prompt
+        - parse_tier
+    config:
+      model: "${CHATBOT_DEEP_MODEL:-ornith:9b}"
+      dialect: /opt/local/chat-dialect.yaml
+      provider_url: "${OLLAMA_URL:-http://localhost:11434}"
+      manifest_state: Answering
+      response_profile: qwen
+      user_prompt_from: "$from(compose_prompt)"
+      answer_only: true
+      max_time: 120
+      llm_timeout: 120
+      system_prompt: |
+        You are a chatbot that answers a user's question using only the corpus
+        chunks retrieved from a RAG server. The user question and the retrieved
+        chunks arrive together in the message as a composed grounding prompt.
+
+        Rules:
+        - Answer only from the retrieved chunks. Do not use outside knowledge.
+        - If the retrieved chunks do not contain the answer, say so plainly.
+        - Cite the chunk identity (the record id) for each claim you make.
+        - Keep the answer concise and grounded; do not speculate beyond the chunks.
+    signature:
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: invoke_cohere_command
+    type: builtin
+    init: rest_client_invoke
+    visibility: external
+    category: boundary
+    description: Compose the command-staff brief with Cohere Command over the retrieved documents.
+    problem: A concatenated prompt string makes attribution a property of the prose; composing over documents makes it a property of the answer.
+    goals:
+      - Send the tasking and the retrieved documents to the Cohere chat operation.
+      - Join the existing chat-LLM words so the tier selector reaches this path through the established $tool indirection.
+      - Return the content blocks and the citation spans for the states that follow.
+    requirements:
+      input:
+        - The tasking is read from the seeded request through command state.
+        - The documents array is read from the validated parse_documents output.
+      output:
+        - Output carries the mapped content blocks, citations, and finish reason.
+        - A provider transport, authentication, or rate-limit failure emits its own signal rather than a generic error.
+      side_effects:
+        - Calls the declared Cohere chat operation and nothing else.
+      undo:
+        - Composing a brief mutates nothing; the operation is read-only at the provider.
+      errors:
+        - A transport, authentication, or rate-limit failure emits its own provider signal; a request, egress, or mapping failure emits CommandError.
+    non_goals:
+      - Does not retrieve, rerank, or alter the retrieved chunks.
+      - Does not accept a runtime method, URL, host, credential, or model override.
+      - Does not surface the citations it returns; the citation chain that follows composition does.
+    output:
+      description: Mapped Cohere chat result carrying content blocks and citation spans.
+    side_effects:
+      - kind: external_api
+        target: cohere.chat
+        state: read_only
+        description: Sends the tasking and the retrieved documents to the configured Cohere chat operation.
+    reversibility:
+      classification: reversible
+      requires_confirmation: false
+    undo:
+      strategy: noop
+      description: Composing a brief changes no external state.
+    errors:
+      - signal: ProviderUnauthorized
+        condition: the credential is absent, malformed, or refused
+        state_after_failure: no brief was composed; the turn falls back to the default chat-LLM word
+      - signal: ProviderThrottled
+        condition: the provider rate-limited the request
+        state_after_failure: no brief was composed; the turn falls back to the default chat-LLM word
+      - signal: ProviderUnavailable
+        condition: the provider returned a server error
+        state_after_failure: no brief was composed; the turn falls back to the default chat-LLM word
+      - signal: CommandError
+        condition: the request could not be built, the host is outside the declared allowlist, or the response did not map
+        state_after_failure: no brief was composed
+    relationships:
+      after:
+        - parse_documents
+        - parse_tier
+    config:
+      rest_ref: cohere
+      operation: compose_brief
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: BriefComposed, message: builtin.Message<chatbot-request-declarations-types.InvokeCohereCommandOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderRejected, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: partition_brief_blocks
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Divide the returned content blocks by type, keeping the text blocks.
+    problem: |
+      The assistant turn is a list of typed content blocks, and not every block
+      carries text: a reasoning model returns a thinking block whose only
+      payload key is thinking, ahead of the text block (measured live
+      2026-08-29). Joining every block through one template faulted on the
+      first thinking block, which is why the chat model was pinned to a
+      non-reasoning one; selecting on type here is what retires that pin as a
+      constraint.
+    goals:
+      - Keep the text blocks, in order, for capture_brief to join.
+      - Preserve the non-text blocks in the unmatched set rather than faulting on them.
+    requirements:
+      input:
+        - The content block array is selected from the invoke_cohere_command result.
+      output:
+        - matched holds the text blocks; unmatched holds every other type.
+      errors:
+        - A block without a type, or an unreadable array, emits CommandError.
+    non_goals:
+      - Does not read, render, or surface the thinking blocks; they are withheld from the response.
+      - Does not edit or re-order the text blocks.
+    output:
+      description: Content blocks divided by type.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      items: $from(invoke_cohere_command).body.mapped.content
+      field: type
+      op: eq
+      right: text
+      operand_type: string
+      satisfied: BriefBlocksPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: BriefBlocksPartitioned, message: builtin.Message<builtin-types-collections.Partition>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: capture_brief
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Join the Cohere content blocks into the answer text the response composes.
+    problem: compose_response reads the previous result whole, and a REST result is a mapped object rather than the text the Ollama words emit.
+    goals:
+      - Concatenate every text block Command returned, in order.
+      - Present the Cohere path and the Ollama path to compose_response in the same shape.
+    requirements:
+      input:
+        - The text blocks are selected from the partition_brief_blocks matched set.
+      output:
+        - Output is the joined brief text.
+      errors:
+        - A block without text emits CommandError.
+    non_goals:
+      - Does not edit, summarize, or re-order the composed brief.
+      - Does not read or resolve the citation spans; flatten_citations and the words after it do.
+    output: {description: Joined brief text.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Joining text changes no external state.}
+    config:
+      # The text blocks alone, already selected by type: partition_brief_blocks runs first, so a reasoning model's thinking block never reaches this template.
+      items: $from(partition_brief_blocks).body.matched
+      item_template: "{{ text }}"
+      separator: ""
+      signal: BriefCaptured
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: BriefCaptured, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_read_request
+    type: builtin
+    # compose, the same way the other declaration words publish trusted values: the runtime's builtin set has no separate declare init, and a request machine registers its tools at request time, so the wrong name here was invisible to the boot smoke and surfaced only when the boundary was first called end to end.
+    init: compose
+    visibility: internal
+    category: response
+    description: Put the seeded read parameters into command state so the fan-out binds them by selector.
+    problem: |
+      The read boundary is dispatched once per declared unit, and every dispatch
+      must bind the same identifiers or the same filter. Reading them from the
+      seeded request inside the loop would let each item see a different value;
+      declaring them once is what makes the fan-out uniform.
+    goals:
+      - Publish the caller's identifiers and filter under one label the fan-out reads.
+      - Carry the seeded level forward for the clearance words, which run after this word and cannot reach the seeded body themselves.
+    requirements:
+      input:
+        - The values come from the trusted read endpoint's seeded body.
+      output:
+        - Output carries the record identifiers, the caller's filter, and the seeded level.
+      errors:
+        - Declaring configured JSON is deterministic.
+    non_goals:
+      - Does not read any record.
+      - Does not derive, validate, or widen the clearance level; it carries what the authenticated header seeded, exactly as the embed words do on the chat turn.
+    output:
+      description: The seeded read parameters.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring request parameters changes no external state.}
+    config:
+      signal: ReadRequestDeclared
+      # The machine seed's body is the mapped request (srd066 R1.2), so a
+      # compose word addresses its fields directly.
+      inputs:
+        record_ids: $.record_ids
+        document_filter: $.document_filter
+        max_clearance: $.max_clearance
+      template: '{"record_ids": {{ json record_ids }}, "document_filter": {{ json document_filter }}, "max_clearance": {{ json max_clearance }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReadRequestDeclared, message: builtin.Message<chatbot-request-declarations-types.DeclareReadRequestOutput>}
+  - name: declare_requested_read_clearance
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Put the read's seeded level into command state as the candidate for the window lookup.
+    problem: |
+      The chat turn's requested-clearance word reads the level off the embed
+      carry, and a document read runs no embed. This is the read machines' leg
+      of the same step, reading the level the read declaration carried, and it
+      runs under the shared declare_requested_clearance label so the words
+      after it bind one selector on both machines.
+    goals:
+      - Publish the seeded level in the shape the window lookup consumes.
+    requirements:
+      input:
+        - The level comes from the read declaration's carry, never from a body field.
+      output:
+        - Output carries the level as a one-entry candidate list.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not validate, raise, or default the level.
+    output:
+      description: The requested level as a candidate list.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring a candidate changes no external state.}
+    config:
+      signal: RequestedClearanceDeclared
+      inputs:
+        level: $from(read_request).body.max_clearance
+      template: '{"names": [{{ json level }}]}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RequestedClearanceDeclared, message: builtin.Message<chatbot-request-declarations-types.DeclareRequestedReadClearanceOutput>}
+  - name: read_documents
+    type: builtin
+    init: rest_client_invoke
+    # Internal like rag_query: machines dispatch it by transition (the document
+    # routes and the chat turn's revision re-grounding, GH-604), never the tier
+    # selector's $tool.
+    visibility: internal
+    category: boundary
+    description: Read the named records from one RAG unit's document boundary.
+    problem: |
+      A citation names a record identifier and the analyst needs the record. The
+      read has to go through this agent because the requester's clearance is
+      established here, at the authenticated request boundary, and a path that
+      goes around it has no authenticated level to enforce (srd010 R3.1).
+    goals:
+      - Read the caller's identifiers from the unit the fan-out is on.
+      - Bind the analyst clearance uniformly across every dispatch.
+    requirements:
+      input:
+        - The address comes from the declared topology item; the level comes from the clearance words.
+      output:
+        - Output includes the records the unit returned and the level it enforced.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not choose which units are read.
+      - Does not accept a clearance level from the request.
+    output:
+      description: One unit's read result.
+    side_effects:
+      - kind: external_api
+        target: rag_server.documents
+        state: read_only
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Reading documents does not mutate state.}
+    config:
+      rest_ref: rag_documents
+      operation: documents
+    signature:
+      input: builtin.Message<chatbot-request-declarations-types.ReadDocumentsInput>
+      emits:
+        - {signal: DocumentsRead, message: builtin.Message<chatbot-request-declarations-types.ReadDocumentsOutput>}
+        - {signal: ReadRejected, message: builtin.Message<builtin.Text>}
+        - {signal: ClearanceRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: read_documents_by_filter
+    type: builtin
+    init: rest_client_invoke
+    category: boundary
+    description: Read the records matching the caller's filter from one RAG unit's document boundary.
+    problem: |
+      Listing a document's versions and querying the corpus by facet carry no
+      identifier, and the unit serves them on a separate boundary because an
+      empty identifier list is not an absent restriction.
+    goals:
+      - Read the matching records from the unit the fan-out is on.
+      - Bind the analyst clearance uniformly across every dispatch.
+    requirements:
+      input:
+        - The address comes from the declared topology item; the level comes from the clearance words.
+      output:
+        - Output includes the records the unit returned and the level it enforced.
+      errors:
+        - Network, timeout, schema, and mapping failures emit CommandError.
+    non_goals:
+      - Does not choose which units are read.
+      - Does not accept a clearance level from the request.
+    output:
+      description: One unit's read result.
+    side_effects:
+      - kind: external_api
+        target: rag_server.documents
+        state: read_only
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Reading documents does not mutate state.}
+    config:
+      rest_ref: rag_documents
+      operation: documents_query
+    signature:
+      input: builtin.Message<chatbot-request-declarations-types.ReadDocumentsByFilterInput>
+      emits:
+        - {signal: DocumentsRead, message: builtin.Message<chatbot-request-declarations-types.ReadDocumentsByFilterOutput>}
+        - {signal: ReadRejected, message: builtin.Message<builtin.Text>}
+        - {signal: ClearanceRefused, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_read_records
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render each unit's read as the served record shape, keeping the mapped response and dropping the join bookkeeping.
+    problem: |
+      A join entry carries its unit's output twice -- the digest string and the
+      structured copy -- beside the topology item it was dispatched to. Served
+      whole, the envelope listing more than doubles, and the in-cluster address
+      rides to the browser. The interface reads one path,
+      result.structured_output.mapped, and this renders exactly that.
+    goals:
+      - Keep each unit's name, outcome signal, and mapped read.
+      - Leave the topology entry, and the address in it, inside the mesh.
+    requirements:
+      input:
+        - The entries are the document-read join.
+      output:
+        - Output is the served record objects, comma separated.
+      errors:
+        - An entry missing the projected fields emits CommandError.
+    non_goals:
+      - Does not filter, reorder, or count the entries.
+    output: {description: Rendered read records.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(document_reads).body.items
+      item_template: '{"name": {{ json input.name }}, "result": {"signal": {{ json result.signal }}, "structured_output": {"mapped": {{ json result.structured_output.mapped }}}}}'
+      separator: ","
+      signal: ReadRecordsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReadRecordsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_read_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Merge the units' read results into one response body naming the level enforced.
+    problem: |
+      The fan-out returns one result per declared unit and the caller gets one
+      response. The merge has to report the level that was enforced and must not
+      report what any unit withheld -- a count of records a requester did not
+      receive maps the corpus they are not cleared to read (srd016 R7.2).
+    goals:
+      - Flatten the units' records into one list.
+      - Report the enforced level as the units reported it.
+    requirements:
+      input:
+        - Records come from the joined fan-out; the level comes from the clearance words.
+      output:
+        - Output carries the records and the enforced level and nothing about what was withheld.
+      errors:
+        - Rendering configured JSON is deterministic.
+    non_goals:
+      - Does not report a withheld count, identifier, or content.
+      - Does not report a matched total beside a returned total, from which a withheld count follows by subtraction (srd016 R7.3).
+    output:
+      description: The merged read response.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Composing a response changes no external state.}
+    config:
+      signal: ReadResponseComposed
+      inputs:
+        # The rendered projections, not the raw join entries: an entry carries its output twice (the digest string and the structured copy) plus the topology it was dispatched to, and merging entries whole more than doubled the envelope listing past any sane listener bound.
+        reads: $from(render_read_records).$
+        level: $from(analyst_clearance).body.level
+      template: '{"records": [{{ reads }}], "clearance_enforced_at": {{ json level }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReadResponseComposed, message: builtin.Message<chatbot-request-declarations-types.ComposeReadResponseOutput>}
+  - name: check_revision_requested
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: word
+    description: Decide whether this turn revises a retained prior draft.
+    problem: A second turn's job is inducing change in the generated document, and whether a prior draft rides the request is a fact the machine should branch on, not a classification (GH-446).
+    goals:
+      - Branch on the carried prior draft's presence and nothing else.
+    requirements:
+      input:
+        - The prior draft is read from the embed carry under the shared query_embedding label.
+      output:
+        - The presence outcome as the predicate's structured output.
+      errors:
+        - An unresolved carry emits CommandError; the machine degrades to the plain turn.
+    non_goals:
+      - Does not read, judge, or alter the draft.
+    output: {description: Predicate outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: A comparison changes nothing.}
+    config:
+      left: $from(query_embedding).body.carried.prior_brief
+      op: empty
+      satisfied: RevisionAbsent
+      unsatisfied: RevisionRequested
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RevisionAbsent, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: RevisionRequested, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: declare_revision_question
+    type: builtin
+    init: pipeline
+    visibility: internal
+    category: word
+    description: Fuse the revision instruction with the retained prior draft under the shared chat_message label.
+    problem: The chat model must see the instruction against the draft it revises, while retrieval, rerank, and source selection keep scoring the bare instruction -- so the fused text stands under its own label and only the prompt consumers read it (GH-446).
+    goals:
+      - Publish the revision question the chat_message consumers read, leaving the declared question untouched.
+    requirements:
+      input:
+        - The instruction is the declared question; the prior draft rides the embed carry.
+      output:
+        - A JSON object whose question field carries the fused revision tasking.
+      errors:
+        - Selector failures emit CommandError; the machine degrades to the plain turn.
+    non_goals:
+      - Does not retrieve, embed, or alter what the rerank scores.
+    output: {description: Fused revision question under the shared label.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: RevisionQuestionDeclared
+      stages:
+        - name: fuse_text
+          init: compose
+          config:
+            signal: RevisionTextComposed
+            inputs:
+              instruction: $from(declare_question).body.question
+              prior_brief: $from(query_embedding).body.carried.prior_brief
+            template: |-
+              Revise the prior intelligence brief according to this instruction.
+              Return the complete revised brief, never only the changed part. Keep
+              everything the instruction does not touch, keep every citation that
+              still applies, and keep these template headings exactly: Bottom Line
+              Up Front, Threat Activity, Gaps, Outlook. Material the instruction
+              adds goes under its own new heading placed among them.
+
+              Instruction:
+              {{ instruction }}
+
+              Prior brief:
+              {{ prior_brief }}
+        - name: wrap_question
+          init: compose
+          config:
+            signal: RevisionQuestionDeclared
+            inputs: {fused: $.}
+            template: '{"question": {{ json fused }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RevisionQuestionDeclared, message: builtin.Message<chatbot-request-declarations-types.DeclareQuestionOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_summary_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Compose the summarization prompt from the seeded document.
+    problem: The /summarize command answers over the document the window holds, so the prompt is composed from the seeded request body alone (GH-448).
+    goals:
+      - Wrap the document with the summarization instruction.
+    requirements:
+      input:
+        - The document is selected from the seeded request parameters.
+      output:
+        - The prompt text the Command model reads.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not retrieve or alter the document.
+    output: {description: Summarization prompt.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: SummaryPromptComposed
+      inputs:
+        # The trusted request input is addressable as the seed entry's parameters (srd030 R3.2); the bare $.document form is the REST-client convention, not compose's.
+        document: $from(seed).body.document
+      template: |-
+        Summarize the following intelligence document for a command-staff
+        reader. Keep the key judgements, name the actors and dates the
+        document names, and stay strictly within what it states -- do not add
+        outside knowledge and do not speculate. Answer as a short paragraph
+        followed by up to five bullet points.
+
+        Document:
+        {{ document }}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SummaryPromptComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: summarize_with_cohere
+    type: builtin
+    init: invoke_llm
+    visibility: internal
+    category: boundary
+    description: Summarize the composed document with the Cohere Command model.
+    problem: The /summarize command exists to show the chat model isolated, so the call carries the composed prompt and nothing else -- no documents mode, no citations (GH-448).
+    goals:
+      - Answer the summarization prompt with the same Command model the brief uses.
+    requirements:
+      input:
+        - The composed prompt is selected from command state.
+      output:
+        - The model's summary text.
+      errors:
+        - Provider configuration, credential, transport, and model failures emit CommandError.
+    non_goals:
+      - Does not compose the brief; invoke_cohere_command stays the brief's word.
+    output: {description: The model's summary text.}
+    side_effects:
+      - {kind: external_api, state: read_only, target: cohere.chat}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Conversation history is request-scoped.}
+    config:
+      dialect: /opt/providers/chat-dialect.yaml
+      provider_url: ${COHERE_BASE_URL:-https://api.cohere.com}
+      model: ${COHERE_CHAT_MODEL:-command-a-03-2025}
+      response_profile: cohere
+      answer_only: true
+      manifest_state: Summarizing
+      user_prompt_from: $from(compose_summary_prompt).$
+      system_prompt: |
+        You summarize intelligence documents. Follow the instruction in the
+        message exactly and answer with the summary alone.
+      max_time: 60
+      llm_timeout: 60
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_summary_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the summary as the /summarize response body.
+    problem: The HTTP reply needs one JSON object carrying the summary text (GH-448).
+    goals:
+      - Compose the summary under the key the endpoint maps.
+    requirements:
+      input:
+        - The summary is the previous result.
+      output:
+        - The response body the summarize endpoint maps.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not judge or trim the summary.
+    output: {description: Summarize response body.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: SummaryResponseComposed
+      inputs:
+        summary: $.
+      template: '{"summary": {{ json summary }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SummaryResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_audit_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Compose the judge prompt from the seeded claim and document.
+    problem: The /audit command verifies one cited span against the chunk it cites, so the prompt carries both seeded texts and nothing else (GH-543).
+    goals:
+      - Wrap the claim and document with the scoring instruction.
+    requirements:
+      input:
+        - The claim and document are selected from the seeded request parameters.
+      output:
+        - The prompt text the judge reads.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not retrieve or alter either text.
+    output: {description: Judge prompt.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: AuditPromptComposed
+      inputs:
+        claim: $from(seed).body.summary
+        document: $from(seed).body.document
+      template: |-
+        Does the document support this statement? Rate 1 to 10: 10 means
+        the document fully supports every element of the statement, 1 means
+        the document contradicts it or does not mention it. If any number,
+        date, or place in the statement conflicts with the document, score 3
+        or lower. The statement is not a summary — omissions are not errors;
+        judge support only, and only against the document. Reply with the
+        number first, then one short reason.
+
+        Statement:
+        {{ claim }}
+
+        Document:
+        {{ document }}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: AuditPromptComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: judge_with_cohere
+    type: builtin
+    init: invoke_llm
+    visibility: internal
+    category: boundary
+    description: Score the claim against its document with the Cohere classifier tier.
+    problem: The audit's judge must be a different, cheaper call than the model that composed the brief, so the classifier tier scores it (GH-543).
+    goals:
+      - Answer the judge prompt with a 1-10 verdict and one reason.
+    requirements:
+      input:
+        - The composed judge prompt is selected from command state.
+      output:
+        - The model's verdict text.
+      errors:
+        - Provider configuration, credential, transport, and model failures emit CommandError.
+    non_goals:
+      - Does not compose or revise the brief.
+    output: {description: The verdict text.}
+    side_effects:
+      - {kind: external_api, state: read_only, target: cohere.chat}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Conversation history is request-scoped.}
+    config:
+      dialect: /opt/providers/chat-dialect.yaml
+      provider_url: ${COHERE_BASE_URL:-https://api.cohere.com}
+      model: ${COHERE_CLASSIFIER_MODEL:-command-r7b-12-2024}
+      response_profile: cohere
+      answer_only: true
+      manifest_state: Judging
+      user_prompt_from: $from(compose_audit_prompt).$
+      system_prompt: |
+        You verify summaries against documents. Follow the instruction in
+        the message exactly and answer with the score and reason alone.
+      max_time: 45
+      llm_timeout: 45
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_audit_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the verdict as the /audit response body.
+    problem: The endpoint maps the terminal output to JSON, so the verdict must arrive as one JSON document (GH-543).
+    goals:
+      - Publish the verdict under the response label.
+    requirements:
+      input:
+        - The verdict is selected from the judge's label.
+      output:
+        - One JSON object carrying the verdict.
+      errors:
+        - Selector failures emit CommandError.
+    non_goals:
+      - Does not judge or alter the verdict.
+    output: {description: Response body.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: AuditResponseComposed
+      inputs:
+        verdict: $from(audit_verdict).$
+      template: '{"verdict": {{ json verdict }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: AuditResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_translate_prompt
+    type: builtin
+    init: compose
+    visibility: internal
+    category: word
+    description: Render the segments and target language as the translation tool-call prompt.
+    problem: See the endpoint header (GH-670).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: Translation prompt.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: TranslatePromptComposed
+      inputs:
+        segments: $.segments
+        language: $.language
+      template: |-
+        Translate every segment into {{ language }}. Segments, as a JSON
+        array in order:
+
+        {{ json segments }}
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: TranslatePromptComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: translate_segments_via_tool
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Ask the flagship for one translation per segment via the forced tool call.
+    problem: See the endpoint header (GH-670).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Mapped provider signals.]
+    non_goals: [None.]
+    output:
+      description: The provider response's tool_calls array under mapped.
+    side_effects:
+      - {kind: external_api, target: cohere.chat, state: read_only}
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Read-only.}
+    config:
+      rest_ref: cohere
+      operation: translate_segments_tool
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: LLMResponded, message: builtin.Message<chatbot-request-declarations-types.TranslateSegmentsViaToolOutput>}
+        - {signal: ProviderUnauthorized, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderThrottled, message: builtin.Message<builtin.Text>}
+        - {signal: ProviderUnavailable, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: project_translations
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: word
+    description: Project the tool call's arguments to one JSON string.
+    problem: See the endpoint header (GH-670).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: The tool call's arguments JSON string.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      items: $from(translate_tool).body.mapped.tool_calls
+      item_template: '{{ function.arguments }}'
+      separator: ""
+      signal: TranslateArgumentsProjected
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: TranslateArgumentsProjected, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: parse_translations
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Validate the tool arguments against the translations schema.
+    problem: See the endpoint header (GH-670).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [ParseFailed on schema.]
+    non_goals: [None.]
+    output: {description: Validated translations object.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      source: $.output
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          translations:
+            type: array
+            minItems: 1
+            maxItems: 80
+            items: {type: string}
+        required: [translations]
+      parsed: TranslationsParsed
+      unparsed: ParseFailed
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: TranslationsParsed, message: builtin.Message<chatbot-request-declarations-types.ParseTranslationsOutput>}
+        - {signal: ParseFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_translate_response
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the translations as the HTTP reply.
+    problem: See the endpoint header (GH-670).
+    goals:
+      - Do the one step the description states.
+    requirements:
+      input: [Command state.]
+      output: [Per description.]
+      errors: [Declared error signal.]
+    non_goals: [None.]
+    output: {description: As described.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Pure.}
+    config:
+      signal: TranslateResponseComposed
+      inputs:
+        translations: $from(parse_translations).body.translations
+      template: '{"translations": {{ json translations }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: TranslateResponseComposed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

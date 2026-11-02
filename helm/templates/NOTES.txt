@@ -1,0 +1,17 @@
+{{ include "chatbot-mesh.fullname" . }} is deployed.
+
+Topology:
+  - chatbot          Deployment + Service{{ if .Values.ingress.enabled }} + Ingress ({{ .Values.ingress.host }}){{ end }}
+  - RAG units        {{ range .Values.ragUnits }}{{ .name }} ({{ .collection }}) {{ end }}
+                     each a rag-server Deployment/Service + a Chroma StatefulSet/Service
+  - LLM              {{ if .Values.ollama.enabled }}in-cluster Ollama (LLM tier){{ else }}external: {{ .Values.llm.externalURL }}{{ end }}
+  - Dolt             {{ if .Values.dolt.enabled }}enabled{{ else }}disabled{{ end }}
+  - collector        {{ if .Values.collector.enabled }}enabled (OTLP :{{ .Values.collector.otlpGRPCPort }}){{ else }}disabled{{ end }}
+
+Reach the chat UI:
+  kubectl port-forward svc/{{ include "chatbot-mesh.fullname" . }}-chatbot {{ .Values.chatbot.ports.chat }}:{{ .Values.chatbot.ports.chat }}
+  open http://127.0.0.1:{{ .Values.chatbot.ports.chat }}/ui/
+
+Add or remove a RAG source by editing the ragUnits values and re-running helm
+upgrade. Co-generation rolls the chatbot; the old pod drains active turns before
+exit and the replacement serves subsequent turns.

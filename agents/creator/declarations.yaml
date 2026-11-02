@@ -1,0 +1,82 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The creator serving lifecycle, one instantiation of the agent-core fragment,
+# plus the monitor pair this repository still writes out: the fragment for the
+# pair lives in chatbot-mesh, which a consumer cannot reach.
+kind: tool-declaration
+schema_version: 1
+unit: cohere-creator-declarations
+imports:
+  - /opt/agent-core/tools/units/types-core.yaml
+  - /opt/agent-core/tools/units/types-server.yaml
+expand:
+  - fragment: /opt/agent-core/tools/units/serve-lifecycle-declarations-fragment.yaml
+    args:
+      agent: "creator"
+      launch_requests: launch_creator_requests
+      launch_control: launch_creator_control
+      await_control: await_creator_control
+      stop_requests: stop_creator_requests
+      requests_rest_ref: creator_instance
+      control_rest_ref: creator_control
+      requests_noun: instance
+      requests_purpose: for instance operations
+tools:
+  - name: launch_monitor_rest
+    type: builtin
+    init: rest_server_launch
+    visibility: internal
+    category: boundary
+    description: Launch read-only REST endpoints for cached monitor state.
+    signature:
+      input: builtin.Message<builtin-types-core.NoParameters>
+      emits:
+        - {signal: ServerLaunched, message: builtin.Message<builtin-types-server.ServerLaunch>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+    output:
+      description: Monitor REST server launch result.
+    side_effects:
+      - kind: network_listen
+        target: monitor_rest_server
+        state: listener_started
+    reversibility:
+      classification: compensatable
+    undo:
+      strategy: compensating_action
+      description: Stop the monitor REST server if the launch owns the listener.
+    errors:
+      - signal: CommandError
+        condition: Monitor REST server config, bind, route, or schema failure.
+        state_after_failure: No monitor route is exposed.
+    config:
+      rest_ref: monitor
+  - name: stop_monitor_rest
+    type: builtin
+    init: rest_server_stop
+    visibility: internal
+    category: boundary
+    description: Stop the owned monitor REST listener.
+    signature:
+      input: builtin.Message<builtin-types-core.NoParameters>
+      emits:
+        - {signal: ServerStopped, message: builtin.Message<builtin-types-server.ServerStop>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+    output:
+      description: Monitor REST server stop result.
+    side_effects:
+      - kind: network_listener_shutdown
+        target: monitor_rest_server
+        state: listener_stopped
+    reversibility:
+      classification: compensatable
+    undo:
+      strategy: server_shutdown_or_user_action_compensation
+      description: The receipt records shutdown loss; MachineSpec must relaunch the trusted monitor definition.
+      payload: boundary_compensation
+      captures: [server, address, drained_events, dropped_events, relaunch_requirement]
+    errors:
+      - signal: CommandError
+        condition: Monitor REST server is missing, shutdown times out, or cleanup fails.
+        state_after_failure: Monitor listener state may be partially stopped.
+    config:
+      rest_ref: monitor

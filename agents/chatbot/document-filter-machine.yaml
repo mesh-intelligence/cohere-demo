@@ -1,0 +1,113 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-document-filter-request
+purpose: |-
+  One request-scoped read of the corpus by metadata filter, served from the
+  browser's own origin. This is how a document's other chunk-size versions and
+  a faceted corpus listing are reached.
+
+  It runs document-machine.yaml's sequence exactly -- the clearance resolution,
+  the topology declaration, and the fan-out over every declared unit -- and
+  differs in one action: the read it dispatches carries the caller's filter
+  instead of identifiers.
+
+  That machine states why the read goes through this agent rather than straight
+  to the retrieval tier: the analyst's clearance is established here, at the
+  authenticated request boundary (srd010 R3.1), and a browser calling a unit
+  directly would supply a level it chose itself. It also states why the fan-out
+  covers every declared unit rather than a selected subset.
+initial_state: AwaitingRequest
+budget:
+  # One clearance resolution and one sequential fan-out of reads. The endpoint
+  # bound below sits under this, as on the chat turn.
+  command_timeout: 1m
+  max_iterations: 16
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted read endpoint with the caller filter and the requested level.}
+  - {name: DeclaringReadRequest, meaning: The seeded filter is being put into command state for the fan-out to bind.}
+  - {name: DeclaringRequestedClearance, meaning: The requested level is being put into command state as a candidate.}
+  - {name: DeclaringClearanceLevels, meaning: The declared ordered clearance set is being published.}
+  - {name: ResolvingAnalystClearance, meaning: The requested level is being matched against the declared set.}
+  - {name: DeclaringAnalystClearance, meaning: The level this read runs at is being published under the shared label.}
+  - {name: DeclaringTopology, meaning: The trusted RAG topology is being declared.}
+  - {name: Reading, meaning: One sequential for_each is querying every declared unit's document filter boundary.}
+  - {name: MergingReads, meaning: Entered when the fan-out join is collected; each unit's read is rendered as the served record shape here.}
+  - {name: RenderingReads, meaning: The rendered records are being merged into the response body.}
+  - {name: ComposingResponse, meaning: The merged response is being rendered for the HTTP reply.}
+  - {name: ReadServed, meaning: Terminal. The records are ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. A boundary word failed before any read was dispatched., run_status: failed}
+terminal_states:
+  - ReadServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The read endpoint starts a request-scoped run.}
+  - {name: ReadRequestDeclared, trigger: The seeded read parameters were put into command state.}
+  - {name: RequestedClearanceDeclared, trigger: The requested level was put into command state as a candidate.}
+  - {name: ClearanceLevelsDeclared, trigger: The declared ordered clearance set was published.}
+  - {name: ClearanceAccepted, trigger: The requested level matched the declared set.}
+  - {name: ClearanceDefaulted, trigger: The request carried no level the declared set recognizes.}
+  - {name: AnalystClearanceRendered, trigger: The level this read runs at was published.}
+  - {name: RagTopologyDeclared, trigger: The trusted topology was declared.}
+  - {name: DocumentsRead, trigger: A unit returned its records.}
+  - {name: ReadRejected, trigger: A unit rejected the read as malformed.}
+  - {name: ClearanceRefused, trigger: A unit refused the level.}
+  - {name: DocumentReadsCollected, trigger: The fan-out join over every declared unit was collected.}
+  - {name: ReadRecordsRendered, trigger: Each unit's read was rendered as the served record shape.}
+  - {name: ReadResponseComposed, trigger: The units' records were merged.}
+  - {name: CommandError, trigger: A boundary word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: DeclaringReadRequest, action: declare_read_request, label: read_request}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  # The read machines' own requested-clearance leg, under the shared label:
+  # the chat word reads the embed carry, which a read never runs.
+  - {state: DeclaringReadRequest, signal: ReadRequestDeclared, next: DeclaringRequestedClearance, action: declare_requested_read_clearance, label: declare_requested_clearance}
+  - {state: DeclaringReadRequest, signal: CommandError, next: Failed}
+  - {state: DeclaringRequestedClearance, signal: RequestedClearanceDeclared, next: DeclaringClearanceLevels, action: declare_clearance_levels}
+  - {state: DeclaringRequestedClearance, signal: CommandError, next: Failed}
+  - {state: DeclaringClearanceLevels, signal: ClearanceLevelsDeclared, next: ResolvingAnalystClearance, action: resolve_analyst_clearance}
+  - {state: DeclaringClearanceLevels, signal: CommandError, next: Failed}
+  # Both legs publish under one label, as on the chat turn, so the fan-out binds
+  # a single selector and a request carrying no level runs at the lowest
+  # declared one rather than at none (srd010 R4.1).
+  - {state: ResolvingAnalystClearance, signal: ClearanceAccepted, next: DeclaringAnalystClearance, action: render_analyst_clearance, label: analyst_clearance}
+  - {state: ResolvingAnalystClearance, signal: ClearanceDefaulted, next: DeclaringAnalystClearance, action: declare_lowest_clearance, label: analyst_clearance}
+  - {state: ResolvingAnalystClearance, signal: CommandError, next: Failed}
+  - {state: DeclaringAnalystClearance, signal: AnalystClearanceRendered, next: DeclaringTopology, action: declare_rag_topology}
+  - {state: DeclaringAnalystClearance, signal: CommandError, next: Failed}
+  - state: DeclaringTopology
+    signal: RagTopologyDeclared
+    next: Reading
+    action: read_documents_by_filter
+    label: read_documents
+    for_each:
+      items: $from(declare_rag_topology).body.items
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      # Every outcome is handled so collection continues. A unit that refuses
+      # the level or fails is one unit's account of this read, and the remaining
+      # units are ones the requester is cleared for -- the same reason the query
+      # fan-out continues on all four (srd010 R4.3).
+      continue_on: [DocumentsRead, ReadRejected, ClearanceRefused, CommandError]
+      join:
+        next: MergingReads
+        label: document_reads
+        # All four outcomes reach one signal, as on the query fan-out. A read
+        # where every unit refused, or where none held the record, is still a
+        # read that answers -- the merge reports what came back and the caller
+        # sees an empty record list rather than an error (srd016 R5.7).
+        signals:
+          all_success: DocumentReadsCollected
+          partial: DocumentReadsCollected
+          failed: DocumentReadsCollected
+          empty: DocumentReadsCollected
+  - {state: DeclaringTopology, signal: CommandError, next: Failed}
+  - {state: Reading, signal: CommandError, next: Failed}
+  - {state: MergingReads, signal: DocumentReadsCollected, next: RenderingReads, action: render_read_records}
+  - {state: RenderingReads, signal: ReadRecordsRendered, next: ComposingResponse, action: compose_read_response, label: read_response}
+  - {state: RenderingReads, signal: CommandError, next: Failed}
+  - {state: MergingReads, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: ReadResponseComposed, next: ReadServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

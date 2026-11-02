@@ -1,0 +1,76 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: rag-clearance-refusal-critic
+purpose: |-
+  Critiques the rag-server's fail-closed clearance behavior (srd010 R4.2). It
+  drives a query carrying a level the declared ordered set does not hold and
+  passes only on the refusal.
+
+  The inverted outcome is the point. An answer here is the failure this scenario
+  exists to catch: it would mean an unrecognized level fell through to a default
+  window and the server searched material the requester was never cleared for.
+  The mock Chroma answers every query it receives, so a subject that reached it
+  at all returns chunks and fails this critic -- which is what makes "no query
+  was issued" observable without inspecting the outbound request.
+configuration:
+  machine: machine.yaml
+  tools: tools.yaml
+initial_state: Idle
+budget:
+  command_timeout: 1m
+  max_iterations: 6
+states:
+  - name: Idle
+    meaning: Before the subject is driven.
+  - name: Checking
+    meaning: The query has run; its signal decides the outcome.
+  - name: Passed
+    run_status: succeeded
+    meaning: Terminal. The rag-server refused the unrecognized level.
+  - name: Failed
+    run_status: failed
+    meaning: Terminal. The rag-server served, rejected, or broke instead of refusing.
+terminal_states: [Passed, Failed]
+signals:
+  - name: Seed
+    trigger: Loop initialization.
+  - name: SubjectRefused
+    trigger: The rag-server refused the request's clearance level.
+  - name: SubjectAnswered
+    trigger: The rag-server returned chunks for the query.
+  - name: SubjectRejected
+    trigger: The rag-server rejected the query embedding.
+  - name: SubjectBroke
+    trigger: The rag-server reported a command error.
+  - name: RESTResponded
+    trigger: The invoke succeeded and mapped to the generic response signal.
+  - name: CommandError
+    trigger: The rag-server was unreachable or returned an unmapped status.
+transitions:
+  - state: Idle
+    signal: Seed
+    next: Checking
+    action: drive_rag_query
+  - state: Checking
+    signal: SubjectRefused
+    next: Passed
+  # An answer is the defect. The generic RESTResponded signal means a 200 the
+  # operation did not map, so it fails here rather than passing the way it does
+  # in the answering scenario.
+  - state: Checking
+    signal: SubjectAnswered
+    next: Failed
+  - state: Checking
+    signal: RESTResponded
+    next: Failed
+  - state: Checking
+    signal: SubjectRejected
+    next: Failed
+  - state: Checking
+    signal: SubjectBroke
+    next: Failed
+  - state: Checking
+    signal: CommandError
+    next: Failed

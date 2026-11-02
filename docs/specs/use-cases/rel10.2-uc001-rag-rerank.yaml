@@ -1,0 +1,136 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel10.2-uc001-rag-rerank
+title: Cohere Rerank Reorders the Retrieved Candidates and Lifts a Buried Document Into the Composed Set
+
+summary: |
+  An analyst poses a tasking whose best answer sits in a document that vector
+  similarity ranked below the cutoff. The fan-out returns its candidates, a
+  rerank pass reorders them against the original tasking, and the document that
+  embedding retrieval buried arrives in the top-N that Cohere Command composes
+  from. The brief answers from material the previous release would have
+  discarded.
+
+  Embedding similarity and relevance are not the same measurement. A vector
+  search ranks by proximity in the embedding space, which is a good first filter
+  and a poor final ordering, and the cutoff is where that difference becomes
+  visible — a document the analyst would have called the best source can sit
+  just outside a top-N chosen on distance alone. The rerank pass scores the
+  candidates against the tasking itself, so the ordering Command sees is a
+  relevance ordering rather than a proximity one.
+
+  The pass reorders; it does not retrieve. Every document it can promote was
+  already surfaced by the vector search, so a rerank that appears to improve an
+  answer by introducing material the fan-out never returned has not reordered,
+  it has retrieved, and that is the failure this release has to be able to see.
+  What the pass may change is order and membership of the top-N; what it may not
+  change is the candidate set it was given.
+
+  This is the first of the cascade's three rerank passes. The search-branch pass
+  and the fusion pass land in rel12.1 once the OSINT branch exists, and they are
+  additional callers of the same declared rerank operation rather than
+  reimplementations of it. Writing the operation as shared from the first caller
+  is what keeps the later two from each growing their own.
+
+  We prove the reordering, not the retrieval quality it buys. Whether Rerank
+  lifts the document a human would have chosen, across a corpus, is a
+  measurement over labeled taskings — srd014 and rel13.0. What is checkable here
+  is that the pass reorders within the candidate set, that its declared top-N is
+  what Command composes from, and that a failure leaves the turn answering in
+  the pre-rerank order with the degradation stated.
+
+actor: Intelligence analyst posing a tasking whose best source ranks poorly by embedding similarity
+trigger: The analyst submits a tasking to a Cohere-enabled mesh whose corpus holds a relevant document that vector retrieval ranks below the composition cutoff.
+
+flow:
+  - F1: The analyst submits a tasking and the turn embeds and fans out to the selected rag-server units, unchanged.
+  - F2: The fan-out join produces the candidate set, the same set that reached composition before this release.
+  - F3: A RerankingRag state runs after the join and before composition, sending the original tasking and the candidate documents to the declared Cohere rerank operation.
+  - F4: The provider returns a relevance ordering over the candidates it was given, addressed by their position in the submitted list rather than by document content.
+  - F5: The turn reorders the candidate set by that returned ordering, which is a reordering of the array the fan-out produced and introduces no document the fan-out did not return.
+  - F6: The declared top-N of the reordered set becomes the documents list passed to invoke_cohere_command, with N fixed configuration rather than a value the provider or the model selects.
+  - F7: Command composes the brief from that top-N, and a document that embedding retrieval had ranked below the cutoff is cited in the answer.
+  - F8: When the rerank call fails or returns an empty ordering, the branch keeps the pre-rerank order, the turn answers, and the degradation is recorded in response metadata rather than left to be inferred from the answer.
+
+touchpoints:
+  - id: T1
+    target: srd009-cohere-provider AC5
+    reason: The release is this acceptance criterion — a RerankingRag pass reorders without retrieving, its declared top-N is what Command composes from, a failure degrades to the pre-rerank order with the degradation reported, and the pass is one caller of a shared rerank operation.
+  - id: T2
+    target: srd009-cohere-provider AC1
+    reason: The rerank operation joins the one declared Cohere client, inheriting its credential reference, egress allowlist, and fixed method and path, so a third model capability does not widen the transport a reviewer audits.
+  - id: T3
+    target: srd009-cohere-provider AC3
+    reason: The reordered top-N is what invoke_cohere_command receives as its documents list carrying resolvable identities; the composition tier consumes this pass's output and is otherwise unchanged.
+  - id: T4
+    target: srd002-chatbot-agent AC1
+    reason: The pass is a state inserted between the existing fan-out join and composition, leaving how the turn embeds, selects sources, and fans out unmodified.
+  - id: T5
+    target: srd009-cohere-provider AC6
+    reason: The release stays governed and additive — one operation, one word, one state — and a mesh with the provider disabled composes from the pre-rerank order exactly as before.
+
+success_criteria:
+  - id: S1
+    criterion: A tasking whose relevant document ranks below the composition cutoff by embedding similarity returns a brief that draws on that document, and the turn's metadata shows it entered the top-N through the rerank pass rather than through retrieval. Asserting only that a rerank call occurred is not this, because a pass that reordered nothing and a pass that lifted the document both make the call.
+    traces:
+      - srd009-cohere-provider AC5
+  - id: S2
+    criterion: The document set after the pass is a permutation of the set before it. No document appears that the fan-out did not return, and none the fan-out returned disappears before the top-N is taken. A pass that improves an answer by introducing material has retrieved rather than reordered, which is the one thing R5.2 forbids and the one thing an improved answer hides.
+    traces:
+      - srd009-cohere-provider AC5
+  - id: S3
+    criterion: The documents list reaching invoke_cohere_command is the first N of the reordered set, with N read from declared configuration. Neither the provider's response nor a model output decides how many documents are composed from.
+    traces:
+      - srd009-cohere-provider AC5
+      - srd009-cohere-provider AC3
+  - id: S4
+    criterion: A rerank failure and an empty rerank response both leave the turn answering from the pre-rerank order, and both record the degradation in response metadata. A degraded turn and a healthy one both return 200 with a composed brief, so the response has to say which occurred; an operator cannot tell them apart from the answer.
+    traces:
+      - srd009-cohere-provider AC5
+  - id: S5
+    criterion: The rerank operation is declared once on the existing Cohere client with fixed method, path, and authority, and the RAG pass is expressed as one caller of it. The search-branch and fusion passes are named as further callers rather than as operations of their own.
+    traces:
+      - srd009-cohere-provider AC5
+      - srd009-cohere-provider AC1
+  - id: S6
+    criterion: The shape of the rerank response, and how it addresses the candidates it was given, are established against the real provider before the reordering word is declared. A fixture written from the same reading that produced the declaration confirms the declaration against itself.
+    traces:
+      - srd009-cohere-provider AC5
+  - id: S7
+    criterion: A mesh with the Cohere provider disabled composes from the pre-rerank order, carries none of the rerank configuration in its render, and answers exactly as it did before this release.
+    traces:
+      - srd009-cohere-provider AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: The rerank pass queries the corpus again with the reranked terms, since the point is to find better material.
+    expected: Rejected; R5.2 confines the pass to the candidate set the fan-out returned. Retrieving inside the pass makes the top-N depend on a second retrieval whose selection nothing in the release specifies, and it hides the failure S2 exists to catch behind an answer that got better.
+  - id: E2
+    scenario: The provider's returned ordering is used to select documents by matching the text it returns back to the candidates.
+    expected: Rejected; the response addresses candidates by their position in the submitted list, and matching on returned text reintroduces a content comparison that fails on truncation, normalization, or a duplicate passage. The reordering is by index, which is what reorder_by_index addresses.
+  - id: E3
+    scenario: N is taken from the number of results the provider returns, since the provider knows how many were relevant.
+    expected: Rejected; R5.3 makes N declared configuration. A provider-decided N moves the composition budget outside the deployment's control and makes two runs of the same tasking compose from different amounts of material without anything in the declaration changing.
+  - id: E4
+    scenario: A rerank failure fails the turn, since composing from an unranked set is not what the release promises.
+    expected: Rejected; R5.4 degrades to the pre-rerank order and answers. The pre-rerank order is what the previous release composed from and it is a serviceable ordering, so failing the turn trades a working answer for no answer. The degradation is recorded because a degraded turn is otherwise indistinguishable from a healthy one.
+  - id: E5
+    scenario: A cohere_rerank_rag operation is declared for this pass, leaving rel12.1 to declare its own for the search and fusion passes.
+    expected: Rejected; R5.5 makes this the first caller of one shared operation. Three operations against the same provider endpoint are three credential references, three allowlist entries, and three sets of limits to keep in step, and the cascade's passes differ in what they submit rather than in how they call.
+  - id: E6
+    scenario: The pass is proven by asserting the top-N differs from the pre-rerank top-N.
+    expected: Insufficient alone. A difference shows the ordering changed, not that it changed correctly or that the set was preserved. The suite pairs it with the permutation check of S2 and with a case whose buried document is known in advance, so a pass that shuffles and a pass that lifts are distinguishable.
+  - id: E7
+    scenario: The rerank pass runs before the fan-out join, reordering each unit's results as they arrive.
+    expected: Rejected; R5.1 places the pass after the join. Reordering per unit ranks within each source and leaves the cross-source ordering to the merge, which is the incomparable-scores problem rel12.1's fusion pass exists to solve. One pass over the joined candidates is what puts every candidate on one relevance scale.
+
+out_of_scope:
+  - Retrieval quality as a measurement. We assert that the pass reorders within the candidate set and that a known buried document is lifted, not that Rerank improves recall across a corpus.
+  - Measuring recall and citation coverage over labeled taskings; that is srd014 and rel13.0.
+  - The OSINT search branch and its egress allowlist; that is srd011 and rel12.0.
+  - The search-branch rerank and the fusion rerank; those are the cascade's second and third passes, srd011 and rel12.1, and they call the operation this release declares.
+  - Clearance-gated retrieval, which filters the candidate set before this pass sees it; that is srd010 and rel11.0.
+  - Structured citation surfacing; that is rel10.1 and srd009 R4.
+
+test_suite_trace: test-rel10.2-rag-rerank
+status: implemented

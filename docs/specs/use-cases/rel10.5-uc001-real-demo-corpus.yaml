@@ -1,0 +1,216 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel10.5-uc001-real-demo-corpus
+title: A Build Over Real Reporting Produces Multi-Profile Chunks Carrying Lineage, and a Cited Answer Resolves Back to the Document It Was Cut From
+
+summary: |
+  An engineer runs the corpus build against five real source tiers rather than
+  the synthetic corpus rel10.4 was written for. Each tier is read through one
+  normalized envelope, the declared window is applied, the searchable material is chunked at three named profiles, and every
+  chunk is written carrying lineage back to the document it came from. A
+  declared selection of those chunks is embedded, under a ceiling checked before
+  the first request. The demo then seeds two collections from the store, answers
+  a windowed tasking at two clearance levels, and the analyst follows a citation
+  in the brief back to the chunk it names and the report that chunk was cut out
+  of.
+
+  Two of those steps are where the release earns its keep, and neither is
+  visible in the answer.
+
+  The first is the embedding ceiling. Conversion and chunking are free and cover
+  the window whole; embedding is paid per chunk from a personal account, and the
+  corpus is now roughly two orders of magnitude larger than the one rel10.4
+  built. A build that embedded whatever it chunked would work, produce a good
+  demonstration, and cost an amount nobody decided. So the selection is declared
+  and the count is checked before the first request goes out, which means the
+  failure mode worth asserting is a build that stops having spent nothing rather
+  than one that stops having spent too much.
+
+  The second is that the document-serving path enforces clearance. rel11.0 puts
+  a filter ahead of the vector search so an over-clearance document is never a
+  retrieval candidate. This release adds a second collection the interface reads
+  by identifier, because a provenance panel has to resolve a citation to its
+  parent document. Read by identifier, that collection reaches exactly the
+  documents the retrieval filter was written to withhold. The panel is a feature;
+  a second route around an access control is not, and the two are the same code
+  path until the clearance check is on both.
+
+  What the release buys beyond realism is that a citation resolves to something.
+  Retrieval returns chunks, and a chunk identifier names a fragment. With lineage
+  travelling on the chunk and the parent document served back, an assertion in
+  the brief resolves to the passage it was drawn from, to the report that passage
+  sits in, and where the document was itself derived from other reporting, to
+  that reporting too. The every-assertion-traceable criterion stops being a claim
+  about citation formatting and becomes a walk an analyst can take.
+
+  The corpus is mostly real, and that changes what the demonstration's numbers
+  mean. Four tiers are published reporting on a war; one is synthetic HUMINT
+  written over the public rumour stream, because a clearance demonstration needs
+  classified-looking material and no real classified material may be used. A
+  figure measured over this corpus carries that mixed qualification rather than
+  the uniform synthetic one srd014 R6.1 attaches to rel10.4's.
+
+actor: An engineer preparing the demonstration corpus, and the analyst who poses a tasking against the seeded mesh and then follows a citation in the brief back to its source
+trigger: The demonstration needs a corpus of real reporting rather than invented material, and the operator runs the build over the source datasets before bringing the demo up.
+
+flow:
+  - F1: The build reads each of the five source tiers through its adapter -- synthetic HUMINT reports, ISW daily assessments, Telegram messages, missile and drone attack rows, and daily loss figures -- and emits one normalized envelope per document carrying the same top-level metadata fields whichever adapter produced it.
+  - F2: Each envelope holds its body as typed segments rather than as one string, and each segment declares whether it is searchable. A HUMINT report's classification-authority line, an ISW assessment's endnote tail, and a Telegram foreign-agent disclaimer are marked unsearchable, so they remain readable in the served document without entering a vector. The ISW tier's fixed closing note is carried the same way, and the cut between prose and tail holds even where the first entry of that tail is mistyped. The build then parses that tail into numbered entries carried on the envelope, copying each entry as the tier wrote it, keeping an entry that names a work rather than a link, and reconciling the document's inline markers against the entries it parsed. A document whose markers do not reconcile fails the build naming them, because a cut that fell in the wrong place is what that failure usually means.
+  - F3: The build assigns each document a clearance level from its tier's declared policy -- the synthetic tier's markings through the declared mapping, the four real tiers as unclassified because the material is published -- reading no document text to decide any of it, and writes an absent or unrecognized marking at the highest declared level.
+  - F4: It filters on the issued date each source itself carries, keeping the declared window and dropping what falls outside it, converting the synthetic tier across the outer bounds because a month of it leaves the clearance assertion one level, and fails with the record named where a publication date cannot be established rather than defaulting one.
+  - F5: It aggregates the two row-oriented tiers into one envelope per day -- a missile and drone attack digest and a daily loss delta -- naming the source rows each digest was built from, and down-samples the Telegram tier to its declared cap by a deterministic rule that orders two runs identically.
+  - F6: It chunks the searchable segments at three named profiles -- atomic, medium-900, and large-1800 -- with medium-900 reproducing character for character what the rel10.4 chunker produced, so vectors already stored under their identities stay valid.
+  - F7: It attaches lineage to every chunk as the record is minted -- the parent document and the source record behind it, the chunk's position and sibling count, the character span it occupies, its neighbours within the profile, the coarser chunk covering the same passage, and where the document was derived from other reporting, that provenance as tier, identifier, and relation. It attaches, the same way, the citation entries resolving the markers the chunk's own text holds, leaving that text and its digest exactly as they were so nothing already embedded is invalidated by the resolution.
+  - F8: It writes each document's raw envelope and every profile built from it co-located in the store under the document identifier, and records the profiles and their counts in the store index.
+  - F9: It reads the declared embed selection, counts the selected chunks per profile, and compares each count against the ceiling before issuing any embedding request. A selection over the ceiling fails the build naming the profile and its count, having called the provider zero times.
+  - F10: Within the ceiling it embeds the selected chunks through the mesh's own declared Cohere client, requesting a vector only where the store holds none for that chunk under the identity being built. Chunks outside the selection are stored without a vector, which is not an error.
+  - F11: The operator brings the demo up. The seed writes the embed selection into the retrieval collection with its stored vectors and metadata, and writes every document's raw envelope and all its profile versions into a second collection addressed by identifier and metadata filter. Neither seed calls the embedding provider.
+  - F12: The analyst poses a windowed tasking. The chatbot embeds it once, the rag-server filters the retrieval collection to the analyst's clearance before the vector search, and the brief composes from what survived that filter, carrying citations that name chunk identifiers.
+  - F13: The same tasking runs at a lower clearance. The cleared analyst's brief draws on a document the uncleared analyst never had as a candidate, and the uncleared answer names it nowhere.
+  - F14: The analyst follows a citation. The read API returns the cited chunk with its lineage, then the parent document it was cut from, then that document's other chunk-size versions, and where the document was derived from other reporting, the identifiers of that reporting -- each step applying the analyst's clearance exactly as the retrieval path did, so a document above their level is returned by none of them. Beside the cited chunk the panel names the sources that chunk's own markers cite, written as the tier wrote them.
+
+touchpoints:
+  - id: T1
+    target: srd017-real-demo-corpus AC1
+    reason: One envelope over five differently shaped sources is what lets everything downstream -- the window filter, the chunker, the lineage pass, the store -- be written once rather than five times, and the searchable flag is what keeps citation-bearing material readable without embedding it.
+  - id: T2
+    target: srd017-real-demo-corpus AC2
+    reason: Four of the five tiers declare no classification, so the level has to come from tier policy rather than from a model reading the document. This is the provenance rule srd010 R1.2 states, applied where the corpus no longer declares its own front matter.
+  - id: T3
+    target: srd017-real-demo-corpus AC3
+    reason: The window is what makes the corpus a bounded, describable artifact rather than whatever the datasets happened to contain, and the aggregation and sampling rules are what turn 225,000 messages and 4,000 rows into documents a demonstration can hold.
+  - id: T4
+    target: srd017-real-demo-corpus AC4
+    reason: Several chunk sizes over one passage are what the drill-between-sizes interaction needs, and reproducing rel10.4's chunker exactly is what keeps the profiles additive rather than a reason to re-embed everything already stored.
+  - id: T5
+    target: srd017-real-demo-corpus AC5
+    reason: Lineage is what makes a retrieved fragment reconstruct to a citable source. Without it the brief's citation names a chunk identifier and the analyst has nothing to open.
+  - id: T6
+    target: srd017-real-demo-corpus AC6
+    reason: The ceiling is the release's cost control, and checking it before the first request is what makes an over-budget build free rather than merely bounded.
+  - id: T7
+    target: srd017-real-demo-corpus AC7
+    reason: The store is the build artifact both collections seed from, and co-locating a document's raw envelope with all its profiles is what lets the serving path answer for a document without gathering it from across the store.
+  - id: T8
+    target: srd017-real-demo-corpus AC8
+    reason: The release's presentation half -- a second collection, four read operations, and the chunk identifier joining a retrieval hit to its document -- together with the clearance enforcement that keeps that path from reaching what retrieval withholds.
+  - id: T9
+    target: srd017-real-demo-corpus AC9
+    reason: Replacing the corpus ripples into the tasking, the manifest vocabularies, and the tracers that name Sable Strait entities; the replacement also has to keep the clearance-pair and below-cutoff conditions rel11.0 and srd014 R1.3 exercise, or those releases pass over a corpus that tests them on nothing.
+  - id: T10
+    target: srd010-clearance-gated-retrieval AC2
+    reason: The pre-search filter is unchanged and this release adds a second path to the same documents. The tracer runs the two-level assertion over the real corpus and extends it to the read API, because a filter on one path and not the other is the release undoing rel11.0 while appearing to extend it.
+  - id: T11
+    target: srd015-corpus-build AC5
+    reason: Seeding from the store with the provider uncalled is the property rel10.4 established, and this release seeds two collections rather than one without spending on either.
+  - id: T12
+    target: srd015-corpus-build AC3
+    reason: Vectors stay keyed by embedding-model identity, which is what makes the widened selection in a later build embed only the chunks it adds rather than recomputing the ones it already holds.
+  - id: T13
+    target: srd009-cohere-provider AC2
+    reason: The chunks that carry vectors are embedded through the mesh's own declared client, so the stored vector and the query vector the chatbot computes come from one configuration and the identity comparison admits the sources.
+  - id: T14
+    target: srd017-real-demo-corpus AC10
+    reason: Carrying the citation tail unsearchable is what leaves the markers in the prose pointing at nothing, so the same decision that keeps apparatus out of the vectors is what makes resolution necessary. Resolving them as metadata rather than by editing the text is what keeps the paid vectors valid and keeps the passage locatable inside its parent, which is the walk T5 and T8 assert.
+
+success_criteria:
+  - id: S1
+    criterion: A build over the declared window produces chunk records at several profiles carrying lineage, and a demo seeded from them answers a windowed tasking from retrieved documents. Both halves are required, as in rel10.4 -- a store nothing seeds from and an answer whose provenance is unasserted are each consistent with half of this passing.
+    traces:
+      - srd017-real-demo-corpus AC1
+      - srd017-real-demo-corpus AC3
+      - srd017-real-demo-corpus AC4
+      - srd017-real-demo-corpus AC5
+  - id: S2
+    criterion: The window bounds are honored on the issued date each source carries, and the per-tier conversion counts follow -- over the declared December 2022 window, 30 ISW assessments, 11 missile daily digests, 31 loss daily deltas, and Telegram messages at or under the declared cap, with the synthetic tier converted across the outer bounds at 27 reports because it is the only tier carrying more than one clearance level. A document dated the day before the window opens or the day after it closes is absent. A record whose publication date cannot be established fails the build with the record named, rather than being defaulted into or out of the window.
+    traces:
+      - srd017-real-demo-corpus AC3
+      - srd017-real-demo-corpus AC1
+  - id: S3
+    criterion: All five adapters populate the same top-level metadata fields, so a consumer cannot tell which produced an envelope without reading the source type, and material marked unsearchable is present in the served document and absent from every chunk. The ISW endnote tail is the case that matters, being roughly a quarter of that tier's text and pure citation apparatus.
+    traces:
+      - srd017-real-demo-corpus AC1
+  - id: S4
+    criterion: Clearance is expressed in the existing ordered set with no level added, the synthetic tier's markings map through declared configuration with NOFORN carried as a caveat flag beside secret rather than above it, the four real tiers are unclassified as a property of the tier rather than by content inspection, and an absent or unrecognized marking is written at the highest level.
+    traces:
+      - srd017-real-demo-corpus AC2
+  - id: S5
+    criterion: The three profiles coexist in one store over the same documents without identifier collision, each chunk names the profile that produced it, and the medium-900 text for an unchanged document is byte-identical to what the rel10.4 chunker produced. The byte comparison is the assertion that matters, because a profile that merely resembles the old chunker invalidates every vector already stored under its identity.
+    traces:
+      - srd017-real-demo-corpus AC4
+  - id: S6
+    criterion: Every chunk carries a complete and internally consistent lineage block -- a position within its sibling count, neighbours that resolve inside its profile, a coarser parent that exists, and a character span into the joined searchable body -- and cross-tier provenance resolves, so a HUMINT report reaches the Telegram messages it was written over and a daily digest reaches the rows it aggregates.
+    traces:
+      - srd017-real-demo-corpus AC5
+  - id: S7
+    criterion: The embed selection holds at most three thousand chunks at any profile, the count is checked before the first embedding request, and a selection over the ceiling fails the build naming the profile and its count with zero requests issued. Widening the selection afterwards embeds only the chunks the store does not already hold. Asserting the request count is what separates a checked ceiling from one enforced after the spend.
+    traces:
+      - srd017-real-demo-corpus AC6
+  - id: S8
+    criterion: A document's raw envelope and all its chunk profiles co-locate under its identifier, the store index reports chunk and vector counts per profile, removing a document prunes every profile variant of it, and a rebuild over unchanged inputs at an unchanged selection writes no records.
+    traces:
+      - srd017-real-demo-corpus AC7
+  - id: S9
+    criterion: Seeding writes the embed selection into the retrieval collection and every document's raw envelope and profile versions into a second collection in the same store, both without an embedding request; a cited chunk identifier from the served answer resolves through the read API to its chunk, its parent document, and that document's other profile versions; and the requester's clearance governs that path exactly as it governs retrieval, so a document above their level is returned by neither identifier, version, nor metadata query.
+    traces:
+      - srd017-real-demo-corpus AC8
+      - srd010-clearance-gated-retrieval AC2
+      - srd015-corpus-build AC5
+  - id: S10
+    criterion: The Ukraine corpus replaces Sable Strait with no live tasking, manifest vocabulary, or tracer still naming a Sable Strait entity; each real tier records its source, its licence, and the date it was retrieved; the synthetic tier identifies itself and its markings as invented in the artifact; and the corpus still holds material above the lower level of every clearance pair rel11.0 iterates and relevant material falling below the composition cutoff. A replacement that answers the tracer's tasking while dropping those conditions leaves rel11.0 and srd014 R1.3 exercising nothing.
+    traces:
+      - srd017-real-demo-corpus AC9
+      - srd017-real-demo-corpus AC2
+  - id: S11
+    criterion: Every inline citation marker in an assessment's chunks resolves to an entry parsed from that document's citation tail, and the chunks carry those entries as metadata while their text and digests stay byte-identical to what the store already held, so no vector is recomputed and no passage stops matching its parent document. A document whose markers do not reconcile fails the build naming them. The panel shows a cited chunk's sources as the tier wrote them. Asserting the digests is what separates this from the repair that deletes the markers, which produces the same readable panel while silently discarding paid vectors and breaking the highlight.
+    traces:
+      - srd017-real-demo-corpus AC10
+      - srd017-real-demo-corpus AC1
+
+failure_scenarios:
+  - id: E1
+    scenario: The build embeds every chunk it produced, and the conversion window is shortened until the bill is acceptable.
+    expected: Rejected; R3.3 converts the window whole and R6.1 bounds the embedding instead. Shortening the window to control cost removes documents from the store, and a document absent from the store cannot be cited, opened, or shown in a provenance walk even when its neighbours can. Bounding the selection keeps the whole window citable while paying for the part that is searched.
+  - id: E2
+    scenario: The ceiling is enforced by embedding until the budget is reached and stopping there, so a build always produces something.
+    expected: Rejected; R6.3 checks the count before the first request. Stopping at the ceiling spends the whole budget every time it is hit and yields a store whose contents depend on iteration order rather than on the declared selection. The failure this release wants is a build that refuses having spent nothing.
+  - id: E3
+    scenario: The document-serving collection is exempt from the clearance filter, since it is a presentation path and the analyst only reaches it by following a citation the turn already returned.
+    expected: Rejected; R8.7 applies the requester's clearance to that path identically. The premise is wrong in both directions -- a metadata query over the collection reaches documents no turn cited, and an identifier is guessable where identifiers derive from source and position. A path that returns what the retrieval filter withheld is an access-control bypass whatever the interface calls it.
+  - id: E4
+    scenario: Clearance for the real tiers is assigned by classifying each document's text, so that a report describing sensitive activity is marked accordingly rather than every open document being unclassified.
+    expected: Rejected; R2.4 tags by tier and srd010 R1.2 forbids the inference. The material is published, so its clearance is a fact about where it came from. A classifier over open reporting produces a corpus whose levels are a model's opinion, which is the condition srd010 exists to prevent, and it does so while reading every document to decide.
+  - id: E5
+    scenario: Lineage is reconstructed at display time by rejoining the chunk to the corpus, since the store already holds both and duplicating the linkage on every chunk record enlarges the store.
+    expected: Rejected; R5.1 carries lineage on the record. Rejoining at display time is the metadata-provenance mistake srd015 R2.2 moved off the seeding path, reappearing on the serving path -- the linkage becomes a property of whatever ran the join rather than of the build, and it is unavailable to anything reading the collection rather than the store.
+  - id: E6
+    scenario: A second document database is stood up beside Chroma for the serving path, since a vector store is not a document API.
+    expected: Rejected; R8.1 keeps both collections in one store. Chroma retrieves by identifier and by metadata filter without a vector query, which is the whole of what the read API needs, and the placeholder-vector records cost nothing at the provider. A second database is a second thing to deploy, seed, and keep consistent for a capability the deployed one already has.
+  - id: E7
+    scenario: The synthetic HUMINT tier is dropped, since four real tiers are enough for a realistic demonstration and inventing intelligence reports is the part a reviewer will question.
+    expected: Insufficient; R9.5 requires the retrieval conditions to survive the replacement. All four real tiers are published material and therefore unclassified, so a corpus without the synthetic tier has one clearance level, no pair for the rel11.0 assertion to iterate, and nothing for the two-level tracer to withhold. The synthetic tier is what makes the clearance demonstration demonstrate anything, which is why R9.3 labels it rather than removing it.
+  - id: E8
+    scenario: The medium-900 profile is re-tuned while the chunker is being generalized, since several profiles are being introduced anyway and a better default is worth having.
+    expected: Rejected; R4.3 holds it byte-identical. Every vector in the committed store is keyed to the text the old chunker produced, so a re-tuned default silently orphans all of them -- the identity comparison still passes, the chunk text no longer matches what was embedded, and the store's vectors describe passages that no longer exist. A better default is a separate profile, which is what the profile mechanism is for.
+  - id: E9
+    scenario: The four real tiers' licences are recorded once in the repository README rather than beside the data, since the datasets are untracked and the README is what a reader finds first.
+    expected: Insufficient; R9.2 records source, licence, and retrieval date per tier. The datasets are separable from this repository and are the artifact the terms attach to, so a licence recorded only in prose around them travels nowhere when the data does. The retrieval date matters for the same reason -- a dataset that is updated in place is a different corpus, and the store's version alone does not say which one was read.
+
+  - id: E10
+    scenario: The citation markers are deleted from the chunk text during chunking, since they point at a tail that was segmented away and a chunk reading "...drag NATO forces into the war.[4]" is showing the analyst a number that resolves to nothing.
+    expected: Rejected; R10.4 resolves the markers as metadata and holds the text unchanged. The prose is tidier and two things break behind it. The stored vector was computed over the text as written, and the build carries a vector forward only where the digest is unchanged, so editing the text to remove the markers discards every vector the tier has and re-buys them at the provider. The interface locates a cited passage inside its parent document by matching the chunk's text against it, and the served document keeps the markers whatever the chunk does, so an edited chunk matches nothing and the provenance highlight this release exists to provide silently stops landing. Both failures are invisible in review -- the panel still renders, the answer still composes -- which is why the repair is specified against rather than left to judgment.
+  - id: E11
+    scenario: The tier's obscured links are restored to ordinary ones before display, since a source list nobody can click is a worse provenance panel than one they can.
+    expected: Rejected; R10.1 copies entries as the source wrote them and R10.6 presents them that way. The publisher obscured those links on purpose, and the material they point at is the reason. Restoring them turns a provenance display into a republication decision this build has no standing to make, and it does so by a text rule over hand-written data -- the same corpus writes the obscuring several ways and writes ordinary prose that a loose rule would corrupt. The panel names what was cited; following it is the reader's decision to make with the address as the publisher wrote it.
+
+out_of_scope:
+  - Drawing the provenance tree. This use case asserts that the read API resolves a citation to its chunk, its parent, and its versions; how the two-panel interface renders that walk is srd016 and rel11.5.
+  - Filtering retrieval by clearance. The filter is srd010 and rel11.0 and is unchanged; this release runs the two-level assertion over the real corpus and extends it to the serving path rather than altering the enforcement.
+  - Authoring the labeled relevant sets or measuring recall over this corpus. Those are srd014 and rel13.0, built over these documents.
+  - Choosing the per-tier allocation of the embed budget. The ceiling is normative and the allocation is declared configuration a later release may revise without amending the specification.
+  - Acquiring, versioning, or redistributing the source datasets. The corpus records what it was built from; the data lives outside the repository under its own terms.
+  - Changing retrieval, rerank, or composition. The turn is unchanged; what changes is the corpus it runs over and the second collection the interface reads.
+  - Reranking or scoring across chunk profiles. Retrieval runs over the embed selection as one collection; choosing between profiles for a given query is not part of this release.
+
+test_suite_trace: test-rel10.5-real-demo-corpus
+status: implemented

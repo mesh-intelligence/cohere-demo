@@ -1,0 +1,41 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Cohere embeddings returning two rows for one text -- the condition
+# capture_query_vector cannot survive. Its item template wraps each row, so two
+# rows concatenate into two JSON objects and parse_query_vector rejects the
+# result.
+#
+# The scenario exists because the alternative is worse than a failed turn. A
+# vector that reached the fan-out malformed would query every source from no
+# embedding space, retrieve whatever came back, and answer confidently from it.
+#
+# The chat route is present and must stay. Without it the turn fails whether or
+# not the vector was rejected, and a critic that passes on any failure is
+# evidence of nothing -- verified by cutting the second row and watching the
+# critic still pass. With the route, a single-row response answers and the
+# critic fails, so its passing means the validation word did the rejecting.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-malformed
+          embeddings:
+            float:
+              - [0.101, 0.202, 0.303]
+              - [0.404, 0.505, 0.606]
+
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-malformed
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject."
+            citations: []

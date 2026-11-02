@@ -1,0 +1,132 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel10.1-uc001-structured-citations
+title: Command's Citation Spans Become Structured Source Metadata a Reader Can Open
+
+summary: |
+  An analyst reads a brief and every assertion in it names the source document
+  it came from. The citation spans Cohere Command returns alongside the answer
+  are surfaced as structured source metadata, each span resolved back to the
+  retrieved chunk it cites, and the panel renders the citations it shows from
+  that metadata rather than from tokens scraped out of the answer text.
+
+  The composition tier already captures what this release surfaces. compose_brief
+  maps the provider's citations into command state and carries them no further
+  (srd009 AC3), so the spans exist in every Cohere-composed turn today and reach
+  neither the response nor the reader. This release is the path from that
+  captured value to a source a reader opens.
+
+  What changes for the reader is which citations are shown and whether they mean
+  anything. Today the panel displays whatever square-bracket tokens the model
+  wrote into its prose, unverified: a token naming no retrieved document renders
+  identically to one that does, and a model that omits brackets shows none at
+  all while the turn was fully grounded. Command's citations are computed against
+  the documents supplied with the request rather than authored inside the prose,
+  so a citation resolves to a document or is reported as unresolvable, and
+  neither case is a matter of what the model happened to type.
+
+  Attribution itself already reads structured metadata. deriveAttribution decides
+  whether a turn answered from the corpus by counting documents in
+  metadata.sources.composed, and mage demo:verify applies the same rule, so a
+  grounded turn is no longer labelled unattributed for want of a bracket. The
+  bracket-scraping extractSources heuristic survives only as the source of the
+  displayed citation list, and removing it is what this release finishes.
+
+  We surface attribution, not attribution quality. Whether Command cites the
+  passage a human would have chosen is a measurement over labeled taskings,
+  which is srd014 and rel13.0. What is checkable here is that every span the
+  provider returned is either resolved to a retrieved document or reported as
+  dropped, and that a citation-free answer is distinguishable from a turn whose
+  citations were dropped.
+
+actor: Intelligence analyst reading a composed brief in the mesh panel
+trigger: The analyst submits a tasking to a Cohere-enabled mesh and reads the brief it returns.
+
+flow:
+  - F1: The analyst submits a tasking, the turn retrieves as usual, and the reranked or retrieved chunks reach Command as the documents list carrying resolvable identities, unchanged from rel10.0.
+  - F2: Command returns the answer and a citations array, each entry naming the span of the answer it covers and the supplied documents it was computed against. compose_brief already captures that array into command state.
+  - F3: A SurfacingCitations state reads the captured array and emits one structured entry per citation, carrying the assertion span it covers and the source it resolves to.
+  - F4: Each cited document identity is resolved back to the retrieved chunk that carried it, so the entry names an openable source rather than an opaque identifier.
+  - F5: A citation naming a document that is not in the composed document set is dropped from the surfaced sources and reported in response metadata as dropped, rather than surfaced as a source that cannot be opened.
+  - F6: An answer returned with an empty or absent citations array is surfaced as uncited, and that outcome is distinguishable in the response from a turn whose citations were all dropped by F5.
+  - F7: The panel renders each assertion's citation from the structured metadata, and the analyst opens the cited source from the brief.
+  - F8: The bracket-scraping extractSources heuristic is removed rather than retained as a fallback, so no displayed citation originates in the answer text.
+
+touchpoints:
+  - id: T1
+    target: srd009-cohere-provider AC4
+    reason: The release is this acceptance criterion — returned citations become structured source metadata resolving each span to an openable document, the panel reads that metadata with the heuristic removed, and unresolvable and citation-free cases are reported distinguishably.
+  - id: T2
+    target: srd009-cohere-provider AC3
+    reason: The citations this release surfaces are the ones compose_brief already captures into command state for $from() addressing; the composition tier is the producer and is not modified.
+  - id: T3
+    target: srd002-chatbot-agent AC1
+    reason: Surfacing runs inside the unchanged request-scoped turn after composition, adding a state and a word rather than altering how the turn embeds, fans out, or composes.
+  - id: T4
+    target: srd001-rag-server-agent AC2
+    reason: Resolving a cited identity back to an openable source relies on the chunk identities the rag-server already returns; the contract is read, not changed.
+  - id: T5
+    target: srd009-cohere-provider AC6
+    reason: The release stays governed and additive — a state, a word, and a response field — and a mesh with the provider disabled renders and answers exactly as before.
+
+success_criteria:
+  - id: S1
+    criterion: A Cohere-composed turn returns response metadata carrying one structured entry per returned citation, each naming the assertion span it covers and the source document it resolves to. Asserting that the answer contains bracket tokens is not this. Those are written by the model into its prose, and a turn can carry provider citations while writing no brackets at all.
+    traces:
+      - srd009-cohere-provider AC4
+      - srd009-cohere-provider AC3
+  - id: S2
+    criterion: Each surfaced citation resolves to a retrieved chunk the reader can open, addressed by the identity the rag-server returned rather than by a provider-local index. A surfaced entry that names an identifier the reader cannot resolve has not satisfied this criterion even when the count is right.
+    traces:
+      - srd009-cohere-provider AC4
+      - srd001-rag-server-agent AC2
+  - id: S3
+    criterion: A citation naming a document outside the composed set is dropped from the surfaced sources and reported as dropped in response metadata. A dropped citation that is silently omitted leaves the reader with a brief whose assertions appear uncited for a reason the response never states.
+    traces:
+      - srd009-cohere-provider AC4
+  - id: S4
+    criterion: An answer with an empty or absent citations array is surfaced as uncited, distinguishably in the response from a turn whose citations were all dropped by S3. The two produce the same empty source list and mean opposite things — the provider cited nothing, or the provider cited only documents the turn cannot vouch for.
+    traces:
+      - srd009-cohere-provider AC4
+  - id: S5
+    criterion: The SPA renders the citations it displays from the structured metadata, and the extractSources heuristic is absent from the shipped bundle rather than retained as a fallback. Whether the turn is attributed at all is decided from the source outcomes under srd002 and is unchanged by this release. A heuristic kept for the case where citation metadata is missing reintroduces exactly the failure the metadata exists to remove.
+    traces:
+      - srd009-cohere-provider AC4
+  - id: S6
+    criterion: The shape of Command's citations array, and how a citation names the documents it was computed against, are established against the real provider before the surfacing word is declared. A fixture written from the same reading that produced the declaration confirms the declaration against itself.
+    traces:
+      - srd009-cohere-provider AC4
+  - id: S7
+    criterion: A mesh with the Cohere provider disabled renders, answers, and attributes exactly as it did before this release, and the surfaced-citation metadata is absent rather than empty-and-misleading.
+    traces:
+      - srd009-cohere-provider AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: The citations array is mapped straight into the response, since the provider already returns it in a structured form.
+    expected: Rejected; a provider citation names the documents it was computed against by the request's own document list, not by an identity the reader can open. Passing it through leaves the reader an index into a list they never see, which is the opaque identifier srd009 R4.2 exists to prevent.
+  - id: E2
+    scenario: An unresolvable citation is dropped silently, since a source the reader cannot open is not worth showing.
+    expected: Rejected; dropping without reporting produces a brief whose assertions appear uncited and gives the response no way to say why. R4.4 requires the drop to be reported, and S4 requires it to remain distinguishable from an answer the provider never cited at all.
+  - id: E3
+    scenario: extractSources is kept as a fallback for turns whose metadata carries no citations, so the panel always has something to show.
+    expected: Rejected; the fallback fires exactly when the provider cited nothing, which is the case the reader most needs told plainly. Showing scraped brackets there presents model-authored tokens as attribution and restores the failure the structured path removes. R4.3 says removed, not retained.
+  - id: E4
+    scenario: Citations are surfaced at source granularity, one entry per contributing rag unit, because a per-span mapping needs to walk a nested array the declarations cannot address.
+    expected: Rejected as of declarative-agents v0.20260826.0. The array addressing that constraint rested on landed with flat_map, reorder_by_index, and numeric item paths, all registered in the pinned agent-core, so a per-span mapping is declarable. The srd009 R4.2 amendment to source granularity, recorded as a contingency while the gap stood, is not applied.
+  - id: E5
+    scenario: The panel decides an assertion is attributed when the answer text contains a bracket token matching a composed source name.
+    expected: Rejected; that is the heuristic under replacement, and it is wrong in both directions. A model that omits brackets renders a grounded assertion as uncited, and a model that writes a plausible token renders an ungrounded one as cited.
+  - id: E6
+    scenario: Surfacing is proven with a scenario mock, since the release changes the machine rather than the transport.
+    expected: Rejected for the shape, accepted for the branches. A mock returns whatever its fixture declares, so the citations array's real shape is established live before the word is written; the drop and uncited branches are then exercised against scripted responses, which is where a mock is the right instrument.
+
+out_of_scope:
+  - Citation quality. We assert that every returned span is resolved or reported, not that Command cited the passage a human would have chosen.
+  - Measuring citation coverage over labeled taskings; that is srd014 and rel13.0.
+  - The rerank pass over the RAG candidates; that is rel10.2 and srd009 R5.
+  - Citations on the Ollama composition path. The structured spans are a Cohere Command return value, and a turn composed by the default chat word carries none.
+  - Clearance-gated retrieval, the OSINT search branch, and the cascade's later passes.
+
+test_suite_trace: test-rel10.1-structured-citations
+status: implemented

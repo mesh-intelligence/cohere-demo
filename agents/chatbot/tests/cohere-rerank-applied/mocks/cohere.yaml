@@ -1,0 +1,45 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Cohere endpoints, returning a rerank ordering the turn can apply.
+#
+# The ordering promotes the second candidate, which is what a rerank lifting a
+# buried document looks like. What this scenario proves is that a usable
+# ordering reaches reorder_by_index and the turn reports the reranked ordering
+# as the one that composed -- not that reranking improves retrieval. A mock
+# returns whatever ordering its fixture declares, so it cannot be evidence about
+# relevance; the live probe recorded on GH-130 is, where a document submitted
+# last came back first at 0.837 against 0.023.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]
+  - method: POST
+    path: /v2/rerank
+    responses:
+      - status: 200
+        body:
+          id: scenario-rerank-1
+          results:
+            - index: 1
+              relevance_score: 0.91
+            - index: 0
+              relevance_score: 0.04
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-1
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject."
+            citations: []

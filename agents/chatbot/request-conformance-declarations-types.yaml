@@ -1,0 +1,59 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of request-conformance-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-request-conformance-declarations-types
+types:
+  - name: CollectConformanceDefectsOutput
+    schema:
+      properties:
+        rows:
+          type: array
+      required:
+        - rows
+      type: object
+  - name: PartitionConformanceDefectsOutput
+    schema:
+      properties:
+        matched:
+          type: array
+        unmatched:
+          type: array
+      type: object
+  - name: WrapBriefForConformanceOutput
+    schema:
+      properties:
+        markdown:
+          type: string
+      required:
+        - markdown
+      type: object
+  - name: ConformanceDefect
+    description: One structural defect a section check records, under that check's own label.
+    schema:
+      type: object
+      properties:
+        defect:
+          type: string
+      required:
+        - defect
+  - name: ConformanceVerdict
+    description: The brief's structural verdict, published under conformance_verdict by the conformant, non-conformant, and unchecked declarations.
+    schema:
+      type: object
+      properties:
+        verdict:
+          type: string
+          enum: [conformant, non_conformant, unchecked]
+        template_version:
+          type: string
+        defects:
+          type: array
+        asserts:
+          type: string
+      required:
+        - verdict
+        - template_version
+        - defects
+        - asserts

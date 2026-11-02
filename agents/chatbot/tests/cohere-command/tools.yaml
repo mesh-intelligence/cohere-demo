@@ -1,0 +1,7 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-selection
+schema_version: 1
+tools:
+  - drive_chat_turn
+  - assert_brief

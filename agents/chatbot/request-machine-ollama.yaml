@@ -1,0 +1,496 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-turn-ollama
+purpose: |-
+  One source-count-independent chat turn. The request message is embedded once,
+  then declare_rag_topology publishes trusted names, descriptions, configuration,
+  and REST authorities. A separate source classifier reads the original question
+  plus the rendered catalog. A generic compose step captures the adjacent raw model
+  reply into addressable JSON; parse_structured and select_subset constrain its names
+  to trusted topology entries. Every classifier, capture, parse, or empty-selection failure
+  selects all declared entries. Exactly one sequential for_each dispatches
+  rag_query over that selected array. Generic partitions separate answered,
+  rejected, degraded, and embedding-model-excluded outcomes. The independent tier
+  selector keeps its existing contract. Response metadata additionally reports
+  declared sources that were not selected.
+
+  This is the pre-provider turn srd009 R6.3 requires of a deployment with the
+  Cohere provider disabled, and it is a separate file rather than a rendered
+  variant of the Cohere machine because the two differ in shape rather than in
+  a value: no rerank cascade, no Command composition, no citation chain, and no
+  provider-refusal signals, because the words that emit them bind a client such
+  a deployment does not declare. Swapping an action would not have sufficed --
+  cohere_rerank_rag alone binds the Cohere client and is dispatched whatever the tier,
+  so the rendered profile refused to load at all (GH-224).
+
+  The chart projects one of the two under the request-machine.yaml key, so the
+  profile names one machine and packaging decides which turn it gets. Keep the
+  shared states named as they are here: TestPreProviderMachineTracksTheCohereMachine
+  compares the two and fails when a change lands in one and not the other.
+
+  The $tool dispatch loops on Answering rather than moving on to Reporting. A
+  dispatchable word is scoped to the manifest of the state the $tool transition
+  targets, while parse_tier validates the selected word in Answering, so the two
+  agree only when the dispatch stays there. Under the previous shape no word was
+  available where the selection was checked, every choice resolved as
+  unavailable, and each turn answered on the ParseFailed fallback while looking
+  entirely healthy.
+initial_state: AwaitingRequest
+budget:
+  # Above the 290s chat endpoint bound, which itself contains a 60s provider stall plus the 120s fallback answer (GH-225); the envelope rule needs every authority a word dispatches under strictly below this.
+  command_timeout: 5m
+  # Fixed pipeline plus one iteration per declared source. This source-independent
+  # ceiling supports substantially more than the shipped two-source topology.
+  max_iterations: 100
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted chat endpoint.}
+  - {name: CapturingRequest, meaning: The seeded request fields are being captured under the shared query_embedding label (GH-635).}
+  - {name: Embedding, meaning: The original question is being embedded once at the Cohere embeddings operation.}
+  - {name: DeclaringQuestion, meaning: The tasking is being declared for the prompts and the fan-out to read without naming the embedding provider.}
+  - {name: CheckingRevision, meaning: Deciding whether this turn revises a retained prior draft (GH-446).}
+  - {name: DeclaringRevisionQuestion, meaning: The instruction and the prior draft are being fused under the shared chat_message label.}
+  - {name: DefaultingCitations, meaning: The empty citations object every turn starts from is being composed (GH-337).}
+  - {name: DeclaringRequestedClearance, meaning: The clearance the authenticated request context carried is being put into command state.}
+  - {name: DeclaringClearanceLevels, meaning: The declared ordered clearance set is being rendered for the level lookup.}
+  - {name: ResolvingAnalystClearance, meaning: "The context's level is being matched against the declared set, defaulting to the lowest when it matches none."}
+  - {name: DeclaringAnalystClearance, meaning: The level this turn runs at is being carried under one label for the fan-out and the response to read.}
+  - {name: CapturingQueryVector, meaning: The single embedding row is being unwrapped into the flat query vector.}
+  - {name: ParsingQueryVector, meaning: The unwrapped query vector is being schema-validated into command state.}
+  - {name: DeclaringModel, meaning: The query embedding model is being declared.}
+  - {name: DeclaringTopology, meaning: The trusted ordered RAG topology is being declared.}
+  - {name: ComposingSourceSelection, meaning: The original question and source catalog are being composed.}
+  - {name: SelectingSources, meaning: A separate classifier is choosing declared source names.}
+  - {name: ParsingSources, meaning: The source classifier JSON is being schema-validated.}
+  - {name: ConstrainingSources, meaning: Model names are being constrained to trusted topology entries.}
+  - {name: SelectingAllSources, meaning: "A classifier, parse, or empty-selection failure is selecting all trusted entries."}
+  - {name: ReportingSourceSelection, meaning: Declared but not selected source names are being derived.}
+  - {name: CheckingFacets, meaning: The facet presence decision is routing the turn to the plain or the faceted fan-out.}
+  - {name: CheckingProposedTiers, meaning: "With no analyst facets, the selection's proposed tiers decide the leg (GH-694)."}
+  - {name: PublishingAnalystFacets, meaning: The analyst's facets republish under the shared retrieval-facets label.}
+  - {name: PublishingProposedFacets, meaning: The proposed tiers render as the declared facet filter.}
+  - {name: CheckingProposedWindow, meaning: The proposed window decides the tier-filter leg (GH-730).}
+  - {name: PublishingWindowedFacets, meaning: The tiers and window render as the facet filter.}
+  - {name: Retrieving, meaning: One sequential for_each is querying only trusted selected RAG sources.}
+  # From here to Answering each state is named for the step before the one that runs in it: entering PartitioningModels runs partition_query_results, and so on down the chain.
+  - {name: PartitioningQueries, meaning: Entered when the fan-out join is collected; the join is divided into answered and failed queries here.}
+  - {name: PartitioningClearanceRefusals, meaning: "Runs partition_query_results, dividing the join into answered and failed queries."}
+  - {name: PartitioningModels, meaning: "Runs partition_clearance_refusals, separating clearance refusals from failed queries."}
+  - {name: Rendering, meaning: "Runs partition_embedding_models, dividing answered queries by embedding-model compatibility."}
+  - {name: CheckingOsintEnabled, meaning: "Runs check_osint_enabled, routing the turn into or past the search branch on the declared deployment toggle."}
+  - {name: SeedingSearchTerms, meaning: The raw question is standing in as the search terms; this tier runs no derivation.}
+  - {name: Searching, meaning: "Runs osint_search, querying the declared external engine with the tasking as a second retrieval branch."}
+  - {name: PartitioningSearchResults, meaning: Search rows without a snippet are being split out before the branch scores or composes them.}
+  - {name: CheckingOsintRefusal, meaning: "Runs check_osint_dropped, separating a policy-dropped request from an errored search."}
+  - {name: CheckingOsintResults, meaning: "Runs check_osint_results, deciding whether the search returned any result."}
+  - {name: RenderingOsintDocuments, meaning: "Runs an osint document render, rendering each search result as a provenance-marked Command document."}
+  - {name: DeclaringOsintComposed, meaning: "Runs declare_osint_composed, recording that the search branch composed documents into the turn."}
+  - {name: DeclaringOsintEmpty, meaning: "Runs declare_osint_empty, recording that the search answered with no results."}
+  - {name: DeclaringOsintErrored, meaning: "Runs declare_osint_errored, recording that the search branch failed and the turn composed from RAG alone."}
+  - {name: DeclaringOsintDropped, meaning: "Runs declare_osint_dropped, recording that the client's network policy dropped the search request."}
+  - {name: DeclaringOsintDisabled, meaning: "Runs declare_osint_disabled, recording that this deployment runs with the search branch disabled."}
+  - {name: RenderingDocuments, meaning: "Runs render_grounding, rendering compatible source chunks in topology order."}
+  - {name: SelectingTier, meaning: "Runs compose_prompt, composing the tasking with the rendered grounding."}
+  - {name: ParsingTier, meaning: "Selects this turn\x27s chat-LLM word -- declared as Command-tier policy on the Cohere machine, classified by select_tier on the pre-provider one."}
+  - {name: Answering, meaning: "Runs parse_tier on entry, then dispatches the chosen chat-LLM word over the composed grounding prompt; the $tool manifest is scoped to this state."}
+  - {name: DeclaringTier, meaning: The tier that answered is being recorded for the response.}
+  - {name: RenderingComposedSources, meaning: The composed sources are being projected to their reportable fields.}
+  - {name: RenderingModelExcludedSources, meaning: The embedding-model-excluded sources are being projected to their reportable fields.}
+  - {name: RenderingQueryFailedSources, meaning: The failed sources are being projected to their reportable fields.}
+  - {name: RenderingClearanceRefusedSources, meaning: "The clearance-refused sources are being projected, naming the source and the refusal and nothing about what was withheld."}
+  - {name: Reporting, meaning: The answer and fixed-selector source metadata are being composed.}
+  - {name: WrappingBrief, meaning: The composed brief is being wrapped for structural validation.}
+  - {name: CheckingBlufSection, meaning: The Bottom Line Up Front presence check is running.}
+  - {name: CheckingThreatActivitySection, meaning: The Threat Activity presence check is running.}
+  - {name: CheckingGapsSection, meaning: The Gaps presence check is running.}
+  - {name: CheckingSectionOrder, meaning: The required-section order check is running.}
+  - {name: CollectingConformanceDefects, meaning: The four check outcomes are being collected into one row list.}
+  - {name: PartitioningConformanceDefects, meaning: Named defects are being separated from clean outcomes.}
+  - {name: RenderingConformanceDefects, meaning: The named defects are being rendered as the verdict's list body.}
+  - {name: CheckingConformance, meaning: The verdict is being decided from the rendered defect list (srd012 R3.1).}
+  - {name: DeclaringConformanceVerdict, meaning: The verdict is being published under the shared label the response binds.}
+  - {name: DeclaringRerankAbsent, meaning: The rerank leg this tier does not run is publishing its empty status.}
+  - {name: DeclaringOsintRerankAbsent, meaning: The search rerank leg this tier does not run is publishing its empty status.}
+  - {name: DeclaringFusionAbsent, meaning: The fusion this tier does not run is publishing its empty status.}
+  - {name: DeclaringCompositionAbsent, meaning: The composed identities this tier cannot project are publishing as none.}
+  - {name: Finalizing, meaning: The composed response is being mapped to the terminal HTTP result.}
+  - {name: LLMResponded, meaning: Terminal. A mapped chat response is ready., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. A non-degradable boundary or collection operation failed., run_status: failed}
+terminal_states: [LLMResponded, Failed]
+signals:
+  - {name: RequestCaptured, trigger: The seeded request fields were captured at intake (GH-635).}
+  - {name: Seed, trigger: The chat endpoint starts a request-scoped turn.}
+  - {name: QueryEmbedded, trigger: The provider returned the question embedding.}
+  - {name: ProviderUnauthorized, trigger: "The Cohere credential was absent, malformed, or refused."}
+  - {name: ProviderThrottled, trigger: The Cohere provider rate-limited the request.}
+  - {name: ProviderUnavailable, trigger: The Cohere provider returned a server error.}
+  - {name: ProviderRefused, trigger: A provider library endpoint fell outside its client allowlist.}
+  - {name: RevisionAbsent, trigger: No prior draft rides the request; the plain turn continues.}
+  - {name: RevisionRequested, trigger: A prior draft rides the request; the revision question is fused.}
+  - {name: RevisionQuestionDeclared, trigger: The fused revision question was published under the shared label.}
+  - {name: QuestionDeclared, trigger: The tasking was put into command state.}
+  - {name: RequestedClearanceDeclared, trigger: The request context's clearance was put into command state.}
+  - {name: ClearanceLevelsDeclared, trigger: The declared ordered clearance set was rendered.}
+  - {name: ClearanceAccepted, trigger: The context's clearance is one the declared set carries.}
+  - {name: ClearanceDefaulted, trigger: "The context carried no clearance the declared set recognizes, so the turn runs at the lowest level."}
+  - {name: AnalystClearanceRendered, trigger: The level this turn runs at was carried under the shared clearance label.}
+  - {name: ClearanceRefused, trigger: A queried source refused the requester's clearance level and issued no query.}
+  - {name: ClearanceRefusalsPartitioned, trigger: Clearance refusals were separated from failed queries.}
+  - {name: ClearanceRefusedSourcesRendered, trigger: The clearance-refused sources were projected for the response.}
+  - {name: QueryVectorCaptured, trigger: The single embedding row was unwrapped into a flat vector.}
+  - {name: CitationsParsed, trigger: The citations array satisfied the declared citation schema.}
+  - {name: QueryVectorParsed, trigger: The unwrapped query vector validated as a numeric array.}
+  - {name: QueryModelDeclared, trigger: The query embedding model is addressable.}
+  - {name: RagTopologyDeclared, trigger: The ordered trusted RAG array is addressable.}
+  - {name: SourceSelectionComposed, trigger: The original question and rendered source catalog were composed.}
+  - {name: SourcesParsed, trigger: The source-selector output satisfied the declared names schema.}
+  - {name: SourcesSelected, trigger: Every requested name was declared and trusted entries were selected.}
+  - {name: SourcesPartiallySelected, trigger: Declared names were selected and undeclared names were discarded.}
+  - {name: SourcesEmpty, trigger: No requested name was declared or the requested set was empty.}
+  - {name: SourceSelectionReported, trigger: Declared but not selected source names were derived.}
+  - {name: FacetsAbsent, trigger: "The turn carries no retrieval facets, so the plain query leg runs unchanged."}
+  - {name: FacetsPresent, trigger: The turn carries retrieval facets for the faceted query leg.}
+  - {name: TiersAbsent, trigger: The selection proposed no tiers; the plain leg runs unchanged.}
+  - {name: TiersProposed, trigger: The selection proposed collection tiers; the faceted leg runs on them.}
+  - {name: AnalystFacetsPublished, trigger: The analyst's facets republished for the faceted leg.}
+  - {name: ProposedFacetsPublished, trigger: The proposed tiers rendered as the facet filter.}
+  - {name: WindowAbsent, trigger: No window proposed; the plain tier filter runs.}
+  - {name: WindowProposed, trigger: A window was proposed; the windowed filter runs.}
+  - {name: WindowedFacetsPublished, trigger: The tiers and window rendered as the filter.}
+  - {name: QueryResponded, trigger: One RAG returned chunks.}
+  - {name: QueryRejected, trigger: One RAG rejected the query vector with mapped HTTP 400.}
+  - {name: RagQueriesCollected, trigger: "The iterator joined all handled query outcomes, including an empty topology."}
+  - {name: QueryResultsPartitioned, trigger: Answered and failed query outcomes were separated.}
+  - {name: EmbeddingModelsPartitioned, trigger: Compatible and model-excluded answers were separated.}
+  - {name: SearchTermsDeclared, trigger: The raw question was seeded as the search terms.}
+  - {name: OsintEnabled, trigger: The declared deployment toggle carries the search branch enabled.}
+  - {name: OsintDisabled, trigger: The declared deployment toggle carries the search branch disabled.}
+  - {name: SearchResponded, trigger: The declared external search engine answered the tasking query.}
+  - {name: SearchResultsPartitioned, trigger: The snippet-bearing rows were split from the empty ones.}
+  - {name: OsintRequestDropped, trigger: The client's network policy refused the search request before it left.}
+  - {name: OsintSearchErrored, trigger: The search failed for a reason other than a policy drop.}
+  - {name: OsintResultsPresent, trigger: The search returned results to normalize.}
+  - {name: OsintResultsEmpty, trigger: The search answered with no results.}
+  - {name: OsintDocumentsRendered, trigger: The search results were rendered as provenance-marked Command documents.}
+  - {name: OsintStatusDeclared, trigger: The search branch outcome was recorded under the shared status label.}
+  - {name: GroundingRendered, trigger: Compatible chunks were rendered in topology order.}
+  - {name: TierDeclared, trigger: The answering tier is addressable.}
+  - {name: Composed, trigger: The grounding prompt was composed.}
+  - {name: LLMResponded, trigger: A model word produced a response.}
+  - {name: ToolDone, trigger: The tier selector selected a declared chat-LLM word.}
+  - {name: ParseFailed, trigger: The tier-selector output was malformed or out of vocabulary.}
+  - {name: ArgumentsRejected, trigger: "The selected word's arguments did not conform to its input type (srd065 R5)."}
+  - {name: TaskCompleted, trigger: The tier selector emitted the done tool.}
+  - {name: ComposedSourcesRendered, trigger: The composed sources were projected for the response.}
+  - {name: ModelExcludedSourcesRendered, trigger: The excluded sources were projected for the response.}
+  - {name: QueryFailedSourcesRendered, trigger: The failed sources were projected for the response.}
+  - {name: BriefWrapped, trigger: The composed brief was wrapped for structural validation.}
+  - {name: BlufConfirmed, trigger: The Bottom Line Up Front section is present with content.}
+  - {name: BlufMissing, trigger: The Bottom Line Up Front section is absent or has no content.}
+  - {name: BlufRecorded, trigger: The bluf check outcome was recorded.}
+  - {name: ThreatActivityConfirmed, trigger: The Threat Activity section is present with content.}
+  - {name: ThreatActivityMissing, trigger: The Threat Activity section is absent or has no content.}
+  - {name: ThreatActivityRecorded, trigger: The threat-activity check outcome was recorded.}
+  - {name: GapsConfirmed, trigger: The Gaps section is present with content.}
+  - {name: GapsMissing, trigger: The Gaps section is absent or has no content.}
+  - {name: GapsRecorded, trigger: The gaps check outcome was recorded.}
+  - {name: OrderConfirmed, trigger: The required sections appear in template order.}
+  - {name: OrderBroken, trigger: The required sections are out of template order.}
+  - {name: OrderRecorded, trigger: The order check outcome was recorded.}
+  - {name: ConformanceDefectsCollected, trigger: The check outcomes were collected into one row list.}
+  - {name: ConformanceDefectsPartitioned, trigger: Named defects were separated from clean outcomes.}
+  - {name: ConformanceDefectsRendered, trigger: The named defects were rendered for the verdict.}
+  - {name: BriefConformant, trigger: The rendered defect list is empty.}
+  - {name: BriefNonConformant, trigger: The rendered defect list names defects.}
+  - {name: ConformanceVerdictDeclared, trigger: The conformance verdict was published.}
+  - {name: LegAbsenceDeclared, trigger: An absent leg's empty status was published.}
+  - {name: CompositionUnreported, trigger: The absent composed identities were published as none.}
+  - {name: ResponseComposed, trigger: The answer and source metadata were composed.}
+  - {name: CommandError, trigger: A boundary or collection operation failed.}
+transitions:
+  # These two actions are the whole of the tier decision.
+  - {state: AwaitingRequest, signal: Seed, next: CapturingRequest, action: capture_request, label: query_embedding}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  # The tasking is declared before the vector is unwrapped so every later prompt
+  # and the fan-out read it from one provider-neutral word.
+  - {state: CapturingRequest, signal: RequestCaptured, next: DeclaringQuestion, action: declare_question, label: chat_message}
+  - {state: CapturingRequest, signal: CommandError, next: Failed}
+  # The citations default (GH-337): this machine has no citation chain, so the empty default seeded here is what the response's citations_state selectors resolve -- [] on every pre-provider turn rather than "".
+  - {state: DeclaringQuestion, signal: QuestionDeclared, next: CheckingRevision, action: check_revision_requested}
+  - {state: CheckingRevision, signal: RevisionAbsent, next: DefaultingCitations, action: declare_default_citations, label: citations_state}
+  - {state: CheckingRevision, signal: RevisionRequested, next: DeclaringRevisionQuestion, action: declare_revision_question, label: chat_message}
+  - {state: CheckingRevision, signal: CommandError, next: DefaultingCitations, action: declare_default_citations, label: citations_state}
+  - {state: DeclaringRevisionQuestion, signal: RevisionQuestionDeclared, next: DefaultingCitations, action: declare_default_citations, label: citations_state}
+  - {state: DeclaringRevisionQuestion, signal: CommandError, next: Failed}
+  - {state: DefaultingCitations, signal: CitationsParsed, next: DeclaringRequestedClearance, action: declare_requested_clearance}
+  - {state: DefaultingCitations, signal: CommandError, next: Failed}
+  # The clearance chain is identical to the Cohere machine's: the level is settled before anything else reads the request, and both legs end under the label analyst_clearance so the fan-out binds one selector (srd010 R3.2, R4.1).
+  - {state: DeclaringRequestedClearance, signal: RequestedClearanceDeclared, next: DeclaringClearanceLevels, action: declare_clearance_levels}
+  - {state: DeclaringRequestedClearance, signal: CommandError, next: Failed}
+  - {state: DeclaringClearanceLevels, signal: ClearanceLevelsDeclared, next: ResolvingAnalystClearance, action: resolve_analyst_clearance}
+  - {state: DeclaringClearanceLevels, signal: CommandError, next: Failed}
+  - {state: ResolvingAnalystClearance, signal: ClearanceAccepted, next: DeclaringAnalystClearance, action: render_analyst_clearance, label: analyst_clearance}
+  - {state: ResolvingAnalystClearance, signal: ClearanceDefaulted, next: DeclaringAnalystClearance, action: declare_lowest_clearance, label: analyst_clearance}
+  - {state: ResolvingAnalystClearance, signal: CommandError, next: Failed}
+  - {state: DeclaringAnalystClearance, signal: AnalystClearanceRendered, next: DeclaringModel, action: declare_query_model}
+  - {state: DeclaringAnalystClearance, signal: CommandError, next: Failed}
+  - {state: DeclaringQuestion, signal: CommandError, next: Failed}
+  # A provider refusal reaches its own terminal rather than falling through to a generic error.
+  - {state: Embedding, signal: ProviderUnauthorized, next: Failed}
+  - {state: Embedding, signal: ProviderThrottled, next: Failed}
+  - {state: Embedding, signal: ProviderUnavailable, next: Failed}
+  - {state: Embedding, signal: ProviderRefused, next: Failed}
+  - {state: Embedding, signal: CommandError, next: Failed}
+  - {state: CapturingQueryVector, signal: QueryVectorCaptured, next: ParsingQueryVector, action: parse_query_vector}
+  - {state: CapturingQueryVector, signal: CommandError, next: Failed}
+  - {state: ParsingQueryVector, signal: QueryVectorParsed, next: CheckingFacets, action: check_facets}
+  # A malformed vector stops the turn.
+  - {state: ParsingQueryVector, signal: ParseFailed, next: Failed}
+  - {state: ParsingQueryVector, signal: CommandError, next: Failed}
+  - {state: DeclaringModel, signal: QueryModelDeclared, next: DeclaringTopology, action: declare_rag_topology}
+  - {state: DeclaringModel, signal: CommandError, next: Failed}
+  - {state: DeclaringTopology, signal: RagTopologyDeclared, next: ComposingSourceSelection, action: compose_source_selection_prompt}
+  - {state: DeclaringTopology, signal: CommandError, next: Failed}
+  - {state: ComposingSourceSelection, signal: SourceSelectionComposed, next: SelectingSources, action: select_sources}
+  - {state: ComposingSourceSelection, signal: CommandError, next: SelectingAllSources, action: select_all_sources, label: selected_sources}
+  - {state: SelectingSources, signal: LLMResponded, next: ParsingSources, action: parse_source_selection, label: parsed_selection}
+  - {state: SelectingSources, signal: CommandError, next: SelectingAllSources, action: select_all_sources, label: selected_sources}
+  - {state: ParsingSources, signal: SourcesParsed, next: ConstrainingSources, action: constrain_source_selection, label: selected_sources}
+  - {state: ParsingSources, signal: ParseFailed, next: SelectingAllSources, action: select_all_sources, label: selected_sources}
+  - {state: ParsingSources, signal: CommandError, next: SelectingAllSources, action: select_all_sources, label: selected_sources}
+  - {state: ConstrainingSources, signal: SourcesSelected, next: ReportingSourceSelection, action: report_source_selection, label: source_selection_report}
+  - {state: ConstrainingSources, signal: SourcesPartiallySelected, next: ReportingSourceSelection, action: report_source_selection, label: source_selection_report}
+  - {state: ConstrainingSources, signal: SourcesEmpty, next: SelectingAllSources, action: select_all_sources, label: selected_sources}
+  - {state: ConstrainingSources, signal: CommandError, next: SelectingAllSources, action: select_all_sources, label: selected_sources}
+  - {state: SelectingAllSources, signal: SourcesSelected, next: ReportingSourceSelection, action: report_source_selection, label: source_selection_report}
+  - {state: SelectingAllSources, signal: CommandError, next: Failed}
+  # The facet decision sits between the source selection and the fan-out: the two legs below fan the same embedding over the same selected topology and join under the same label, so everything downstream reads one shape.
+  - {state: ReportingSourceSelection, signal: SourceSelectionReported, next: Embedding, action: embed_query, label: query_vector_call}
+  - {state: Embedding, signal: QueryEmbedded, next: CapturingQueryVector, action: capture_query_vector_ollama, label: query_vector}
+  - {state: ReportingSourceSelection, signal: CommandError, next: Failed}
+  # No analyst facets: the selection may still have proposed tiers (GH-694)
+  # — model proposes, machine renders the filter, analyst facets always win.
+  - {state: CheckingFacets, signal: FacetsAbsent, next: CheckingProposedTiers, action: check_proposed_tiers}
+  - state: CheckingProposedTiers
+    signal: TiersAbsent
+    next: Retrieving
+    action: rag_query
+    label: rag_query
+    for_each:
+      items: $from(selected_sources).body.selected
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      # All three are handled item outcomes so collection continues.
+      continue_on: [QueryResponded, QueryRejected, ClearanceRefused, CommandError]
+      join:
+        next: PartitioningQueries
+        label: rag_queries
+        signals:
+          all_success: RagQueriesCollected
+          partial: RagQueriesCollected
+          failed: RagQueriesCollected
+          empty: RagQueriesCollected
+  # The fallback selection never parsed arguments, so the selector cannot
+  # resolve; the turn takes the plain leg it always took.
+  - state: CheckingProposedTiers
+    signal: CommandError
+    next: Retrieving
+    action: rag_query
+    label: rag_query
+    for_each:
+      items: $from(selected_sources).body.selected
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      # All three are handled item outcomes so collection continues.
+      continue_on: [QueryResponded, QueryRejected, ClearanceRefused, CommandError]
+      join:
+        next: PartitioningQueries
+        label: rag_queries
+        signals:
+          all_success: RagQueriesCollected
+          partial: RagQueriesCollected
+          failed: RagQueriesCollected
+          empty: RagQueriesCollected
+  - {state: CheckingProposedTiers, signal: TiersProposed, next: CheckingProposedWindow, action: check_proposed_window}
+  - {state: CheckingProposedWindow, signal: WindowAbsent, next: PublishingProposedFacets, action: publish_proposed_facets, label: retrieval_facets}
+  - {state: CheckingProposedWindow, signal: WindowProposed, next: PublishingWindowedFacets, action: publish_windowed_facets, label: retrieval_facets}
+  - {state: CheckingProposedWindow, signal: CommandError, next: PublishingProposedFacets, action: publish_proposed_facets, label: retrieval_facets}
+  - state: PublishingWindowedFacets
+    signal: WindowedFacetsPublished
+    next: Retrieving
+    action: rag_query_faceted
+    label: rag_query
+    for_each:
+      items: $from(selected_sources).body.selected
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      # All three are handled item outcomes so collection continues.
+      continue_on: [QueryResponded, QueryRejected, ClearanceRefused, CommandError]
+      join:
+        next: PartitioningQueries
+        label: rag_queries
+        signals:
+          all_success: RagQueriesCollected
+          partial: RagQueriesCollected
+          failed: RagQueriesCollected
+          empty: RagQueriesCollected
+  - {state: PublishingWindowedFacets, signal: CommandError, next: Failed}
+  - state: PublishingProposedFacets
+    signal: ProposedFacetsPublished
+    next: Retrieving
+    action: rag_query_faceted
+    label: rag_query
+    for_each:
+      items: $from(selected_sources).body.selected
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      # All three are handled item outcomes so collection continues.
+      continue_on: [QueryResponded, QueryRejected, ClearanceRefused, CommandError]
+      join:
+        next: PartitioningQueries
+        label: rag_queries
+        signals:
+          all_success: RagQueriesCollected
+          partial: RagQueriesCollected
+          failed: RagQueriesCollected
+          empty: RagQueriesCollected
+  - {state: PublishingProposedFacets, signal: CommandError, next: Failed}
+  - {state: CheckingFacets, signal: FacetsPresent, next: PublishingAnalystFacets, action: publish_analyst_facets, label: retrieval_facets}
+  - state: PublishingAnalystFacets
+    signal: AnalystFacetsPublished
+    next: Retrieving
+    action: rag_query_faceted
+    label: rag_query
+    for_each:
+      items: $from(selected_sources).body.selected
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      continue_on: [QueryResponded, QueryRejected, ClearanceRefused, CommandError]
+      join:
+        next: PartitioningQueries
+        label: rag_queries
+        signals:
+          all_success: RagQueriesCollected
+          partial: RagQueriesCollected
+          failed: RagQueriesCollected
+          empty: RagQueriesCollected
+  - {state: PublishingAnalystFacets, signal: CommandError, next: Failed}
+  - {state: CheckingFacets, signal: CommandError, next: Failed}
+  - {state: PartitioningQueries, signal: RagQueriesCollected, next: PartitioningClearanceRefusals, action: partition_query_results}
+  - {state: PartitioningClearanceRefusals, signal: QueryResultsPartitioned, next: PartitioningModels, action: partition_clearance_refusals}
+  - {state: PartitioningClearanceRefusals, signal: CommandError, next: Failed}
+  - {state: PartitioningQueries, signal: CommandError, next: Failed}
+  - {state: PartitioningModels, signal: ClearanceRefusalsPartitioned, next: Rendering, action: partition_embedding_models}
+  - {state: PartitioningModels, signal: CommandError, next: Failed}
+  # The OSINT search branch (srd011 R1.1, R5): a second retrieval branch after the RAG join, so the internal fan-out is never blocked by search latency or failure.
+  - {state: Rendering, signal: EmbeddingModelsPartitioned, next: CheckingOsintEnabled, action: check_osint_enabled}
+  - {state: Rendering, signal: CommandError, next: Failed}
+  # The deployment toggle (srd011 R6.1): the disabled leg skips the branch entirely and records the disabled status, so the air-gapped turn is the retrieval-only path stated in metadata rather than a blank.
+  - {state: CheckingOsintEnabled, signal: OsintEnabled, next: SeedingSearchTerms, action: declare_search_terms_fallback, label: search_terms}
+  - {state: SeedingSearchTerms, signal: SearchTermsDeclared, next: Searching, action: osint_search, label: osint_search}
+  - {state: SeedingSearchTerms, signal: CommandError, next: DeclaringOsintErrored, action: declare_osint_errored, label: osint_status}
+  - {state: CheckingOsintEnabled, signal: OsintDisabled, next: DeclaringOsintDisabled, action: declare_osint_disabled, label: osint_status}
+  - {state: CheckingOsintEnabled, signal: CommandError, next: DeclaringOsintErrored, action: declare_osint_errored, label: osint_status}
+  # Rows without a snippet (video carousels, knowledge panels on a live engine) leave here: an empty candidate is unscorable by the rerank and rejected by the chat provider's documents mode (GH-457).
+  - {state: Searching, signal: SearchResponded, next: PartitioningSearchResults, action: partition_search_results}
+  - {state: PartitioningSearchResults, signal: SearchResultsPartitioned, next: CheckingOsintResults, action: check_osint_results}
+  - {state: PartitioningSearchResults, signal: CommandError, next: DeclaringOsintErrored, action: declare_osint_errored, label: osint_status}
+  # A failed search routes through the refusal check (srd011 R1.3): the client's policy drop is reported apart from an engine outage, and a check that cannot classify falls to the errored status.
+  - {state: Searching, signal: CommandError, next: CheckingOsintRefusal, action: check_osint_dropped}
+  - {state: CheckingOsintRefusal, signal: OsintRequestDropped, next: DeclaringOsintDropped, action: declare_osint_dropped, label: osint_status}
+  - {state: CheckingOsintRefusal, signal: OsintSearchErrored, next: DeclaringOsintErrored, action: declare_osint_errored, label: osint_status}
+  - {state: CheckingOsintRefusal, signal: CommandError, next: DeclaringOsintErrored, action: declare_osint_errored, label: osint_status}
+  # Engine order directly: the search rerank pass binds the Cohere client this deployment does not declare, so the pre-provider branch composes unranked the way its RAG grounding does (GH-224's shape).
+  - {state: CheckingOsintResults, signal: OsintResultsPresent, next: RenderingOsintDocuments, action: render_osint_documents_unranked, label: osint_documents}
+  - {state: CheckingOsintResults, signal: OsintResultsEmpty, next: DeclaringOsintEmpty, action: declare_osint_empty, label: osint_status}
+  - {state: CheckingOsintResults, signal: CommandError, next: DeclaringOsintErrored, action: declare_osint_errored, label: osint_status}
+  - {state: RenderingOsintDocuments, signal: OsintDocumentsRendered, next: DeclaringOsintComposed, action: declare_osint_composed, label: osint_status}
+  - {state: RenderingOsintDocuments, signal: CommandError, next: DeclaringOsintErrored, action: declare_osint_errored, label: osint_status}
+  - {state: DeclaringOsintComposed, signal: OsintStatusDeclared, next: RenderingDocuments, action: render_grounding}
+  - {state: DeclaringOsintComposed, signal: CommandError, next: Failed}
+  - {state: DeclaringOsintEmpty, signal: OsintStatusDeclared, next: RenderingDocuments, action: render_grounding}
+  - {state: DeclaringOsintEmpty, signal: CommandError, next: Failed}
+  - {state: DeclaringOsintErrored, signal: OsintStatusDeclared, next: RenderingDocuments, action: render_grounding}
+  - {state: DeclaringOsintErrored, signal: CommandError, next: Failed}
+  - {state: DeclaringOsintDropped, signal: OsintStatusDeclared, next: RenderingDocuments, action: render_grounding}
+  - {state: DeclaringOsintDropped, signal: CommandError, next: Failed}
+  - {state: DeclaringOsintDisabled, signal: OsintStatusDeclared, next: RenderingDocuments, action: render_grounding}
+  - {state: DeclaringOsintDisabled, signal: CommandError, next: Failed}
+  # The document chain shapes the same compatible partition into the array the Cohere operation sends.
+  - {state: RenderingDocuments, signal: GroundingRendered, next: SelectingTier, action: compose_prompt}
+  - {state: RenderingDocuments, signal: CommandError, next: Failed}
+  # The rerank pass (srd009 R5).
+  - {state: SelectingTier, signal: Composed, next: ParsingTier, action: select_tier}
+  - {state: SelectingTier, signal: CommandError, next: Failed}
+  - {state: ParsingTier, signal: LLMResponded, next: Answering, action: parse_tier}
+  - {state: ParsingTier, signal: CommandError, next: Reporting, action: invoke_llm_fast, label: answer_text}
+  # The $tool dispatch is a self-loop, and that is load-bearing rather than stylistic.
+  - {state: Answering, signal: ToolDone, next: Answering, action: $tool, label: answer_text}
+  - {state: Answering, signal: LLMResponded, next: DeclaringTier, action: declare_ollama_tier, label: answer_tier}
+  # Each provider failure degrades to the default chat-LLM word, which answers
+  # over the same composed prompt and re-enters Reporting (srd009 R3.4).
+  - {state: Answering, signal: ParseFailed, next: Reporting, action: invoke_llm_fast, label: answer_text}
+  - {state: Answering, signal: ArgumentsRejected, next: Reporting, action: invoke_llm_fast, label: answer_text}
+  - {state: Answering, signal: TaskCompleted, next: Reporting, action: invoke_llm_fast, label: answer_text}
+  # A request that could not be built, an egress refusal, or a response that did
+  # not map is not a provider outcome and does not degrade (srd002, unchanged).
+  - {state: Answering, signal: CommandError, next: Failed}
+  - {state: Reporting, signal: LLMResponded, next: DeclaringTier, action: declare_ollama_tier, label: answer_tier}
+  - {state: Reporting, signal: CommandError, next: Failed}
+  # Citation surfacing runs on the Cohere path only: the Ollama fallback returns no citations, and a word reading them there would fault a turn that answered correctly.
+  - {state: DeclaringTier, signal: TierDeclared, next: RenderingComposedSources, action: render_composed_sources}
+  - {state: DeclaringTier, signal: CommandError, next: Failed}
+  - {state: RenderingComposedSources, signal: ComposedSourcesRendered, next: RenderingModelExcludedSources, action: render_model_excluded_sources}
+  - {state: RenderingComposedSources, signal: CommandError, next: Failed}
+  - {state: RenderingModelExcludedSources, signal: ModelExcludedSourcesRendered, next: RenderingQueryFailedSources, action: render_query_failed_sources}
+  - {state: RenderingModelExcludedSources, signal: CommandError, next: Failed}
+  - {state: RenderingQueryFailedSources, signal: QueryFailedSourcesRendered, next: RenderingClearanceRefusedSources, action: render_clearance_refused_sources}
+  - {state: RenderingClearanceRefusedSources, signal: ClearanceRefusedSourcesRendered, next: WrappingBrief, action: wrap_brief_for_conformance}
+  # The template conformance chain (srd012 R3): every composed brief is validated after citation surfacing and before the response is composed.
+  - {state: WrappingBrief, signal: BriefWrapped, next: CheckingBlufSection, action: check_bluf_section}
+  - {state: WrappingBrief, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  # Each checking state takes the previous section's verdict directly: a Confirmed edge dispatches this section's check, a Missing edge records the defect on the way in and the recorded signal self-loops to run the check (the Answering state's pattern).
+  - {state: CheckingBlufSection, signal: BlufConfirmed, next: CheckingThreatActivitySection, action: check_threat_activity_section}
+  - {state: CheckingBlufSection, signal: BlufMissing, next: CheckingThreatActivitySection, action: record_bluf_defect, label: conformance_bluf}
+  - {state: CheckingBlufSection, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  - {state: CheckingThreatActivitySection, signal: BlufRecorded, next: CheckingThreatActivitySection, action: check_threat_activity_section}
+  - {state: CheckingThreatActivitySection, signal: ThreatActivityConfirmed, next: CheckingGapsSection, action: check_gaps_section}
+  - {state: CheckingThreatActivitySection, signal: ThreatActivityMissing, next: CheckingGapsSection, action: record_threat_activity_defect, label: conformance_threat_activity}
+  - {state: CheckingThreatActivitySection, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  - {state: CheckingGapsSection, signal: ThreatActivityRecorded, next: CheckingGapsSection, action: check_gaps_section}
+  - {state: CheckingGapsSection, signal: GapsConfirmed, next: CheckingSectionOrder, action: check_section_order}
+  - {state: CheckingGapsSection, signal: GapsMissing, next: CheckingSectionOrder, action: record_gaps_defect, label: conformance_gaps}
+  - {state: CheckingGapsSection, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  - {state: CheckingSectionOrder, signal: GapsRecorded, next: CheckingSectionOrder, action: check_section_order}
+  - {state: CheckingSectionOrder, signal: OrderConfirmed, next: CollectingConformanceDefects, action: collect_conformance_defects}
+  - {state: CheckingSectionOrder, signal: OrderBroken, next: CollectingConformanceDefects, action: record_order_defect, label: conformance_order}
+  - {state: CheckingSectionOrder, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  - {state: CollectingConformanceDefects, signal: OrderRecorded, next: CollectingConformanceDefects, action: collect_conformance_defects}
+  - {state: CollectingConformanceDefects, signal: ConformanceDefectsCollected, next: PartitioningConformanceDefects, action: partition_conformance_defects}
+  - {state: CollectingConformanceDefects, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  - {state: PartitioningConformanceDefects, signal: ConformanceDefectsPartitioned, next: RenderingConformanceDefects, action: render_conformance_defects}
+  - {state: PartitioningConformanceDefects, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  - {state: RenderingConformanceDefects, signal: ConformanceDefectsRendered, next: CheckingConformance, action: check_conformance}
+  - {state: RenderingConformanceDefects, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  - {state: CheckingConformance, signal: BriefConformant, next: DeclaringConformanceVerdict, action: declare_brief_conformant, label: conformance_verdict}
+  - {state: CheckingConformance, signal: BriefNonConformant, next: DeclaringConformanceVerdict, action: declare_brief_nonconformant, label: conformance_verdict}
+  - {state: CheckingConformance, signal: CommandError, next: DeclaringConformanceVerdict, action: declare_conformance_unchecked, label: conformance_verdict}
+  # compose_response reads four labels only the Cohere tier's legs publish. This
+  # tier runs none of them, so it publishes each empty, which is what the
+  # response carried for them before the loader resolved selectors (GH-746).
+  - {state: DeclaringConformanceVerdict, signal: ConformanceVerdictDeclared, next: DeclaringRerankAbsent, action: declare_leg_absent, label: rerank_status}
+  - {state: DeclaringRerankAbsent, signal: LegAbsenceDeclared, next: DeclaringOsintRerankAbsent, action: declare_leg_absent, label: osint_rerank_status}
+  - {state: DeclaringOsintRerankAbsent, signal: LegAbsenceDeclared, next: DeclaringFusionAbsent, action: declare_leg_absent, label: fusion_status}
+  - {state: DeclaringFusionAbsent, signal: LegAbsenceDeclared, next: DeclaringCompositionAbsent, action: declare_composition_unreported, label: composition_ids}
+  - {state: DeclaringCompositionAbsent, signal: CompositionUnreported, next: Finalizing, action: compose_response}
+  - {state: DeclaringConformanceVerdict, signal: CommandError, next: Failed}
+  - {state: RenderingClearanceRefusedSources, signal: CommandError, next: Failed}
+  - {state: RenderingQueryFailedSources, signal: CommandError, next: Failed}
+  - {state: Finalizing, signal: ResponseComposed, next: LLMResponded}
+  - {state: Finalizing, signal: CommandError, next: Failed}

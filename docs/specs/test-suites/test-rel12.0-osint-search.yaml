@@ -1,0 +1,190 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel12.0-osint-search
+title: Test Suite for Release 12.0 OSINT Search Tool
+release: "12.0"
+
+traces: [rel12.0-uc001-osint-search]
+
+preconditions:
+  - A declared approved-domain allowlist in the search client's network policy, and a controlled host standing in for an approved OSINT domain so the branch can be exercised without depending on a third party's availability.
+  - A second controlled host that is deliberately absent from the allowlist, used to prove the refusal comes from the client rather than from machine logic.
+  - A search response fixture carrying a redirect and a reference to a non-allowlisted host, so hop-bounding is exercised rather than assumed.
+  - A search response fixture whose content contains instruction-shaped text, so the trust boundary is tested against the concrete attack rather than described.
+  - The rel10.x tiers and the rel11.0 clearance gate are standing, so the RAG branch behaves as before and the assertions isolate the second branch.
+  - The scenario tiers require no credential and no live external provider; the controlled hosts stand where the declared client points.
+
+test_cases:
+  - use_case: rel12.0-uc001-osint-search
+    name: An allowlisted search result reaches the brief as a cited document
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: The tasking is augmented by a result from the approved host, and that result is cited in the composed brief. The assertion is that the document reached composition, not that a search call occurred -- a call whose result never reached the documents list is indistinguishable in a log from one that did.
+    expected:
+      http_status: 200
+      search_result_present_in_composition_documents: true
+      brief_cites_the_external_document: true
+      call_occurrence_alone_not_treated_as_evidence: true
+    traces:
+      - rel12.0-uc001-osint-search S1
+      - srd011-osint-search-cascade-rerank AC1
+
+  - use_case: rel12.0-uc001-osint-search
+    name: A non-allowlisted request is refused by the client, logged, and reported
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: A request aimed at the host absent from the allowlist is refused by the client's network policy, logged, and surfaced in response metadata, and the turn continues from the RAG branch. The refusal must originate in the client -- a machine that declines to ask produces the same outcome for a reason that does not hold when the logic is wrong.
+    expected:
+      request_refused_by_client_network_policy: true
+      refusal_not_produced_by_machine_logic_alone: true
+      drop_logged: true
+      drop_visible_in_response_metadata: true
+      turn_continues_from_rag_branch: true
+    traces:
+      - rel12.0-uc001-osint-search S2
+      - srd011-osint-search-cascade-rerank AC1
+
+  - use_case: rel12.0-uc001-osint-search
+    name: A redirect or reference outside the allowlist is not followed
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: The response fixture points to a non-allowlisted host through both a redirect and an in-body reference, and neither is fetched. An allowlist enforced only on the first request is one any allowlisted host can escape on the system's behalf, and the search provider is the party whose output an adversary most wants to influence.
+    expected:
+      redirect_to_non_allowlisted_host_not_followed: true
+      in_body_reference_not_fetched: true
+      allowlist_bounds_every_hop: true
+    traces:
+      - rel12.0-uc001-osint-search S3
+      - srd011-osint-search-cascade-rerank AC1
+
+  - use_case: rel12.0-uc001-osint-search
+    name: No model or request input can select a host or widen the allowlist
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: A tasking naming a target domain, a conversation history asserting an approved list, and a request body field carrying a host all leave the operation's method, path, auth, and network policy unchanged. The analyst's authority is over what is asked rather than over where the system reaches, and a field that selects a host is the mechanism an injected instruction would use.
+    expected:
+      tasking_named_host_not_contacted: true
+      conversation_history_cannot_widen_allowlist: true
+      request_body_field_cannot_select_host: true
+      operation_method_path_auth_unchanged: true
+      network_policy_unchanged_at_runtime: true
+    traces:
+      - rel12.0-uc001-osint-search S4
+      - srd011-osint-search-cascade-rerank AC1
+
+  - use_case: rel12.0-uc001-osint-search
+    name: Search results are normalized into the RAG candidate shape
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: The normalized search results carry the same fields the RAG branch's candidates carry, so the downstream cascade receives one document set rather than two formats to reconcile. This is what lets rel12.1 rerank a union without a per-branch adapter.
+    expected:
+      search_results_match_rag_candidate_shape: true
+      one_document_set_presented_downstream: true
+    traces:
+      - rel12.0-uc001-osint-search S5
+      - srd011-osint-search-cascade-rerank AC1
+
+  - use_case: rel12.0-uc001-osint-search
+    name: The outbound request carries the tasking and nothing else
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: The recorded outbound request body carries the tasking or a query derived from it, and carries no retrieved corpus chunk content, no clearance level, no analyst identity or authenticated context, and no conversation history. The permitted contents are declared on the operation, so the egress payload is reviewable without reading the machine. This is the exfiltration path the release closes.
+    expected:
+      outbound_body_carries_tasking_only: true
+      no_retrieved_chunk_content_in_request: true
+      no_clearance_level_in_request: true
+      no_identity_or_authenticated_context_in_request: true
+      no_conversation_history_in_request: true
+      permitted_contents_declared_on_the_operation: true
+    traces:
+      - rel12.0-uc001-osint-search S6
+      - srd011-osint-search-cascade-rerank AC2
+
+  - use_case: rel12.0-uc001-osint-search
+    name: Instruction-shaped text in retrieved content does not alter the turn
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: The fixture whose content instructs the assistant to abandon its template and report differently changes nothing about the turn. The external document reaches the model only as an entry in the documents list, never as a system instruction or a prompt fragment outside it, so its status as retrieved material is structural rather than a matter of the model noticing.
+    expected:
+      injected_instruction_does_not_alter_composition: true
+      injected_instruction_does_not_alter_template_structure: true
+      external_content_present_only_in_documents_list: true
+      external_content_absent_from_system_instruction: true
+      external_content_absent_from_prompt_outside_documents: true
+    traces:
+      - rel12.0-uc001-osint-search S7
+      - srd011-osint-search-cascade-rerank AC7
+
+  - use_case: rel12.0-uc001-osint-search
+    name: External documents carry provenance, carry no clearance, and are never dressed as internal
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: Each external document carries explicit provenance a citation exposes, so a reviewer separates an open-source extract from internal reporting without opening the source. It carries no clearance tag, is not clearance-filtered, and its presence leaves the clearance enforced on the RAG branch unchanged.
+    expected:
+      external_document_carries_explicit_provenance: true
+      citation_exposes_provenance: true
+      external_document_carries_no_clearance_tag: true
+      external_document_not_clearance_filtered: true
+      rag_branch_enforced_clearance_unchanged: true
+      external_never_presented_as_cleared_internal_material: true
+    traces:
+      - rel12.0-uc001-osint-search S8
+      - srd011-osint-search-cascade-rerank AC7
+
+  - use_case: rel12.0-uc001-osint-search
+    name: External content cannot influence source selection, tier selection, or clearance
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: A retrieved page crafted to steer the selectors leaves the selected sources, the selected tier, and the enforced clearance level unchanged. The selectors stay closed to external content, so a page cannot widen what is queried or what is served.
+    expected:
+      source_selection_unchanged_by_external_content: true
+      tier_selection_unchanged_by_external_content: true
+      enforced_clearance_unchanged_by_external_content: true
+    traces:
+      - rel12.0-uc001-osint-search S9
+      - srd011-osint-search-cascade-rerank AC7
+
+  - use_case: rel12.0-uc001-osint-search
+    name: A search error, timeout, or empty result leaves the turn composing from the RAG branch
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: Three scripted conditions -- an error status, a timeout at the declared bound, and an empty result set -- each leave the turn answering from the internal corpus. The RAG branch is not held up waiting on the external host beyond that bound, so an unreachable host removes augmentation rather than the brief.
+    expected:
+      http_status: 200
+      turn_answers_on_search_error: true
+      turn_answers_on_search_timeout: true
+      turn_answers_on_empty_search_result: true
+      rag_branch_not_blocked_by_search_latency: true
+      turn_does_not_fail: true
+    traces:
+      - rel12.0-uc001-osint-search S10
+      - srd011-osint-search-cascade-rerank AC5
+
+  - use_case: rel12.0-uc001-osint-search
+    name: Each branch outcome is separately reported and one branch's failure leaves the other intact
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: A turn carrying a degraded search branch and a healthy RAG branch reports both outcomes distinguishably from the per-source RAG outcomes already separated. Collapsing them into one field leaves an operator unable to tell a dropped allowlist request from an excluded source, and the two have different remedies.
+    expected:
+      search_branch_outcome_reported: true
+      outcomes_include_composed_empty_errored_and_dropped: true
+      distinguishable_from_per_source_rag_outcomes: true
+      failing_branch_leaves_other_branch_candidates_intact: true
+    traces:
+      - rel12.0-uc001-osint-search S11
+      - srd011-osint-search-cascade-rerank AC5
+
+  - use_case: rel12.0-uc001-osint-search
+    name: The disabled branch makes no external request because the host is absent from the network policy
+    integration_target: mage integration:osintSearch
+    status: implemented
+    description: A deployment with the branch disabled skips the Searching state, and the allowlisted host is absent from the rendered client network policy, so no external request is possible rather than merely not attempted. The turn then behaves as the pre-search turn behaved rather than as a degraded variant, which is the air-gapped deployment DefTech actually buys.
+    expected:
+      searching_state_not_run: true
+      allowlisted_host_absent_from_rendered_network_policy: true
+      no_external_request_issued: true
+      capability_removed_not_merely_skipped: true
+      turn_matches_pre_search_behavior: true
+    traces:
+      - rel12.0-uc001-osint-search S12
+      - srd011-osint-search-cascade-rerank AC6

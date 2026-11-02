@@ -1,0 +1,210 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: cohere-demo
+title: "cohere-demo: Sovereign Multi-Source Intelligence Synthesis on a Declarative Cohere Mesh"
+
+executive_summary: |
+  We build an on-premise assistant that turns scattered intelligence into a
+  first-draft command-staff brief. An analyst poses a tasking; the assistant
+  retrieves across HUMINT summaries, OSINT extracts, and signals reporting,
+  reranks the candidates, and composes a brief in which every assertion carries
+  a citation to the source document it came from. A single brief may draw on
+  anywhere from five to fifty documents, and the analyst edits a draft instead
+  of assembling one from nothing.
+
+  The assistant runs the Cohere model stack -- Command for composition, Embed
+  for retrieval, Rerank for precision -- inside the customer's own boundary. No
+  document, query, or model weight leaves the enclave. Retrieval is gated by
+  clearance before it runs, so an analyst never receives material above their
+  authorization. External lookups reach only a defined list of approved OSINT
+  domains. Every brief conforms to the ministry template a reviewer expects.
+
+  We deliver this as a copyable declarative-agent mesh. The retrieval and
+  answering agents are YAML profiles on a shared runtime, and the Cohere stack
+  enters that running mesh as an additive provider -- a new client, a new model
+  tier, a clearance-gated retrieval path -- without editing the agents already
+  in place. The topology is configuration, and adding a provider is a governed,
+  traceable change rather than a rewrite.
+
+customer:
+  organization: "DefTech, a NATO defense ministry."
+  users: |
+    Intelligence analysts author the tasking and edit the first draft; command
+    staff consume the brief; a reviewer verifies that every assertion traces to a
+    source before the brief is used.
+  buyers: |
+    The technical buyer probes architecture, deployment, model choice, and
+    evaluation. The business owner probes return, adoption, and how we know
+    analysts use the assistant. The security and compliance lead probes data
+    isolation, clearance enforcement, and audit.
+
+the_ask: |
+  DefTech wants an on-premise assistant for its intelligence analysts that
+  synthesizes multi-source reporting -- HUMINT summaries, OSINT extracts, and
+  signals -- into first-draft command-staff briefs. A single brief may draw on
+  five to fifty source documents. Retrieval is gated by clearance so an analyst
+  never receives material above their authorization, external lookups reach only
+  approved OSINT domains, every assertion links to a citable source, and each
+  brief conforms to the ministry template.
+
+problem: |
+  Producing a command-staff brief is slow and manual. An analyst reads across
+  many sources of differing type and sensitivity, decides what is relevant,
+  drafts prose, and hand-checks that every claim traces to something citable.
+  The work takes most of a day, and the reviewer still has to confirm sources
+  by hand.
+
+  A defense ministry cannot solve this with a hosted assistant. The data is
+  sensitive and sovereign: it may not traverse a third-party API, and the models
+  that read it must run inside the ministry's own infrastructure. The output must
+  be auditable -- every sentence attributable to a source a reviewer can open --
+  and retrieval must respect clearance so that no analyst is ever shown material
+  above their authorization. An assistant that cannot meet these conditions is
+  not deployable here, however capable it is in a benchmark.
+
+what_this_does: |
+  The assistant answers a tasking through one request-scoped turn. It embeds the
+  tasking with Cohere Embed, filters the corpus to the documents at or below the
+  analyst's clearance, retrieves candidates from the vector store, reorders them
+  with Cohere Rerank, optionally augments them with an approved-domain OSINT
+  lookup, and composes the brief with Cohere Command. Command returns a citation
+  span for each assertion, which the mesh surfaces as structured source metadata,
+  and a conformance check confirms the brief matches the ministry template before
+  it reaches the analyst.
+
+  Each agent is a YAML profile the runtime loads: the browser-facing chatbot that
+  runs the turn, the retrieval servers that hold each corpus, and the ingest
+  agent that seeds them with clearance-tagged documents. The Cohere provider is
+  additive on top of the existing mesh -- the running retrieval agents are not
+  modified -- and the whole application is copyable, carrying its own vision,
+  architecture, specifications, and build entry.
+
+why_we_build_this: |
+  Cohere is the fit for this problem because the constraints are architectural,
+  not contractual. Command, Embed, and Rerank deploy as containers inside the
+  customer's boundary, so a sovereign, air-gapped ministry runs the same stack
+  we demonstrate against the trial API. Command composes with source documents as
+  first-class input and returns citations the model itself produced, so
+  attribution is a property of the answer rather than a prompt we hope holds.
+  Rerank lifts the recall of the retrieval set, which is what lets a brief surface
+  the documents an experienced analyst would have found. Hosted-only assistants
+  cannot meet the air-gap requirement no matter how the terms are written.
+
+  We build it as a declarative mesh so the value is legible. A reviewer sees that
+  agent behavior is YAML on a shared runtime, that a multi-agent retrieval
+  topology is configuration rather than bespoke code, and that a new model
+  provider enters an already-running system as an additive, specified change. The
+  same profiles run on a laptop and in a cluster.
+
+success_criteria:
+  first_draft_time: |
+    The assistant cuts the time to a first-draft command-staff brief from a
+    baseline of roughly half a day to under ninety minutes, measured end to end
+    from tasking to a draft a reviewer accepts.
+  full_attribution: |
+    Every assertion in a brief links to a citable source document. Citation
+    coverage -- assertions carrying a valid citation over total assertions --
+    is complete, and a reviewer opens any cited source from the brief.
+  retrieval_recall: |
+    Retrieval surfaces at least ninety percent of the documents an experienced
+    analyst would identify as relevant for a tasking, measured against a labeled
+    relevant set with Rerank in the path.
+  clearance_isolation: |
+    Access-control testing records zero unauthorized cross-clearance retrievals.
+    Documents above an analyst's clearance are filtered before retrieval runs, so
+    an over-clearance document is never a candidate rather than a redacted result.
+  template_conformance: |
+    At least ninety-five percent of briefs conform to the ministry template
+    without manual reformatting, confirmed by a structural conformance check.
+  governed_additive_change: |
+    The Cohere provider enters the running mesh additively: a new REST client, a
+    new model tier, and a clearance-gated retrieval path, added without modifying
+    the existing retrieval and answering agents, and traceable through the
+    application's own specification corpus.
+
+implementation_phases:
+  - phase: Cohere provider on the mesh
+    outcome: |
+      A Cohere REST client for embed, rerank, and chat, and a Cohere model tier
+      that composes a brief with Command and surfaces the returned citations as
+      structured source metadata. Retrieval reranks candidates with Cohere Rerank.
+      The provider is additive; the existing Ollama agents are untouched.
+  - phase: Clearance-gated retrieval
+    outcome: |
+      Documents carry a clearance tag at ingest, and retrieval filters the corpus
+      to the analyst's authorization before it runs, with an access-control proof
+      that records zero cross-clearance retrievals.
+  - phase: Approved-domain augmentation and template conformance
+    outcome: |
+      An OSINT lookup restricted to an approved-domain allowlist augments
+      retrieval, blocked domains are dropped and logged, and a structural check
+      confirms each brief conforms to the ministry template before it is surfaced.
+  - phase: Evidence
+    outcome: |
+      A demonstrable run against the mixed demo corpus -- four tiers of real
+      published Ukraine reporting and one clearly fictional HUMINT tier -- shows
+      the time, attribution, recall, clearance-isolation, and conformance
+      criteria, with an evaluation over labeled taskings behind the recall and
+      coverage numbers. Each measured figure carries that mixed
+      real-and-synthetic qualification in the output itself.
+
+risks:
+  - risk: The live demonstration uses the hosted Cohere trial API, not an on-premise deployment.
+    mitigation: |
+      The application logic is identical against a private deployment; only the
+      client base URL changes. We state the distinction openly and keep the
+      configuration point visible so the on-premise path is a swap, not a rewrite.
+  - risk: The demo corpus mixes four tiers of real published reporting with one invented HUMINT tier, so the bound on what a synthetic-corpus figure supports applies unevenly across a measured number.
+    mitigation: |
+      Every reported figure carries the mixed real-and-synthetic qualification
+      in the evaluation output itself, the invented tier identifies itself as
+      invented in the artifact, and each real tier's licence, provenance, and
+      retrieval date are recorded in its data README. The labeled relevant
+      sets and designed taskings keep the criteria measurable, and a threshold
+      met over this corpus is stated as met over this corpus rather than as an
+      operational result.
+  - risk: A small answering model omits inline citations, and the UI's bracket-scraping heuristic then mislabels a cited turn as unattributed.
+    mitigation: |
+      Command returns structured citations, and the mesh reads that source
+      metadata directly rather than scraping brackets from the answer text,
+      replacing the heuristic instead of working around it.
+  - risk: The demo mesh builds against a sibling declarative-agents checkout, so a clone on its own does not run.
+    mitigation: |
+      The application identity now matches this repository, so the targets run
+      from its root, and rel09.9 gates that end to end rather than asserting it.
+      The remaining prerequisite is the sibling checkout that demo.yaml core_root
+      and catalog_root name, which the build and audit entries document.
+
+not:
+  - We do not own the agent-core runtime, its Go packages, or its builtin tools;
+    the application is a program that runs on that runtime.
+  - We do not train or fine-tune models; we deploy the Cohere stack as provided
+    and compose with it through its API.
+  - We do not replace the analyst or the human reviewer. The assistant produces a
+    first draft with citations; a person edits, verifies, and approves it.
+  - We do not claim an operational deployment. This is a copyable proof of concept
+    that runs the real Cohere models and demonstrates the solution design.
+  - We do not restate agent-core platform requirements (REST client tools,
+    machine_request binding, monitor, mounted profiles, checkpoint, command-state,
+    traceparent); we cite them as external references.
+
+canonical_documents:
+  - docs/ARCHITECTURE.yaml
+  - docs/road-map.yaml
+  - docs/specs/software-requirements/srd001-rag-server-agent.yaml
+  - docs/specs/software-requirements/srd002-chatbot-agent.yaml
+  - docs/specs/software-requirements/srd003-chatbot-deployment.yaml
+  - README.md
+
+platform_references:
+  note: |
+    These agent-core requirements are the runtime contracts the application builds
+    on. They are external references, owned by agent-core, not restated here.
+  requirements:
+    - agent-core srd028 (REST client tools)
+    - agent-core srd030 (machine_request REST binding)
+    - agent-core srd033 (monitor REST API)
+    - agent-core srd034 (external mounted agent profiles)
+    - agent-core srd035 and srd036 (checkpoint port and persistence)
+    - agent-core srd038 (command-state store and $from selectors)
+    - agent-core srd016 (W3C traceparent propagation)

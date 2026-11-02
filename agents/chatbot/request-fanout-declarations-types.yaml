@@ -1,0 +1,315 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of request-fanout-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: cohere-chatbot-request-fanout-declarations-types
+types:
+  - name: CohereRerankRagOutput
+    schema:
+      properties:
+        mapped:
+          type: object
+      type: object
+  - name: AnswerTier
+    description: The tier that answers the turn, published under answer_tier by declare_cohere_tier and declare_ollama_tier in the same request machine.
+    schema:
+      properties:
+        tier:
+          type: string
+      required:
+        - tier
+      type: object
+  - name: Citations
+    description: The citations the cited path parses and the default path declares, both under the citations_state label.
+    schema:
+      properties:
+        citations:
+          items:
+            properties:
+              start:
+                type: integer
+              end:
+                type: integer
+              text:
+                type: string
+              record_id:
+                type: string
+            required: [start, end, text, record_id]
+            type: object
+          type: array
+        dropped_citations:
+          items:
+            $type: cohere-chatbot-request-fanout-declarations-types.DroppedCitation
+          type: array
+        floor_dropped_citations:
+          items:
+            $type: cohere-chatbot-request-fanout-declarations-types.DroppedCitation
+          type: array
+      required: [citations, dropped_citations, floor_dropped_citations]
+      type: object
+  - name: DroppedCitation
+    description: A citation span the parser or the release floor removed, with the reason.
+    schema:
+      properties:
+        start:
+          type: integer
+        end:
+          type: integer
+        text:
+          type: string
+        reason:
+          type: string
+      required: [start, end, text, reason]
+      type: object
+  - name: DeclarePriorReadRequestOutput
+    description: The prior brief's cited record ids, published under the declare_read_request label only when ids ride the request.
+    schema:
+      properties:
+        record_ids:
+          items:
+            type: string
+          type: array
+      required:
+        - record_ids
+      type: object
+  - name: FlattenChunksOutput
+    schema:
+      properties:
+        count:
+          type: integer
+        items:
+          type: array
+      type: object
+  - name: FlattenCitationsOutput
+    schema:
+      properties:
+        count:
+          type: integer
+        items:
+          type: array
+      type: object
+  - name: FlattenMergedCitationsOutput
+    schema:
+      properties:
+        count:
+          type: integer
+        items:
+          type: array
+      type: object
+  - name: FlattenPriorChunksOutput
+    schema:
+      properties:
+        count:
+          type: integer
+        items:
+          type: array
+      type: object
+  - name: RagQueryFacetedOutput
+    schema:
+      properties:
+        mapped:
+          $type: builtin-types-retrieval.QueryResult
+      type: object
+  - name: RagQueryOutput
+    schema:
+      properties:
+        mapped:
+          $type: builtin-types-retrieval.QueryResult
+      type: object
+  - name: ReorderCandidatesOutput
+    schema:
+      properties:
+        items:
+          type: array
+      type: object
+  - name: ParseChunkUnionOutput
+    description: The object parse_chunk_union parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              metadata: {}
+              source:
+                type: string
+            required:
+            - id
+            - text
+            - source
+      required:
+      - items
+  - name: ParseProposedSearchesOutput
+    description: The object parse_proposed_searches parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        first:
+          type: string
+        second:
+          type: string
+        third:
+          type: string
+      required:
+      - first
+  - name: ParseDocumentsOutput
+    description: The object parse_documents parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        documents:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              data:
+                type: object
+            required:
+            - id
+            - data
+      required:
+      - documents
+  - name: ParseReaderClearanceOutput
+    description: The object parse_reader_clearance parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        rank:
+          type: integer
+      required:
+      - rank
+  - name: ParseMergedCitationsOutput
+    description: The object parse_merged_citations parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        lanes:
+          type: array
+          items:
+            type: object
+            properties:
+              rows:
+                type: array
+            required:
+            - rows
+      required:
+      - lanes
+  - name: StageStatus
+    description: >-
+      A cascade stage's outcome as the status declarations publish it, shared
+      because rerank_status, osint_rerank_status, fusion_status, and
+      osint_status each have writers here and in the OSINT declarations, and
+      declare_leg_absent writes three of them: applied, degraded, skipped,
+      composed, empty, errored, dropped, disabled, or "" for a leg that did not
+      run.
+    schema:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+  - name: RetrievalFacets
+    description: The facet filter a query leg applies, published under retrieval_facets by the analyst, proposed, and windowed paths.
+    schema:
+      type: object
+      properties:
+        facet_where:
+          type: object
+        keyword:
+          description: The keyword filter; "" when the path sets none.
+      required:
+        - facet_where
+  - name: ChatResponse
+    description: >-
+      The turn's response body. Fields a tier or a skipped leg leaves unset
+      render as "", so they carry a description and no type.
+    schema:
+      type: object
+      properties:
+        answer:
+          description: The composed brief.
+        metadata:
+          type: object
+          properties:
+            answered_by:
+              description: The word that composed the answer.
+            query_embedding_model:
+              description: The identity the query vector was embedded under.
+            rerank:
+              description: The RAG rerank status.
+            osint:
+              type: object
+              properties:
+                status:
+                  description: The OSINT branch status.
+                rerank:
+                  description: The OSINT rerank status.
+            fusion:
+              description: The fusion rerank status.
+            composition:
+              type: object
+              properties:
+                documents:
+                  type: array
+            citations:
+              description: The citations the composition returned.
+            dropped_citations:
+              description: The citations dropped as unresolvable.
+            floor_dropped_citations:
+              description: The citations dropped by the clearance floor.
+            query_counts:
+              type: object
+              properties:
+                succeeded:
+                  type: integer
+                failed:
+                  type: integer
+            clearance_enforced_at:
+              description: Where clearance was enforced.
+            conformance:
+              description: The conformance verdict.
+            sources:
+              type: object
+              properties:
+                not_selected:
+                  description: The sources the selection left out.
+                composed:
+                  type: array
+                embedding_model_excluded:
+                  type: array
+                query_failed:
+                  type: array
+                clearance_refused:
+                  type: array
+      required:
+        - metadata
+  - name: ProposeSearchesViaToolOutput
+    description: The propose_searches_tool response envelope; the loader derives the exact shape from the operation, this names what parse_proposed_searches reads.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object
+          properties:
+            tool_calls:
+              description: The forced tool call carrying the proposed queries.
+  - name: SearchProposedQueryOutput
+    description: The search_proposed response envelope; results are the rows the proposal search returned.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object
+          properties:
+            results:
+              type: array

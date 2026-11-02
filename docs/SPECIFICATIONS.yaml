@@ -1,0 +1,662 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: cohere-demo-specifications
+title: cohere-demo Specification Index
+
+overview: |
+  Specification index for the standalone chatbot mesh example. Fifteen SRDs define
+  the program: three data-plane -- the RAG server agent (srd001), the chatbot agent
+  (srd002), and the Helm deployment model (srd003) -- two control-plane -- the
+  provisioning-workflow-orchestrator (srd004) and the creator (srd005) -- the deployment-plane applier
+  (srd006), the collector agent (srd007), the fleet observer agent (srd008), and seven
+  for the additive Cohere provider work -- the provider client and Command tier
+  (srd009), clearance-gated retrieval (srd010), the OSINT search branch with the
+  cascade rerank (srd011), brief markdown composition with its template conformance
+  check (srd012), the exporter agent that renders the approved brief to PDF (srd013),
+  the evaluation methodology that measures the criteria over labeled taskings
+  (srd014), the corpus build whose cached embeddings and declared metadata the
+  plan releases read (srd015), and the real multi-source corpus that replaces the
+  synthetic one and serves its documents back to the interface (srd017). The
+  corpus holds twenty-four use cases and
+  twenty-three test suites. Sixteen use cases cover the substrate releases, rel00.0
+  through rel10.3, each with a formal test suite, and all sixteen are
+  implemented. The substrate covers srd009 in full. rel10.0 carries the
+  provider client, the Command composition tier, and the additive boundary; rel10.1
+  the structured citations; rel10.2 the RAG rerank pass; and rel10.3 the
+  query-embedding repoint that completed the model stack. All four are implemented,
+  each proving its response shape against the live provider, and rel10.0 and rel10.3
+  each verify a tasking against the deployed mesh. srd010 through srd017
+  specify the plan block. srd015 (rel10.4, the corpus build with cached
+  embeddings) is implemented: the committed store carries both embedding
+  families over one set of records, and its tracer builds, seeds, and serves a
+  tasking from the seeded collection. Everything behind it in the plan block
+  reads the clearance tags, facets, source-evaluation rows, and synthetic
+  documents it supplies. rel11.0 (clearance-gated retrieval) is implemented: the
+  rag-server filters the served collection to the requester's level before the
+  vector search, so an over-clearance document is never a candidate rather than
+  a discarded result. srd017 (rel10.5, the real multi-source corpus) is implemented: it replaces the synthetic corpus with five real Ukraine
+  source tiers, chunks a declared month at three profiles carrying parent lineage, bounds the
+  paid embedding to a declared selection, and serves each document back to the
+  interface from a second collection behind the same clearance filter. Its use
+  case and its sixteen-case test suite are authored ahead of the code, so every
+  implementation issue in the release is checked against cases that already
+  exist. srd016 (rel11.5, the two-panel INTSUM interface) is implemented: the
+  chat route renders the ministry form beside the tasking, filling from the
+  turn through a declared contract; keyword, source-type, and source-rating
+  facets narrow retrieval before the vector search under the clearance window
+  the retrieval tier composes itself; and the provenance walk resolves a
+  citation to its chunk, the whole report behind it, that report's other
+  versions, and its cross-tier derivation, all served through the request
+  boundary under the clearance the retrieval path enforces. Its browser tracer
+  asserts the rendered surface at two clearance levels against the seeded
+  mesh. srd012 (rel12.2, template conformance) is implemented: the markdown
+  structural schema is versioned data beside the interface artifact, every
+  composed brief is validated against it on the turn by a deterministic
+  chain that reaches no model, and the verdict, the schema version, and the
+  specific defects travel in response metadata to the form, where a failing
+  brief is surfaced as a draft with its defect list and a passing one is
+  never described as more than structurally conformant. srd011's rel12.0 half
+  (OSINT search tool) is implemented: an allowlisted external search runs as a
+  second retrieval branch whose egress carries the tasking alone, results
+  normalize into the RAG candidate shape and reach the model only as marked,
+  provenance-carrying documents in the composition set, the client's network
+  policy is the approved-domain control that drops and reports a
+  non-allowlisted request, and the air-gapped deployment removes the
+  capability from the rendered policy and answers retrieval-only. srd011's
+  rel12.1 half (cascade rerank) is implemented: the search branch is reranked
+  on its own and trimmed to the declared budget, a fusion pass re-scores the
+  union of both reranked branches against the tasking on one relevance scale
+  to produce the composed top-N, all three passes call the one declared
+  rerank operation differing only in candidate set, every pass degrades
+  without failing the turn, and the single-fusion collapse is recorded as a
+  latency tunable that is not the default. srd014 (rel13.0, evaluation) is
+  implemented: a versioned labeled-tasking corpus over the Ukraine slice, a
+  Go harness that drives the shipped turn through its ordinary boundary and
+  measures retrieval recall at the composed top-N with and without the
+  rerank pass, citation coverage from structured metadata under a declared
+  deterministic segmentation, and first-draft time in measured and assumed
+  segments, all folded into one report that carries per-tasking results,
+  the run configuration and model identities, and the mixed
+  real-and-synthetic qualification in the output itself. srd013 (rel14.0,
+  brief export) is implemented: a request-scoped exporter agent renders the
+  approved, analyst-edited brief markdown to PDF through fixed-argv md-to-tex
+  and LaTeX exec words in its own egress-denied Helm workload, on an image
+  that adds the rendering toolchain as a recorded sanctioned divergence; the
+  export runs on the analyst's request off the generation turn's latency, a
+  failure rolls the workspace back and returns no partial PDF, and the
+  hostile shell-escape and outside-path fixtures neither execute nor read
+  what they name under the declared engine confinement. This completes the
+  road map.
+
+  The application runs on the agent-core runtime and cites agent-core platform SRDs
+  (srd021, srd028, srd029, srd030, srd033, srd034, srd035, srd036, and srd016
+  traceparent) as external references rather than indexing them here. The control
+  plane (provisioning-workflow-orchestrator, creator, and the provisioning surface) is release rel05.0; the
+  applier (srd006) that replaces the Go provisioning surface with a declarative
+  agent is release rel06.0.
+
+  The corpus is validated by the specification critic (mage audit): it loads and validates with no
+  errors. Advisory findings remain visible, including tool-undo-mismatch warnings;
+  the gate does not report a warning-free corpus. The traceability chain is complete:
+  every use case touchpoint builds an SRD edge (the object-format {id, target, reason} touchpoints
+  parse since GH-448), every success criterion traces an acceptance criterion
+  alongside its requirement groups, and every acceptance criterion is covered by a
+  test case. Every SRD is indexed and placed in ARCHITECTURE, every use case targets
+  its SRDs through touchpoints, and every test suite traces its use case.
+
+role_alignment_index:
+  authority: ../../declarative-agents/applications/docs/specs/semantic-models/agent-role-realizations.yaml#bindings.chatbot_mesh
+  architecture: docs/ARCHITECTURE.yaml#role_realization_alignment
+  rule: Actors assume roles; profile, wrapper, Helm workload, and values-selected instance names are realization identities, not canonical role definitions.
+  decisions:
+    - {current_actor: chatbot, canonical_role_sub_role: "Planner / Intent Handler; Executor / Workflow Orchestrator; Knowledge Manager / Recommendation Generator", retained_or_proposed_name: chatbot, evidence: srd002, migration_impact: none}
+    - {current_actor: rag-server, canonical_role_sub_role: "Knowledge Manager / Recommendation Generator", retained_or_proposed_name: rag-server, evidence: srd001, migration_impact: none}
+    - {current_actor: corpus-ingest, canonical_role_sub_role: "inherited Knowledge Manager / Ontology Manager", retained_or_proposed_name: corpus-ingest, evidence: "srd001 ingest boundary and wrapper profile", migration_impact: none}
+    - {current_actor: provisioning-workflow-orchestrator, canonical_role_sub_role: "Executor / Workflow Orchestrator; not Coordinator", retained_or_proposed_name: provisioning-workflow-orchestrator, evidence: srd004, migration_impact: GH-1077}
+    - {current_actor: creator, canonical_role_sub_role: "Creator / Instance Manager; Agent Owner / Agent Lifecycle Manager", retained_or_proposed_name: creator, evidence: srd005, migration_impact: none}
+    - {current_actor: applier, canonical_role_sub_role: "Executor / Actuation Agent and Change Manager", retained_or_proposed_name: applier, evidence: srd006, migration_impact: documentation-only}
+    - {current_actor: collector, canonical_role_sub_role: "Monitor / Telemetry Collector", retained_or_proposed_name: collector, evidence: srd007, migration_impact: none}
+    - {current_actor: observer, canonical_role_sub_role: "Monitor / Fleet Observer", retained_or_proposed_name: observer, evidence: srd008, migration_impact: none}
+    - {current_actor: exporter, canonical_role_sub_role: "Executor / Actuation Agent", retained_or_proposed_name: exporter, evidence: srd013, migration_impact: "none; additive new agent"}
+  deployment_evidence:
+    - helm/templates/chatbot.yaml
+    - helm/templates/rag-units.yaml
+    - helm/templates/provisioning-workflow-orchestrator.yaml
+    - helm/templates/creator.yaml
+    - helm/templates/applier.yaml
+    - helm/templates/collector.yaml
+    - helm/templates/observer.yaml
+
+roadmap_summary:
+  - version: "00.0"
+    name: RAG server and single-RAG chatbot turn
+    use_cases_done: 2
+    use_cases_total: 2
+    status: implemented
+  - version: "01.0"
+    name: Tier selection and multi-RAG fan-out
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "02.0"
+    name: Observability
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "03.0"
+    name: Mesh deployment and tiered swap
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "04.0"
+    name: In-cluster LLM tier
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "05.0"
+    name: Control plane
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "06.0"
+    name: Declarative applier agent
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "07.0"
+    name: Declarative collector agent
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "08.0"
+    name: Fleet observer agent
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "09.0"
+    name: Canonical collector and Jaeger retirement
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "09.9"
+    name: Baseline demo from the repository root
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "10.0"
+    name: Cohere Command composition tier
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "10.1"
+    name: Structured citations
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "10.2"
+    name: RAG rerank
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "10.3"
+    name: Cohere embedding tier
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  # The plan rows below follow road-map.yaml's plan block, where document order is
+  # the schedule rather than the version sequence.
+  - version: "10.4"
+    name: Corpus build with cached embeddings
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "10.5"
+    name: Real multi-source demo corpus
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "11.0"
+    name: Clearance-gated retrieval
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "11.5"
+    name: Two-panel INTSUM UI
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "12.2"
+    name: Template conformance
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "12.0"
+    name: OSINT search tool
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "12.1"
+    name: Cascade rerank
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "13.0"
+    name: Evaluation and first-draft-time proof
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "13.1"
+    name: Generated references and the in-demo evaluation
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+  - version: "14.0"
+    name: Brief export to PDF
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
+
+srd_index:
+  - id: srd001-rag-server-agent
+    title: RAG Server Agent Functional Block
+    summary: Persistent vector-in retrieval service behind a machine_request query endpoint.
+    path: docs/specs/software-requirements/srd001-rag-server-agent.yaml
+  - id: srd002-chatbot-agent
+    title: Chatbot Agent Functional Block
+    summary: Browser-facing agent whose request-scoped turn selects a model tier, fans out to RAG servers, composes, and answers.
+    path: docs/specs/software-requirements/srd002-chatbot-agent.yaml
+  - id: srd003-chatbot-deployment
+    title: Chatbot Mesh Deployment Model
+    summary: One Helm chart with values-driven RAG pairs, co-generated client config, tiered hot swap, and an in-cluster LLM tier.
+    path: docs/specs/software-requirements/srd003-chatbot-deployment.yaml
+  - id: srd004-provisioning-workflow-orchestrator
+    title: Provisioning Workflow Orchestrator Agent Functional Block
+    summary: The current provisioning-workflow-orchestrator actor assumes Executor / Workflow Orchestrator, binds a provisioning intent, and sequences ingestion and reconfiguration through the creator; GH-1077 completed its semantic rename.
+    path: docs/specs/software-requirements/srd004-provisioning-workflow-orchestrator.yaml
+  - id: srd005-creator
+    title: Creator Agent Functional Block
+    summary: Actor assuming Creator / Instance Manager and Agent Owner / Agent Lifecycle Manager that realizes decided operations and alone holds deployment-API authority.
+    path: docs/specs/software-requirements/srd005-creator.yaml
+  - id: srd006-applier
+    title: Applier Agent Functional Block
+    summary: Executor / Actuation Agent realization that validates a values patch, applies and verifies a rollout, and rolls back, binding helm and kubectl as exec tools.
+    path: docs/specs/software-requirements/srd006-applier.yaml
+  - id: srd007-collector-agent
+    title: Collector Agent Functional Block
+    summary: Monitor / Telemetry Collector realization composing bounded OTLP receive, deterministic spool, unchanged relay, lifecycle surfaces, and self-loop prevention while contrib retains metrics.
+    path: docs/specs/software-requirements/srd007-collector-agent.yaml
+  - id: srd008-observer-agent
+    title: Observer Agent Functional Block
+    summary: Monitor / Fleet Observer realization that discovers mesh agents and the deployment topology from the Kubernetes API, polls each agent's monitor surface and per-pod resource usage (metrics.k8s.io), and serves a fleet-level view.
+    path: docs/specs/software-requirements/srd008-observer-agent.yaml
+  - id: srd009-cohere-provider
+    title: Cohere Provider Client and Command Tier
+    summary: Additive Cohere provider on the chatbot actor -- one declared REST client for embed, rerank, and chat with a configurable base URL and allowlisted egress; invoke_cohere_command as a selectable chat-LLM word composing over a documents list; structured citation surfacing replacing the bracket-scraping heuristic; and the first cascade rerank over the RAG candidates.
+    path: docs/specs/software-requirements/srd009-cohere-provider.yaml
+  - id: srd010-clearance-gated-retrieval
+    title: Clearance-Gated Retrieval
+    summary: Per-clearance access control enforced before retrieval -- ingest-time clearance tagging, a rag-server metadata where-filter applied ahead of the vector search so an over-clearance document is never a candidate, and the analyst's maximum clearance carried from the authenticated request context through the fan-out as trusted command state.
+    path: docs/specs/software-requirements/srd010-clearance-gated-retrieval.yaml
+  - id: srd011-osint-search-cascade-rerank
+    title: OSINT Search Branch and Cascade Rerank
+    summary: The second retrieval branch and the cascade that orders both -- an OSINT search bounded by a client-enforced approved-domain allowlist and a minimized egress payload, a per-branch rerank, and a fusion rerank that reorders the union on one relevance scale to produce the top-N Command composes from, with external results held as untrusted, provenance-marked, unclearanced data.
+    path: docs/specs/software-requirements/srd011-osint-search-cascade-rerank.yaml
+  - id: srd012-brief-markdown-conformance
+    title: Brief Markdown Composition and Template Conformance
+    summary: Ministry-template markdown as the composition target and the deterministic structural check over it -- a versioned schema of required sections, a non-model validation run on every brief before it is surfaced, and a flagged-with-defects outcome that never rewrites the draft; owns the markdown representation among the template's three.
+    path: docs/specs/software-requirements/srd012-brief-markdown-conformance.yaml
+  - id: srd013-exporter-agent
+    title: Exporter Agent Functional Block
+    summary: Sandboxed, network-denied agent that renders the approved, analyst-edited brief markdown to PDF through md-to-tex and a LaTeX engine bound as fixed-argv exec words, with shell escape disabled and file access restricted because the document is composed from untrusted-derived content; analyst-triggered off the generation turn, following and tightening the applier's exec-bound precedent.
+    path: docs/specs/software-requirements/srd013-exporter-agent.yaml
+  - id: srd014-evaluation
+    title: Evaluation Methodology over Labeled Taskings
+    summary: The measurement specification behind the VISION's numbers -- a labeled-tasking corpus whose relevant sets are labeled independently of any run, retrieval recall reported with and without the rerank passes so Rerank's contribution is a measured difference, citation coverage over a declared deterministic assertion segmentation, first-draft time split into system and analyst-edit segments against the half-day baseline, and an explicit bound on what figures over a synthetic corpus may be claimed to support.
+    path: docs/specs/software-requirements/srd014-evaluation.yaml
+  - id: srd015-corpus-build
+    title: Corpus Build with Cached Embeddings
+    summary: The offline build behind the plan corpus -- a synthetic, multi-source, multi-clearance, Admiralty-rated document set sized so a retrieval cutoff bites, chunked into on-disk YAML records that carry each chunk beside its vectors and its declared metadata, with vectors keyed by embedding-model identity so families coexist and a rebuild re-embeds only what changed, and a demo seed that loads from the store rather than calling the embedding provider.
+    path: docs/specs/software-requirements/srd015-corpus-build.yaml
+  - id: srd016-intsum-ui
+    title: Two-Panel INTSUM Interface
+    summary: The analyst surface over the corpus -- the chat route rendered as the tasking and its keyword, source-type, source-rating, and clearance facets beside the live ministry INTSUM form, the versioned template artifact that form renders from and rel12.2 later validates markdown against, the walk from a citation to its chunk to the whole parent report and its other chunk-size versions, and the identifier-in read boundary that serves those documents through the request boundary where the analyst's clearance is established so the presentation path withholds exactly what retrieval withholds.
+    path: docs/specs/software-requirements/srd016-intsum-ui.yaml
+  - id: srd017-real-demo-corpus
+    title: Real Multi-Source Demo Corpus
+    summary: The real corpus that replaces the synthetic one -- five Ukraine source tiers read through a single normalized envelope with clearance declared per tier rather than inferred per document, a declared window converted whole and chunked at three coexisting profiles, parent-document and cross-tier lineage on every chunk so a retrieved fragment reconstructs to a citable source, a paid embedding step bounded to a declared selection whose ceiling is checked before the first request, and a second collection in the same vector store that serves documents and their versions to the interface behind the clearance filter that governs retrieval.
+    path: docs/specs/software-requirements/srd017-real-demo-corpus.yaml
+
+use_case_index:
+  - id: rel00.0-uc001-rag-server-query
+    title: Persistent RAG Server Answers a Vector-In Query
+    release: "00.0"
+    status: implemented
+    test_suite: test-rel00.0-chatbot-mesh
+    path: docs/specs/use-cases/rel00.0-uc001-rag-server-query.yaml
+  - id: rel00.0-uc002-chatbot-turn
+    title: Chatbot Turn Embeds, Retrieves From One RAG, and Answers
+    release: "00.0"
+    status: implemented
+    test_suite: test-rel00.0-chatbot-mesh
+    path: docs/specs/use-cases/rel00.0-uc002-chatbot-turn.yaml
+  - id: rel01.0-uc001-routed-fanout
+    title: Chatbot Turn Selects Sources and a Model Tier Before Trusted RAG Fan-Out
+    release: "01.0"
+    status: implemented
+    test_suite: test-rel01.0-routing-fanout
+    path: docs/specs/use-cases/rel01.0-uc001-routed-fanout.yaml
+  - id: rel02.0-uc001-observability
+    title: Observability Panel Shows Per-Agent State and a Cross-Agent Trace Waterfall
+    release: "02.0"
+    status: implemented
+    test_suite: test-rel02.0-observability
+    path: docs/specs/use-cases/rel02.0-uc001-observability.yaml
+  - id: rel03.0-uc001-mesh-deployment
+    title: Helm Chart Deploys the Mesh and Hot-Swaps a RAG Source
+    release: "03.0"
+    status: implemented
+    test_suite: test-rel03.0-mesh-deployment
+    path: docs/specs/use-cases/rel03.0-uc001-mesh-deployment.yaml
+  - id: rel04.0-uc001-in-cluster-llm-tier
+    title: A Fresh-Cluster Install Answers a Turn With No External LLM Dependency
+    release: "04.0"
+    status: implemented
+    test_suite: test-rel04.0-llm-tier
+    path: docs/specs/use-cases/rel04.0-uc001-in-cluster-llm-tier.yaml
+  - id: rel05.0-uc001-control-plane-provisioning
+    title: A Provisioning Intent Flows Chatbot to Provisioning Workflow Orchestrator to Creator and Serves
+    release: "05.0"
+    status: implemented
+    test_suite: test-rel05.0-control-plane
+    path: docs/specs/use-cases/rel05.0-uc001-control-plane-provisioning.yaml
+  - id: rel06.0-uc001-declarative-applier
+    title: The Applier Agent Realizes the Deployment API and Rolls Out a Values Change
+    release: "06.0"
+    status: implemented
+    test_suite: test-rel06.0-applier
+    path: docs/specs/use-cases/rel06.0-uc001-declarative-applier.yaml
+  - id: rel07.0-uc001-collector-ingress
+    title: The collector agent retains and relays an attributable trace batch
+    release: "07.0"
+    status: implemented
+    test_suite: test-rel07.0-collector
+    path: docs/specs/use-cases/rel07.0-uc001-collector-ingress.yaml
+  - id: rel08.0-uc001-mesh-observer
+    title: The observer agent discovers the mesh and shows a fleet view
+    release: "08.0"
+    status: implemented
+    test_suite: test-rel08.0-observer
+    path: docs/specs/use-cases/rel08.0-uc001-mesh-observer.yaml
+  - id: rel09.0-uc001-canonical-collector
+    title: The mesh deploys with no Jaeger workload and traces from the collector query surface
+    release: "09.0"
+    status: implemented
+    test_suite: test-rel09.0-canonical-collector
+    path: docs/specs/use-cases/rel09.0-uc001-canonical-collector.yaml
+  - id: rel09.9-uc001-baseline-demo
+    title: The Baseline Mesh Comes Up From the Repository Root and Answers From the Corpus
+    release: "09.9"
+    status: implemented
+    test_suite: test-rel09.9-baseline-demo
+    path: docs/specs/use-cases/rel09.9-uc001-baseline-demo.yaml
+  - id: rel10.0-uc001-cohere-command-tier
+    title: The Cohere Command Tier Composes a Brief While the Ollama Tier Stays Selectable
+    release: "10.0"
+    status: implemented
+    test_suite: test-rel10.0-cohere-command-tier
+    path: docs/specs/use-cases/rel10.0-uc001-cohere-command-tier.yaml
+  - id: rel10.1-uc001-structured-citations
+    title: Command's Citation Spans Become Structured Source Metadata a Reader Can Open
+    release: "10.1"
+    status: implemented
+    test_suite: test-rel10.1-structured-citations
+    path: docs/specs/use-cases/rel10.1-uc001-structured-citations.yaml
+
+  - id: rel10.2-uc001-rag-rerank
+    title: Cohere Rerank Reorders the Retrieved Candidates and Lifts a Buried Document Into the Composed Set
+    release: "10.2"
+    status: implemented
+    test_suite: test-rel10.2-rag-rerank
+    path: docs/specs/use-cases/rel10.2-uc001-rag-rerank.yaml
+
+  - id: rel10.3-uc001-cohere-embedding-tier
+    title: Query Embedding Repoints to Cohere Embed While Every Source Survives the Identity Comparison
+    release: "10.3"
+    status: implemented
+    test_suite: test-rel10.3-cohere-embedding-tier
+    path: docs/specs/use-cases/rel10.3-uc001-cohere-embedding-tier.yaml
+
+  - id: rel10.4-uc001-corpus-build
+    title: A Build Embeds the Corpus Once, and a Demo Seeded From the Store Answers a Tasking With the Embedding Provider Uncalled
+    release: "10.4"
+    status: implemented
+    test_suite: test-rel10.4-corpus-build
+    path: docs/specs/use-cases/rel10.4-uc001-corpus-build.yaml
+
+  - id: rel10.5-uc001-real-demo-corpus
+    title: A Build Over Real Reporting Produces Multi-Profile Chunks Carrying Lineage, and a Cited Answer Resolves Back to the Document It Was Cut From
+    release: "10.5"
+    status: implemented
+    test_suite: test-rel10.5-real-demo-corpus
+    path: docs/specs/use-cases/rel10.5-uc001-real-demo-corpus.yaml
+
+  - id: rel11.0-uc001-clearance-gated-retrieval
+    title: The Same Tasking at Two Clearance Levels, Where the Uncleared Analyst Never Had the Restricted Document as a Candidate
+    release: "11.0"
+    status: implemented
+    test_suite: test-rel11.0-clearance-gated-retrieval
+    path: docs/specs/use-cases/rel11.0-uc001-clearance-gated-retrieval.yaml
+  - id: rel11.5-uc001-intsum-ui
+    title: An Analyst Narrows Retrieval by Facet, Reads the Filled INTSUM Form, and Walks a Citation Back to the Report Behind It
+    release: "11.5"
+    status: implemented
+    test_suite: test-rel11.5-intsum-ui
+    path: docs/specs/use-cases/rel11.5-uc001-intsum-ui.yaml
+
+  - id: rel12.2-uc001-template-conformance
+    title: A Conforming Brief Passes the Structural Check While a Malformed One Is Flagged With Its Defects Rather Than Surfaced as Final
+    release: "12.2"
+    status: implemented
+    test_suite: test-rel12.2-template-conformance
+    path: docs/specs/use-cases/rel12.2-uc001-template-conformance.yaml
+
+  - id: rel12.0-uc001-osint-search
+    title: An Allowlisted Search Result Reaches the Brief While a Request to Any Other Host Is Dropped and Logged
+    release: "12.0"
+    status: implemented
+    test_suite: test-rel12.0-osint-search
+    path: docs/specs/use-cases/rel12.0-uc001-osint-search.yaml
+
+  - id: rel12.1-uc001-cascade-rerank
+    title: RAG and Search Candidates Fuse Into One Reranked Top-N Ordered on a Single Relevance Scale
+    release: "12.1"
+    status: implemented
+    test_suite: test-rel12.1-cascade-rerank
+    path: docs/specs/use-cases/rel12.1-uc001-cascade-rerank.yaml
+
+  - id: rel13.0-uc001-evaluation
+    title: The Evaluation Reports Recall With and Without Rerank, Citation Coverage, and First-Draft Time Against the Half-Day Baseline
+    release: "13.0"
+    status: implemented
+    test_suite: test-rel13.0-evaluation
+    path: docs/specs/use-cases/rel13.0-uc001-evaluation.yaml
+
+  - id: rel13.1-uc001-generated-references
+    title: A Generated Corpus Labels Recall Backwards From Its References, and an /eval Command Reports It During the Demo
+    release: "13.1"
+    status: implemented
+    test_suite: test-rel13.1-generated-references
+    path: docs/specs/use-cases/rel13.1-uc001-generated-references.yaml
+
+  - id: rel14.0-uc001-brief-export
+    title: The Analyst Edits the Brief and Exports It to a Ministry-Conformant PDF a Reviewer Approves
+    release: "14.0"
+    status: implemented
+    test_suite: test-rel14.0-brief-export
+    path: docs/specs/use-cases/rel14.0-uc001-brief-export.yaml
+
+test_suite_index:
+  - id: test-rel00.0-chatbot-mesh
+    title: Test Suite for Release 00.0 RAG Server and Single-RAG Chatbot Turn
+    release: "00.0"
+    traces: [rel00.0-uc001-rag-server-query, rel00.0-uc002-chatbot-turn]
+    path: docs/specs/test-suites/test-rel00.0-chatbot-mesh.yaml
+  - id: test-rel01.0-routing-fanout
+    title: Test Suite for Release 01.0 Source Routing, Tier Selection, and Multi-RAG Fan-Out
+    release: "01.0"
+    traces: [rel01.0-uc001-routed-fanout]
+    path: docs/specs/test-suites/test-rel01.0-routing-fanout.yaml
+  - id: test-rel02.0-observability
+    title: Test Suite for Release 02.0 Observability
+    release: "02.0"
+    traces: [rel02.0-uc001-observability]
+    path: docs/specs/test-suites/test-rel02.0-observability.yaml
+  - id: test-rel03.0-mesh-deployment
+    title: Test Suite for Release 03.0 Mesh Deployment and Tiered Swap
+    release: "03.0"
+    traces: [rel03.0-uc001-mesh-deployment]
+    path: docs/specs/test-suites/test-rel03.0-mesh-deployment.yaml
+  - id: test-rel04.0-llm-tier
+    title: Test Suite for Release 04.0 In-Cluster LLM Tier
+    release: "04.0"
+    traces: [rel04.0-uc001-in-cluster-llm-tier]
+    path: docs/specs/test-suites/test-rel04.0-llm-tier.yaml
+  - id: test-rel05.0-control-plane
+    title: Test Suite for Release 05.0 Control Plane
+    release: "05.0"
+    traces: [rel05.0-uc001-control-plane-provisioning]
+    path: docs/specs/test-suites/test-rel05.0-control-plane.yaml
+  - id: test-rel06.0-applier
+    title: Test Suite for Release 06.0 Declarative Applier Agent
+    release: "06.0"
+    traces: [rel06.0-uc001-declarative-applier]
+    path: docs/specs/test-suites/test-rel06.0-applier.yaml
+  - id: test-rel07.0-collector
+    title: Test Suite for Release 07.0 Collector Agent
+    release: "07.0"
+    traces: [rel07.0-uc001-collector-ingress]
+    path: docs/specs/test-suites/test-rel07.0-collector.yaml
+  - id: test-rel08.0-observer
+    title: Test Suite for Release 08.0 Observer Agent
+    release: "08.0"
+    traces: [rel08.0-uc001-mesh-observer]
+    path: docs/specs/test-suites/test-rel08.0-observer.yaml
+  - id: test-rel09.0-canonical-collector
+    title: Test Suite for Release 09.0 Canonical Collector and Jaeger Retirement
+    release: "09.0"
+    traces: [rel09.0-uc001-canonical-collector]
+    path: docs/specs/test-suites/test-rel09.0-canonical-collector.yaml
+  - id: test-rel09.9-baseline-demo
+    title: Test Suite for Release 09.9 Baseline Demo From the Repository Root
+    release: "09.9"
+    traces: [rel09.9-uc001-baseline-demo]
+    path: docs/specs/test-suites/test-rel09.9-baseline-demo.yaml
+  - id: test-rel10.0-cohere-command-tier
+    title: Test Suite for Release 10.0 Cohere Command Composition Tier
+    release: "10.0"
+    traces: [rel10.0-uc001-cohere-command-tier]
+    path: docs/specs/test-suites/test-rel10.0-cohere-command-tier.yaml
+  - id: test-rel10.1-structured-citations
+    title: Test Suite for Release 10.1 Structured Citations
+    release: "10.1"
+    traces: [rel10.1-uc001-structured-citations]
+    path: docs/specs/test-suites/test-rel10.1-structured-citations.yaml
+
+  - id: test-rel10.2-rag-rerank
+    title: Test Suite for Release 10.2 RAG Rerank
+    release: "10.2"
+    traces: [rel10.2-uc001-rag-rerank]
+    path: docs/specs/test-suites/test-rel10.2-rag-rerank.yaml
+
+  - id: test-rel10.3-cohere-embedding-tier
+    title: Test Suite for Release 10.3 Cohere Embedding Tier
+    release: "10.3"
+    traces: [rel10.3-uc001-cohere-embedding-tier]
+    path: docs/specs/test-suites/test-rel10.3-cohere-embedding-tier.yaml
+
+  - id: test-rel10.4-corpus-build
+    title: Test Suite for Release 10.4 Corpus Build With Cached Embeddings
+    release: "10.4"
+    traces: [rel10.4-uc001-corpus-build]
+    path: docs/specs/test-suites/test-rel10.4-corpus-build.yaml
+
+  - id: test-rel10.5-real-demo-corpus
+    title: Test Suite for Release 10.5 Real Multi-Source Demo Corpus
+    release: "10.5"
+    traces: [rel10.5-uc001-real-demo-corpus]
+    path: docs/specs/test-suites/test-rel10.5-real-demo-corpus.yaml
+
+  - id: test-rel11.0-clearance-gated-retrieval
+    title: Test Suite for Release 11.0 Clearance-Gated Retrieval
+    release: "11.0"
+    traces: [rel11.0-uc001-clearance-gated-retrieval]
+    path: docs/specs/test-suites/test-rel11.0-clearance-gated-retrieval.yaml
+  - id: test-rel11.5-intsum-ui
+    title: Test Suite for Release 11.5 Two-Panel INTSUM Interface
+    release: "11.5"
+    traces: [rel11.5-uc001-intsum-ui]
+    path: docs/specs/test-suites/test-rel11.5-intsum-ui.yaml
+
+  - id: test-rel12.2-template-conformance
+    title: Test Suite for Release 12.2 Template Conformance
+    release: "12.2"
+    traces: [rel12.2-uc001-template-conformance]
+    path: docs/specs/test-suites/test-rel12.2-template-conformance.yaml
+
+  - id: test-rel12.0-osint-search
+    title: Test Suite for Release 12.0 OSINT Search Tool
+    release: "12.0"
+    traces: [rel12.0-uc001-osint-search]
+    path: docs/specs/test-suites/test-rel12.0-osint-search.yaml
+
+  - id: test-rel12.1-cascade-rerank
+    title: Test Suite for Release 12.1 Cascade Rerank
+    release: "12.1"
+    traces: [rel12.1-uc001-cascade-rerank]
+    path: docs/specs/test-suites/test-rel12.1-cascade-rerank.yaml
+
+  - id: test-rel13.0-evaluation
+    title: Test Suite for Release 13.0 Evaluation and First-Draft-Time Proof
+    release: "13.0"
+    traces: [rel13.0-uc001-evaluation]
+    path: docs/specs/test-suites/test-rel13.0-evaluation.yaml
+
+  - id: test-rel13.1-generated-references
+    title: Test Suite for Release 13.1 Generated References and the /eval Command
+    release: "13.1"
+    traces: [rel13.1-uc001-generated-references]
+    path: docs/specs/test-suites/test-rel13.1-generated-references.yaml
+
+  - id: test-rel14.0-brief-export
+    title: Test Suite for Release 14.0 Brief Export to PDF
+    release: "14.0"
+    traces: [rel14.0-uc001-brief-export]
+    path: docs/specs/test-suites/test-rel14.0-brief-export.yaml
+
+foundation_document_index:
+  - id: cohere-demo
+    title: "cohere-demo: A Copyable Declarative Agent Chatbot Mesh"
+    summary: Goals, boundaries, and success criteria for the chatbot mesh.
+    path: docs/VISION.yaml
+  - id: architecture-cohere-demo
+    title: cohere-demo Architecture
+    summary: Components, ownership boundaries, deployment, and runtime flows.
+    path: docs/ARCHITECTURE.yaml
+  - id: cohere-demo-roadmap
+    title: cohere-demo Road Map
+    summary: Release plan and implementation status for the application.
+    path: docs/road-map.yaml
+  - id: chatbot-mesh-how-it-works
+    title: How the Chatbot Mesh Works
+    summary: Operator and developer guide to the application flow.
+    path: docs/guides/how-it-works.md
+
+config_format_index: []
+
+semantic_model_index:
+  - id: sm-agent-role-realizations
+    title: Agent Role Realizations and Bindings
+    summary: Canonical role bindings for chatbot-mesh actors and profiles.
+    path: ../../declarative-agents/applications/docs/specs/semantic-models/agent-role-realizations.yaml
+
+coverage_gaps:

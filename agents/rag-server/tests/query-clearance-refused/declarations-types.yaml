@@ -1,0 +1,15 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: query-clearance-refused-declarations-types
+types:
+  - name: DriveRagQueryOutput
+    schema:
+      properties:
+        detail:
+          type: string
+        error:
+          type: string
+      type: object

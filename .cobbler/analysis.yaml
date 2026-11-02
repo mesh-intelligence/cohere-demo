@@ -1,0 +1,9 @@
+# Initial orchestrator analysis state for cohere-demo.
+# mage analyze (and the pre-cycle analysis) overwrite this file with the
+# consistency-check results and per-release code readiness. It starts empty:
+# no releases are scored and no gaps are recorded until the vendored corpus
+# lands and the first analysis runs.
+consistency_errors: 0
+code_status:
+    releases: []
+    gaps: []

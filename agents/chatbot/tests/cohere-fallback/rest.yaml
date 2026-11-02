@@ -1,0 +1,83 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+rest:
+  version: v1
+  auth:
+    none:
+      type: none
+  limits:
+    local:
+      timeout: 60s
+      read_timeout: 60s
+      max_request_bytes: 65536
+      max_response_bytes: 65536
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+  clients:
+    subject:
+      # The rig publishes the chatbot's pinned chat address here.
+      base_url: ${SUBJECT_URL:-http://127.0.0.1:1}
+      auth_ref: none
+      limits_ref: local
+      operations:
+        chat_turn:
+          method: POST
+          path: /api/v1/chat
+          params:
+            # Self-contained: nothing is read from a previous Result.
+            body_source: none
+          body:
+            message: "Prepare a command-staff brief on what the corpus describes."
+          success: {status: [200], signal: SubjectAnswered}
+          failures:
+            - status: [500]
+              signal: SubjectBroke
+              domain_error_code: command_error
+          response:
+            output:
+              answer: $.answer
+          side_effects:
+            - kind: external_api
+              target: chatbot.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+    cohere_probe:
+      # The rig publishes every mock's base URL into this critic's environment
+      # under the name the scenario's fixture_env declares, the same variable the
+      # subject reads. The probe reaches the mock directly rather than through
+      # the subject, which is the point: it reports what the subject did.
+      base_url: ${COHERE_BASE_URL:-http://127.0.0.1:1}
+      auth_ref: none
+      limits_ref: local
+      operations:
+        probe:
+          method: POST
+          path: /v2/chat
+          params:
+            body_source: none
+          body:
+            probe: true
+          # The mock serves its scripted responses in order and repeats the last.
+          # The turn consumes the refusal, so this call sees the success that
+          # follows it. If the turn never called the provider, this call is the
+          # one that gets refused.
+          success: {status: [200], signal: CohereConsumed}
+          failures:
+            - status: [429]
+              signal: CohereUntouched
+              domain_error_code: command_error
+          response:
+            output:
+              probe: $.probe
+          side_effects:
+            - kind: external_api
+              target: cohere.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop

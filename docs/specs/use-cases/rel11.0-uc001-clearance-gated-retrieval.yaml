@@ -1,0 +1,171 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel11.0-uc001-clearance-gated-retrieval
+title: The Same Tasking at Two Clearance Levels, Where the Uncleared Analyst Never Had the Restricted Document as a Candidate
+
+summary: |
+  Two analysts pose the same tasking against the same corpus. One is cleared for
+  a document in it; the other is not. The cleared analyst's brief draws on that
+  document and cites it. The uncleared analyst's brief answers from the rest of
+  the corpus, and the restricted document was never scored, never ranked, and
+  never a candidate for their query.
+
+  The difference between that and a filtered result list is the whole release.
+  Retrieving everything and removing what the requester may not see produces the
+  same brief and a different set of provable properties: the document was in
+  process memory, it displaced a cleared document from n_results, and its absence
+  is a behavior every downstream step has to keep getting right. Filtering before
+  the vector search means it was never a candidate, which a test can assert about
+  the query rather than infer from the answer.
+
+  So the clearance travels three ways, and each one is where a different failure
+  would enter. corpus-ingest writes a level onto every document from its declared
+  classification, not from content a model read, because a classifier that reads
+  a document to decide how secret it is has already read it. The rag-server binds
+  the requester's maximum level into the Chroma query as a metadata where-filter
+  evaluated before the search, because that is the only placement that makes
+  "never a candidate" true. And the chatbot derives the level from the
+  authenticated request context and carries it as trusted command state, because
+  a clearance supplied in a request body or chosen by a classifier is exactly the
+  value an adversary would supply or induce.
+
+  Every error serves less. A document with no clearance tag is treated as the
+  most restricted, not the least. A request whose context carries no clearance
+  gets the lowest level, not an unrestricted one. A rag-server that cannot bind
+  the filter rejects the query rather than answering without it, and that
+  rejection degrades the turn the way a failed source does rather than retrying
+  unfiltered. The criterion is zero unauthorized cross-clearance retrievals, and
+  a gate that opens when it breaks cannot reach zero.
+
+  We prove isolation, not classification. Whether a ministry's real markings map
+  onto the ordered level set, and who issues an analyst's clearance, are
+  deployment concerns srd010 declares out of scope. What is checkable here is
+  that the filter runs before the search, that its level comes from a place no
+  model can reach, that every failure narrows rather than widens, and that across
+  the declared level pairs no requester ever received material above their level.
+
+actor: Two intelligence analysts holding different clearances, posing the same tasking against one corpus of mixed classification
+trigger: An analyst submits a tasking through an authenticated request context that carries their maximum clearance, against a mesh whose corpus holds documents above that level.
+
+flow:
+  - F1: corpus-ingest seeds the collection, writing each document's clearance level as collection metadata from its declared classification, and tagging any document whose level is absent or unrecognized at the highest declared level.
+  - F2: The cleared analyst submits a tasking; the chatbot derives their maximum clearance from the authenticated request context rather than from the request body, the conversation, or any classifier output.
+  - F3: The turn embeds the tasking once and selects sources exactly as before, with source selection making no reference to clearance and gaining no ability to widen it.
+  - F4: The clearance travels into the fan-out as trusted command state and binds uniformly into every rag-server query in the for_each, with no per-source variation.
+  - F5: Each rag-server binds the level into its Chroma query as a metadata where-filter, which the vector store evaluates before the search runs, so the searched set is already restricted to documents at or below the requester's level.
+  - F6: n_results is satisfied from within that filtered set, so no cleared document is displaced by a restricted one that was retrieved and then discarded.
+  - F7: Each query response reports the clearance level the filter was applied at, so the caller confirms enforcement rather than assuming it, and the turn composes a brief citing the restricted document.
+  - F8: The uncleared analyst submits the same tasking, and the same path runs at their lower level; the restricted document is outside the filtered set, so it is never scored, never ranked, and never returned.
+  - F9: Their brief composes from the remaining documents and answers, without a gap, a placeholder, or any indication of what the filter excluded.
+  - F10: Response metadata and the exported trace record the enforced level and any source rejected for clearance, distinguishably from the composed, embedding-excluded, and degraded outcomes, and record nothing about the documents the filter removed.
+  - F11: An access-control test runs this pairing across the declared level pairs rather than one, asserting that no requester received a document above their level.
+
+touchpoints:
+  - id: T1
+    target: srd010-clearance-gated-retrieval AC5
+    reason: The release is this acceptance criterion — one tasking at two clearance levels over a corpus holding a document above the lower one, asserting the cleared requester receives it and the uncleared requester never had it as a candidate, across the declared level pairs rather than a sampled one.
+  - id: T2
+    target: srd010-clearance-gated-retrieval AC2
+    reason: The filter is bound into the Chroma query and evaluated before the vector search, n_results is satisfied from within the filtered set, and the enforced level is reported back; the tracer's uncleared leg is what distinguishes this from a post-retrieval removal that would produce the same brief.
+  - id: T3
+    target: srd010-clearance-gated-retrieval AC1
+    reason: The corpus the tracer runs over is tagged at ingest from declared classification, with untagged documents at the highest level, which is what makes the restricted document restricted and an unlabeled one unreachable rather than public.
+  - id: T4
+    target: srd010-clearance-gated-retrieval AC3
+    reason: The level both legs run at comes from the authenticated request context and travels as trusted command state, unreachable by the tier and source selectors and never rendered into a prompt, so the two legs differ by identity rather than by anything the tasking text could change.
+  - id: T5
+    target: srd010-clearance-gated-retrieval AC4
+    reason: The tracer's failure legs — an absent context clearance, an unbindable filter, a clearance rejection — each serve less rather than more, and the rejection degrades the turn the way a failed source does rather than retrying without the filter.
+  - id: T6
+    target: srd010-clearance-gated-retrieval AC6
+    reason: The where-filter binds from command state as declared configuration on the Chroma operation with its method, path, auth, and allowlist unchanged, which GH-55 verified against the runtime before this release was scheduled.
+  - id: T7
+    target: srd001-rag-server-agent AC1
+    reason: Enforcement extends the vector-in query contract with one parameter; the one-agent-one-corpus rule, the chunk response shape, and the embedding metadata the turn already compares are unchanged.
+  - id: T8
+    target: srd002-chatbot-agent AC1
+    reason: The turn's embed-once, select-sources, fan-out shape is unmodified; clearance is an additional bound parameter on each query and an additional outcome in the response metadata the turn already separates.
+
+success_criteria:
+  - id: S1
+    criterion: The same tasking run at two clearance levels over a corpus holding a document above the lower level returns a brief citing that document for the cleared requester and a brief composed from the remaining corpus for the uncleared one. Asserting only that the two briefs differ is not this, because a post-retrieval removal produces two different briefs as well.
+    traces:
+      - srd010-clearance-gated-retrieval AC5
+      - srd010-clearance-gated-retrieval AC2
+  - id: S2
+    criterion: For the uncleared requester the restricted document was never a candidate — not scored, not ranked, not returned and discarded. The evidence is the query the rag-server issued, carrying the where-filter, rather than the absence of the document from the answer, which a post-retrieval filter would also produce.
+    traces:
+      - srd010-clearance-gated-retrieval AC2
+  - id: S3
+    criterion: n_results is satisfied from within the filtered set. A query at the lower level returns the same number of cleared documents as an unfiltered query would have returned cleared documents, so no cleared result is displaced by a restricted one that was retrieved and then removed.
+    traces:
+      - srd010-clearance-gated-retrieval AC2
+  - id: S4
+    criterion: Every ingested document carries a clearance level written at ingest from its declared classification, and a document whose level is absent or unrecognized is tagged at the highest declared level, so an untagged document is reachable only by a fully cleared requester. The canonical ingest machine's listing, embedding, and threading behavior is unchanged.
+    traces:
+      - srd010-clearance-gated-retrieval AC1
+  - id: S5
+    criterion: The enforced level comes from the authenticated request context, binds uniformly into every query in the fan-out, and is unreachable by the tier selector, the source selector, the tasking text, the conversation history, and the request body. It is never rendered into a prompt, so it is enforced as a query parameter rather than as an instruction a model may disregard. A tasking written to request a higher level changes nothing about what is served.
+    traces:
+      - srd010-clearance-gated-retrieval AC3
+  - id: S6
+    criterion: Source selection stays independent of clearance. A source list that is over-broad, or manipulated into being over-broad, changes which collections are queried and never what the requester is cleared to receive from them.
+    traces:
+      - srd010-clearance-gated-retrieval AC3
+  - id: S7
+    criterion: Every clearance error serves less. A request context with no clearance is treated as the lowest declared level rather than as unrestricted; a rag-server that cannot bind the filter rejects the query rather than serving unfiltered; a clearance rejection degrades the turn the way a failed source does, composing from the remaining sources without retrying unfiltered and without failing the turn; and no request field, prompt, or deployment setting disables enforcement.
+    traces:
+      - srd010-clearance-gated-retrieval AC4
+  - id: S8
+    criterion: Response metadata and the exported trace report the enforced level and any source rejected for clearance, distinguishably from the composed, embedding-excluded, vector-rejected, and degraded outcomes already separated, and record nothing about what the filter excluded — not its content, not its identifiers, and not its count, because a count leaks the existence of material the requester is not cleared to know about.
+    traces:
+      - srd010-clearance-gated-retrieval AC5
+  - id: S9
+    criterion: The access-control assertion runs across the declared level pairs rather than one pair, and reports zero unauthorized cross-clearance retrievals. One passing pair is evidence about that pair; the criterion is a property of the level set.
+    traces:
+      - srd010-clearance-gated-retrieval AC5
+  - id: S10
+    criterion: The where-filter is declared configuration on the Chroma query operation, bound from command state through the single-token raw passthrough, with the operation's method, path, auth, and egress allowlist unchanged and no runtime-supplied base URL. The binding form is the one GH-55 verified against the runtime, not an application-side filter applied after the query returned.
+    traces:
+      - srd010-clearance-gated-retrieval AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: The rag-server retrieves normally and drops the over-clearance documents from the result set before returning, since the requester never sees them either way.
+    expected: Rejected; R2.3 forbids it explicitly. The requester sees the same brief, and everything the release promises stops being true — the documents were scored and ranked, they displaced cleared documents from n_results, and their absence now depends on a removal step continuing to work rather than on their never having been candidates. S2 exists because the two designs are indistinguishable from the answer.
+  - id: E2
+    scenario: The analyst's clearance is read from a field in the chat request body, which the front end sets from the signed-in user.
+    expected: Rejected; R3.1 derives it from the authenticated request context. A request-body field is a value the client controls, and a front end that sets it honestly does not stop a client that does not. The distinction is not where the value comes from in the happy path but who can supply it in the adversarial one.
+  - id: E3
+    scenario: The clearance is included in the composition prompt so the model knows not to use material above the analyst's level.
+    expected: Rejected; R3.5 forbids rendering it into any prompt. An instruction a model may disregard is not an access control, and by the time composition runs the restricted material would already have been retrieved for the model to be instructed about. The gate is a query parameter precisely so no model judgment sits between the corpus and the requester.
+  - id: E4
+    scenario: A document arrives at ingest with no clearance tag and is treated as unclassified, since nothing marked it as sensitive.
+    expected: Rejected; R1.3 tags it at the highest declared level. An absent tag is an unknown classification, not a low one, and the failure directions are not symmetric. Treating unknown as public discloses material once and irreversibly, while treating it as restricted withholds material that a corrected tag makes available.
+  - id: E5
+    scenario: The rag-server cannot bind the where-filter, so it serves the query unfiltered and notes the condition in its response for the caller to handle.
+    expected: Rejected; R4.2 rejects the query. Serving unfiltered and reporting it makes correctness depend on every caller reading the report and acting on it, which is the property R2.3 was written to remove. A rejected source degrades the turn under R4.3 and the analyst gets an answer from the remaining sources.
+  - id: E6
+    scenario: A clearance rejection fails the turn, since a partial answer over some sources might mislead the analyst.
+    expected: Rejected; R4.3 degrades the way a failed source does. The remaining sources are ones the requester is cleared for, and their answer is a correct answer over less material. Failing the turn converts an access-control event into an outage, and the response metadata already distinguishes the degraded outcome so the analyst is not misled about coverage.
+  - id: E7
+    scenario: The response reports how many documents the filter suppressed, so the analyst knows to request a higher clearance.
+    expected: Rejected; R5.3 forbids recording the count. The count is the disclosure — "four documents exist that you may not see" is information about the restricted corpus, derivable per-tasking, and an analyst able to vary the tasking can map what is there without reading any of it. The audit records the level enforced and the outcome, which is what an auditor needs and what a requester learns nothing from.
+  - id: E8
+    scenario: The access-control evidence runs the tasking at the lowest and highest levels, since that pair spans the range.
+    expected: Insufficient; R5.5 requires the declared level pairs. The extremes exercise the widest gap and say nothing about an intermediate level whose comparison is where an off-by-one in an ordered set lands. Zero unauthorized retrievals is a claim about the level set, and sampling its endpoints does not establish it.
+  - id: E9
+    scenario: Source selection is given the clearance so it can avoid selecting collections the analyst cannot read, saving queries.
+    expected: Rejected; R3.4 keeps selection independent of clearance. The saving is real and the coupling is the risk -- enforcement would then depend on a classifier's selection being right, and the rag-server's refusal exists precisely because that selection can be wrong or induced to be wrong. Selection decides which collections are asked; the filter decides what they may answer with.
+
+out_of_scope:
+  - Authenticating the analyst or issuing clearances. The use case consumes an authenticated request context; the identity provider, credential format, and clearance authority are deployment concerns.
+  - Mapping a ministry's real classification markings onto the ordered level set, which is application configuration.
+  - Compartments, need-to-know caveats, releasability markings, and per-document access-control lists; the model here is one ordered dimension.
+  - Redacting, summarizing, or partially serving a restricted document. The gate excludes, and there is no partial-disclosure path.
+  - Clearance-gating the OSINT search branch, whose results are public by construction and whose control is the approved-domain allowlist; that is srd011 and rel12.0.
+  - Displaying enforcement state to the analyst in the interface; the two-panel INTSUM UI is rel11.5 and consumes what this release reports.
+  - Measuring how much recall the filter costs a lower-cleared analyst; measurement over labeled taskings is srd014 and rel13.0.
+
+test_suite_trace: test-rel11.0-clearance-gated-retrieval
+status: implemented

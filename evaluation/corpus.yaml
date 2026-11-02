@@ -1,0 +1,235 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The labeled-tasking corpus for the srd014 evaluation. Each tasking pairs
+# analyst-phrased text with the retrieval corpus documents an experienced
+# analyst identifies as relevant by reading them (R1.1). Every label was
+# authored from document content before any evaluation run existed, and no
+# label may be derived, adjusted, or extended from what the system retrieved
+# (R1.2) -- the README beside this file records the method and the audit
+# trail. A reported number names this file's version and the retrieval
+# corpus version together (R1.4).
+id: evaluation-ukraine-2022
+version: "1.2"
+retrieval_corpus: ukraine-2022
+retrieval_corpus_version: "1.0"
+
+# The corpus inherits the mixed real-and-synthetic character of the retrieval
+# corpus it labels (srd017 R9.4): four tiers are real published reporting and
+# the humint tier is invented demonstration material. Taskings and labels are
+# authored for this demonstration; no tasking is, or derives from, an actual
+# operational requirement (R1.5).
+synthetic: mixed
+synthetic_notice: |
+  These taskings and labels are demonstration artifacts over a corpus that
+  mixes real published reporting with invented classified-looking material.
+  Every figure measured over them must carry that qualification, in the
+  evaluation output itself.
+
+# The half-day figure current practice is compared against (srd014 R4.3). A
+# stated assumption about manual drafting practice, recorded here so the
+# first-draft-time comparison names its baseline; this harness did not and
+# cannot measure it.
+assumptions:
+  first_draft_baseline_minutes: 240
+  first_draft_baseline_basis: |
+    Half a working day for an analyst to read the window's reporting, select
+    sources, and compose a command-staff brief by hand. An assumption about
+    current practice, not a measured figure.
+  # The analyst's edit segment -- from the surfaced brief to a draft a
+  # reviewer accepts (srd014 R4.1, R4.2). This harness measures the system
+  # segment and carries the edit segment as a recorded assumption, stated as
+  # such in every report beside it: reviewing a sourced, cited, structurally
+  # conformant draft against its citations and trimming it for the reviewer.
+  analyst_edit_minutes: 20
+  analyst_edit_basis: |
+    A recorded assumption about editing a machine draft whose citations
+    resolve and whose structure the conformance check has already validated,
+    not a measured figure.
+
+# Relevance is labeled at the document level: an analyst identifies relevant
+# documents, and a composed chunk counts toward its parent document by the
+# store's chunk-to-document identity. Conditions tag what each tasking
+# exercises (R1.3): multi_source (relevant documents span source types),
+# multi_clearance (relevant documents sit at more than one clearance level),
+# and below_cutoff (the relevant set is larger than the declared composition
+# budget N=8, so some relevant documents necessarily sit below the cutoff and
+# exist to be lost or recovered by ranking). Tasking clearance is the level
+# the evaluation runs the request at.
+taskings:
+  - id: eval-t01
+    clearance: secret
+    conditions: [multi_source, multi_clearance, below_cutoff]
+    text: >-
+      Prepare a command-staff intelligence brief on Russian strikes against
+      Ukrainian infrastructure in December 2022 and the air defence response
+      to them, drawing on all retrieved reporting, with citations.
+    # The retrieval corpus's own declared primary-tasking set, labeled when
+    # the corpus was authored at rel10.5 -- before this evaluation existed --
+    # and adopted here unchanged (corpus/corpus.yaml
+    # retrieval_conditions.relevant_to_primary_tasking).
+    relevant:
+      - {id: HR-22-019, source: humint}
+      - {id: HR-22-014, source: humint}
+      - {id: missile-2022-12-05, source: sigint_event}
+      - {id: missile-2022-12-16, source: sigint_event}
+      - {id: missile-2022-12-29, source: sigint_event}
+      - {id: missile-2022-12-31, source: sigint_event}
+      - {id: isw-2022-12-16, source: osint_assessment}
+      - {id: isw-2022-12-17, source: osint_assessment}
+      - {id: isw-2022-12-19, source: osint_assessment}
+      - {id: losses-2022-12-17, source: sigint_series}
+
+  - id: eval-t02
+    clearance: secret
+    conditions: [multi_source, multi_clearance, below_cutoff]
+    text: >-
+      Prepare a command-staff intelligence brief on the December 2022 decision
+      to provide Patriot air defence systems to Ukraine -- the decision
+      timeline, the delivery and training arrangements, and the Russian
+      reaction -- drawing on all retrieved reporting, with citations.
+    # HR-22-019 is the liaison confirmation ahead of the announcement; the
+    # four assessments carry the pre-announcement reporting (Dec 13), the
+    # finalization and announcement (Dec 21-22), and the Kremlin's framing
+    # (Dec 28); the news items report the announcement, the training plan,
+    # the aid-package contents, and the Russian legitimate-target claim.
+    relevant:
+      - {id: HR-22-019, source: humint}
+      - {id: isw-2022-12-13, source: osint_assessment}
+      - {id: isw-2022-12-21, source: osint_assessment}
+      - {id: isw-2022-12-22, source: osint_assessment}
+      - {id: isw-2022-12-28, source: osint_assessment}
+      - {id: tg-washingtonpost-1814, source: osint_news}
+      - {id: tg-tass_agency-172066, source: osint_news}
+      - {id: tg-ukrainavshoke_repost-35510, source: osint_news}
+      - {id: tg-u_now-79794, source: osint_news}
+      - {id: tg-meduzalive-75627, source: osint_news}
+
+  - id: eval-t03
+    clearance: confidential
+    conditions: [multi_source, multi_clearance, below_cutoff]
+    text: >-
+      Prepare a command-staff intelligence brief on the fighting along the
+      Svatove-Kreminna line through December 2022, including claimed and
+      corroborated casualty levels, drawing on all retrieved reporting, with
+      citations.
+    # HR-22-018 corroborates significant losses behind the public denial; the
+    # eight assessments are the dailies whose Svatove-Kreminna coverage is
+    # substantive operational reporting rather than a passing mention.
+    relevant:
+      - {id: HR-22-018, source: humint}
+      - {id: isw-2022-12-10, source: osint_assessment}
+      - {id: isw-2022-12-12, source: osint_assessment}
+      - {id: isw-2022-12-13, source: osint_assessment}
+      - {id: isw-2022-12-14, source: osint_assessment}
+      - {id: isw-2022-12-17, source: osint_assessment}
+      - {id: isw-2022-12-19, source: osint_assessment}
+      - {id: isw-2022-12-26, source: osint_assessment}
+      - {id: isw-2022-12-29, source: osint_assessment}
+
+  - id: eval-t04
+    clearance: confidential
+    conditions: [multi_source, multi_clearance]
+    text: >-
+      Prepare a command-staff intelligence brief on Russian statements that
+      partial mobilization is complete, weighed against evidence of continuing
+      recruitment and preparation for a second wave, drawing on all retrieved
+      reporting, with citations.
+    # HR-22-017 contradicts the completion claim from a protected source; the
+    # assessments carry the rumor management (Dec 6), continuing-effort
+    # reporting (Dec 1, 7, 8), and Putin's fielded-strength claims (Dec 15).
+    relevant:
+      - {id: HR-22-017, source: humint}
+      - {id: isw-2022-12-01, source: osint_assessment}
+      - {id: isw-2022-12-06, source: osint_assessment}
+      - {id: isw-2022-12-07, source: osint_assessment}
+      - {id: isw-2022-12-08, source: osint_assessment}
+      - {id: isw-2022-12-15, source: osint_assessment}
+
+  - id: eval-t05
+    clearance: unclassified
+    conditions: [multi_source]
+    text: >-
+      Prepare a command-staff intelligence brief on the December 2022
+      Ukrainian drone strikes against the Engels airbase and other bases
+      inside Russia, and what they showed about Russian air defence of the
+      rear, drawing on all retrieved reporting, with citations.
+    relevant:
+      - {id: isw-2022-12-05, source: osint_assessment}
+      - {id: isw-2022-12-26, source: osint_assessment}
+      - {id: isw-2022-12-29, source: osint_assessment}
+      - {id: tg-washingtonpost-1730, source: osint_news}
+      - {id: tg-washingtonpost-1735, source: osint_news}
+      - {id: tg-washingtonpost-1848, source: osint_news}
+
+  - id: eval-t06
+    clearance: unclassified
+    conditions: [multi_source]
+    text: >-
+      Prepare a command-staff intelligence brief on Russian pressure on
+      Belarus in December 2022, including the December 19 Minsk meeting and
+      the likelihood of Belarusian entry into the war, drawing on all
+      retrieved reporting, with citations.
+    relevant:
+      - {id: isw-2022-12-03, source: osint_assessment}
+      - {id: isw-2022-12-16, source: osint_assessment}
+      - {id: isw-2022-12-19, source: osint_assessment}
+      - {id: isw-2022-12-20, source: osint_assessment}
+      - {id: tg-washingtonpost-1798, source: osint_news}
+
+  - id: eval-t07
+    clearance: unclassified
+    conditions: [multi_source]
+    text: >-
+      Prepare a command-staff intelligence brief on President Zelensky's
+      December 2022 visit to Washington and what was announced during it,
+      drawing on all retrieved reporting, with citations.
+    relevant:
+      - {id: isw-2022-12-21, source: osint_assessment}
+      - {id: isw-2022-12-22, source: osint_assessment}
+      - {id: tg-washingtonpost-1805, source: osint_news}
+      - {id: tg-u_now-79794, source: osint_news}
+      - {id: tg-ukrainavshoke_repost-35510, source: osint_news}
+
+  - id: eval-t08
+    clearance: confidential
+    conditions: [multi_source, multi_clearance]
+    text: >-
+      Prepare a command-staff intelligence brief on European Union financial
+      and military assistance to Ukraine agreed or delivered in December 2022,
+      and how sustained the supply commitment is read to be, drawing on all
+      retrieved reporting, with citations.
+    # HR-22-029 carries the defence-industrial read of the Peace Facility
+    # top-up; the news items report the EUR 1bn and EUR 500m tranches and the
+    # earlier package disagreement.
+    relevant:
+      - {id: HR-22-029, source: humint}
+      - {id: tg-tass_agency-171868, source: osint_news}
+      - {id: tg-tass_agency-172066, source: osint_news}
+      - {id: tg-tass_agency-170450, source: osint_news}
+
+  - id: eval-t09
+    clearance: secret
+    conditions: [multi_clearance]
+    text: >-
+      Prepare a command-staff intelligence brief on strains on CSTO cohesion
+      visible in reporting from mid-2022 through early 2023, in particular
+      Kazakhstan's posture and the Armenia-Moscow relationship, drawing on all
+      retrieved reporting, with citations.
+    relevant:
+      - {id: HR-22-012, source: humint}
+      - {id: HR-22-013, source: humint}
+      - {id: HR-23-030, source: humint}
+
+  - id: eval-t10
+    clearance: unclassified
+    conditions: [multi_source]
+    text: >-
+      Prepare a command-staff intelligence brief on the December 31, 2022
+      Russian strike wave against Ukraine and the air defence response on that
+      day, drawing on all retrieved reporting, with citations.
+    relevant:
+      - {id: missile-2022-12-31, source: sigint_event}
+      - {id: isw-2022-12-31, source: osint_assessment}
+      - {id: losses-2022-12-31, source: sigint_series}
+      - {id: tg-rian_ru-190343, source: osint_news}

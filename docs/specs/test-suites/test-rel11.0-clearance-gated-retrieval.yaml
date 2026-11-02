@@ -1,0 +1,196 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel11.0-clearance-gated-retrieval
+title: Test Suite for Release 11.0 Clearance-Gated Retrieval
+release: "11.0"
+
+traces: [rel11.0-uc001-clearance-gated-retrieval]
+
+preconditions:
+  - A corpus seeded at more than two declared clearance levels, holding at least one document that answers the probe tasking well and sits above the lower level under test. Without a known restricted document the suite can observe that two briefs differ but not that anything was withheld, which is the difference between a clearance gate and an unstable retrieval.
+  - The declared clearance levels are a totally ordered set in application configuration, so "at or below" is a decidable comparison and the level pairs the suite iterates are enumerable.
+  - Two authenticated request contexts carrying different maximum clearances. The contexts are the mechanism under test, so a suite that sets the level by request field is testing something the release forbids.
+  - The rel10.x Cohere tiers are standing, so the tasking embeds and composes as it already does and the only variable between the two legs is the requester's level.
+  - The where-filter binding verified in GH-55 — a `where` object property in the rag_query body_schema, selected through input_mapping under body_source command_state, rendered as the bare single token. The token must stand alone; embedded in a larger string it renders through Go's default map formatting rather than as JSON, which Chroma cannot evaluate.
+
+test_cases:
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: The same tasking at two clearance levels yields a citing brief and a brief without the restricted document
+    integration_target: mage integration:clearance
+    status: implemented
+    description: The release tracer. One tasking, two authenticated contexts, one corpus. The cleared leg's brief cites the restricted document; the uncleared leg's brief answers from the rest of the corpus without it. Both legs return 200 with a composed brief, so the assertion is on which documents composed the answer rather than on whether an answer arrived.
+    expected:
+      http_status: 200
+      cleared_leg_brief_cites_the_restricted_document: true
+      uncleared_leg_brief_omits_the_restricted_document: true
+      uncleared_leg_composes_from_remaining_corpus: true
+      both_legs_answer: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S1
+      - srd010-clearance-gated-retrieval AC5
+      - srd010-clearance-gated-retrieval AC2
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: The panel a reader opens shows the level it ran at and what raising it admits
+    integration_target: mage integration:ui
+    status: implemented
+    description: |
+      The browser leg of the tracer. The same tasking is sent from the served SPA
+      at the default lowest level and again at the highest declared one; the
+      second brief cites records the first never had as candidates, and each
+      answer reports the level the server enforced rather than the level the
+      selector asked for.
+
+      The source chip cannot carry this. It names the unit and its document
+      count, which are identical at both levels because n_results is satisfied
+      from within each filtered set -- that is srd010 R2.4 working. Only the
+      cited records differ, so the records are what the comparison reads.
+
+      The case also holds the interface to R5.3: nothing on the page reports what
+      the filter removed. The count is the disclosure, and an analyst who can
+      vary the tasking and read one maps the restricted corpus without reading
+      any of it.
+    expected:
+      the_selected_level_reaches_the_mesh_as_a_request_header: true
+      the_panel_reports_the_level_the_server_enforced: true
+      a_higher_level_cites_material_the_lowest_does_not: true
+      both_levels_answer_grounded: true
+      no_withheld_count_or_identifier_is_rendered: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S1
+      - rel11.0-uc001-clearance-gated-retrieval S8
+      - srd010-clearance-gated-retrieval AC5
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: The restricted document was never a candidate, evidenced by the issued query rather than by the answer
+    integration_target: mage integration:clearance
+    status: implemented
+    description: The assertion that separates this release from a post-retrieval removal, which produces an identical brief. The rag-server's outbound Chroma request carries the where-filter, and the restricted document appears in no scored, ranked, or returned result for the uncleared leg. Reading the answer cannot establish this; reading the query can.
+    expected:
+      outbound_chroma_request_carries_where_filter: true
+      where_filter_present_before_search_executes: true
+      restricted_document_absent_from_returned_candidates: true
+      restricted_document_never_scored_or_ranked: true
+      assertion_reads_the_query_not_the_answer: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S2
+      - srd010-clearance-gated-retrieval AC2
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: n_results is satisfied from within the filtered set
+    integration_target: mage integration:clearance
+    status: implemented
+    description: A query at the lower level returns as many cleared documents as an unfiltered query would have returned cleared ones. A retrieve-then-remove implementation returns fewer, because the restricted documents occupied slots before being discarded — which is how a post-retrieval filter reveals itself even when the brief looks correct.
+    expected:
+      filtered_query_returns_full_n_results: true
+      no_cleared_document_displaced_by_a_restricted_one: true
+      count_matches_unfiltered_cleared_document_count: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S3
+      - srd010-clearance-gated-retrieval AC2
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: Ingest tags every document from declared classification, and an untagged document at the highest level
+    integration_target: mage integration:chroma
+    status: implemented
+    description: Every seeded record carries a clearance level in its collection metadata, written from the document's declared classification rather than from content a model read. A document seeded with an absent or unrecognized level lands at the highest declared level, so it is reachable only by a fully cleared requester. The canonical ingest machine's listing, embedding, and threading behavior is unchanged.
+    expected:
+      every_record_carries_clearance_metadata: true
+      level_written_from_declared_classification_not_content: true
+      absent_or_unrecognized_level_tagged_highest: true
+      canonical_ingest_machine_behavior_unchanged: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S4
+      - srd010-clearance-gated-retrieval AC1
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: The enforced level comes from the authenticated context and no model or request field can reach it
+    integration_target: mage integration:clearance
+    status: implemented
+    description: The level binds uniformly into every query in the fan-out from the request context. A tasking written to demand a higher clearance, a conversation history asserting one, and a request body field naming one all leave the enforced level unchanged. The level appears in no prompt sent to any model, so no composition or selection step is in a position to act on it.
+    expected:
+      level_derived_from_authenticated_context: true
+      level_bound_uniformly_into_every_fanout_query: true
+      tasking_text_cannot_raise_the_level: true
+      conversation_history_cannot_raise_the_level: true
+      request_body_field_cannot_raise_the_level: true
+      level_absent_from_every_prompt: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S5
+      - srd010-clearance-gated-retrieval AC3
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: An over-broad source selection changes which collections are queried and not what they may answer with
+    integration_target: mage integration:clearance
+    status: implemented
+    description: A run whose source selector returns every declared source, including collections the requester would not otherwise reach, serves the requester nothing above their level. Enforcement lives on the serving agent, so a selection that is wrong or induced to be wrong widens the query set and not the disclosure.
+    expected:
+      over_broad_selection_queries_more_collections: true
+      no_over_clearance_document_returned: true
+      enforcement_independent_of_selection: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S6
+      - srd010-clearance-gated-retrieval AC3
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: Every clearance error serves less rather than more
+    integration_target: mage integration:clearance
+    status: implemented
+    description: Four failure legs, each asserting the narrowing direction. A request context carrying no clearance runs at the lowest declared level rather than unrestricted. A rag-server that cannot bind the filter rejects the query instead of serving unfiltered. That rejection degrades the turn the way a failed source does, composing from the remaining sources without a second unfiltered attempt. And no request field, prompt, or deployment value turns enforcement off.
+    expected:
+      absent_context_clearance_runs_at_lowest_level: true
+      unbindable_filter_rejects_the_query: true
+      rejection_degrades_turn_like_a_failed_source: true
+      no_unfiltered_retry_after_rejection: true
+      turn_still_answers_from_remaining_sources: true
+      no_request_prompt_or_deployment_disable_path: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S7
+      - srd010-clearance-gated-retrieval AC4
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: Metadata and traces report the enforced level and record nothing about what was excluded
+    integration_target: mage integration:clearance
+    status: implemented
+    description: The response reports the level the filter ran at and names any source rejected for clearance, distinguishably from the composed, embedding-excluded, vector-rejected, and degraded outcomes already separated. It records no content, no identifiers, and no count of excluded documents. The count is the disclosure this case exists to keep out — an analyst who can vary the tasking and read a suppressed count can map the restricted corpus without reading any of it.
+    expected:
+      enforced_level_reported_in_metadata: true
+      clearance_rejection_distinguishable_from_other_outcomes: true
+      no_excluded_document_content_recorded: true
+      no_excluded_document_identifiers_recorded: true
+      no_excluded_document_count_recorded: true
+      enforced_level_attributable_in_exported_trace: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S8
+      - srd010-clearance-gated-retrieval AC5
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: Zero unauthorized cross-clearance retrievals across the declared level pairs
+    integration_target: mage integration:clearance
+    status: implemented
+    description: The pairing runs across the declared level pairs rather than the endpoints alone. Zero unauthorized retrievals is a property of the ordered level set, and an intermediate level is where an off-by-one in an "at or below" comparison lands — the extremes would pass while the boundary leaked.
+    expected:
+      every_declared_level_pair_exercised: true
+      unauthorized_cross_clearance_retrievals: 0
+      intermediate_levels_included_not_only_endpoints: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S9
+      - srd010-clearance-gated-retrieval AC5
+
+  - use_case: rel11.0-uc001-clearance-gated-retrieval
+    name: The where-filter is declared configuration bound from command state with transport authority unchanged
+    integration_target: mage integration:clearance
+    go_test: magefiles/ragserver_clearance_profile_test.go
+    status: implemented
+    description: The shipped profile declares the where parameter in the rag_query body_schema, selects it from command state, and renders it as a bare single token, with the Chroma operation's method, path, auth, and egress allowlist unchanged and no runtime-supplied base URL. This reads the profile unexpanded, so it needs neither corpus nor network. The bare-token requirement is load-bearing -- embedded in a larger string the map renders through Go's default formatting rather than as JSON, and Chroma cannot evaluate it. The Go evidence is the profile-reading test named above.
+    expected:
+      where_declared_in_body_schema: true
+      where_selected_from_command_state: true
+      where_rendered_as_bare_single_token: true
+      chroma_operation_method_and_path_unchanged: true
+      auth_and_allowlist_unchanged: true
+      base_url_source_absent: true
+      no_application_side_post_query_filter: true
+    traces:
+      - rel11.0-uc001-clearance-gated-retrieval S10
+      - srd010-clearance-gated-retrieval AC6

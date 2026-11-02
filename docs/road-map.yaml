@@ -1,0 +1,860 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: cohere-demo-roadmap
+title: cohere-demo Road Map
+
+overview: |
+  These releases restage the data-plane chatbot mesh as the application's own plan.
+  They derive from the shared catalog's rel09.0-09.3 and rel09.5; the behavior is
+  implemented and is being relocated into this directory. Requirement and use-case
+  ids are renumbered to the application's own scheme (srd001-003, rel00.0+). The
+  control plane (provisioning-workflow-orchestrator srd004, creator srd005, and the provisioning surface)
+  is release rel05.0. Release rel06.0 replaces the standard-library Go provisioning
+  surface with the applier (srd006), a declarative agent that binds the helm and
+  kubectl CLIs in its container.
+
+  This document holds two things, and the `lineage` field on every release says
+  which. The substrate block is the inherited chatbot-mesh: rel00.0 through
+  rel10.3, all built, gated by rel09.9. Their evidence arrived with the vendored
+  tree, so before the Cohere lane opened we proved the mesh comes up from this
+  repository, seeds its corpus, and answers a tasking from it. Document order
+  inside that block is historical -- rel09.0 precedes rel08.0 -- and carries no
+  schedule.
+
+  The plan block is the ordered forward schedule, and there document order is the
+  schedule. Release ids stay fixed because srd010 through srd016 reference them,
+  so sequence is expressed by position rather than by renumbering; that is why
+  rel10.4 opens the block and rel12.2 precedes rel12.0. The DefTech sovereign
+  intelligence-synthesis solution (see VISION and ARCHITECTURE) is built there on
+  top of the gated substrate, each release additive over the running Ollama
+  agents: the corpus build that computes and caches the embeddings and metadata
+  everything downstream reads (rel10.4), clearance-gated retrieval (rel11.0), the
+  two-panel INTSUM interface that defines the ministry form (rel11.5), the
+  conformance check over that form (rel12.2), then the OSINT search branch and
+  its cascade rerank (rel12.0, rel12.1), an evaluation over labeled taskings
+  (rel13.0), and an exporter that renders the approved brief to PDF (rel14.0).
+  The Cohere provider itself -- the Command composition tier, its structured
+  citations, the RAG rerank pass, and the embedding repoint that completed the
+  model stack -- landed as rel10.0 through rel10.3 and sits in the substrate.
+
+  We decompose the work into small minor releases so development proceeds one
+  demonstrable step at a time. Each minor release adds one capability and carries
+  one end-to-end use-case tracer that runs a full tasking-to-brief turn with the
+  new capability switched on, so every release is independently demonstrable
+  against a DefTech success criterion. Each capability is additive YAML
+  configuration -- a new REST client tool, a parse or compose word, machine
+  states, a REST reference, or an agent profile -- layered onto the running mesh;
+  only the integration and tracer tests are Go. These are planned; the software
+  requirements, use cases, and test suites for each release are authored as the
+  work is scheduled, and the release ids and descriptions here tie each to the
+  DefTech measurable success criteria.
+
+role_alignment:
+  status: specified
+  implemented_decisions:
+    - Retain `chatbot` as a descriptive multi-role actor with Planner, Executor, and Knowledge Manager bindings.
+    - Retain `rag-server` as a descriptive Knowledge Manager / Recommendation Generator realization.
+    - Retain the mesh `corpus-ingest` wrapper with its inherited catalog Knowledge Manager / Ontology Manager binding.
+    - Bind `creator` to Creator / Instance Manager and Agent Owner / Agent Lifecycle Manager and retain the compatible name.
+    - Bind `applier` to Executor / Actuation Agent and Change Manager; Applier is not a canonical role.
+    - Bind `collector` to Monitor / Telemetry Collector and distinguish its profile-backed workload from contrib metrics infrastructure.
+    - Treat all Helm names as deployment identities inheriting profile bindings, not as semantic role names.
+  implemented_migrations:
+    - issue: GH-1077
+      current_actor: provisioning-workflow-orchestrator
+      implemented_responsibility: Sequence optional ingest and rollout requests through the creator.
+      canonical_role_sub_role: Executor / Workflow Orchestrator; not Coordinator.
+      retained_or_proposed_name: provisioning-workflow-orchestrator
+      authority_boundary: No implemented synchronization, conflict-resolution, negotiation, consensus, deployment, or child-process authority.
+      evidence: [agents/provisioning-workflow-orchestrator/request-machine.yaml, helm/templates/provisioning-workflow-orchestrator.yaml, srd004]
+      migration_impact: Profile, Helm, SRD, integration, packaging, release, and compatibility paths move together.
+
+releases:
+
+  # ===========================================================================
+  # Substrate: the inherited chatbot-mesh releases. All are built, and rel09.9
+  # gates them by proving the mesh runs from this repository. Document order
+  # here is historical -- 09.0 precedes 08.0 -- and carries no schedule.
+  # ===========================================================================
+
+  - version: "00.0"
+    name: RAG server and single-RAG chatbot turn
+    lineage: substrate
+    description: |
+      The core loop: a persistent RAG server agent (srd001, vector-in) that answers
+      a query_embeddings request with chunks and embedding-model metadata, and a
+      browser-facing chatbot agent (srd002) whose request-scoped turn embeds the
+      message once, queries a single RAG, composes the answer prompt from the
+      retrieved chunks through command-state $from(), and answers, degrading to a
+      mapped 200 when the RAG
+      fails.
+    status: implemented
+    srds:
+      - srd001-rag-server-agent
+      - srd002-chatbot-agent
+    use_cases:
+      - id: rel00.0-uc001-rag-server-query
+        summary: Persistent RAG server answers a vector-in query_embeddings request and returns chunks with embedding-model metadata.
+        status: implemented
+      - id: rel00.0-uc002-chatbot-turn
+        summary: Single-RAG chat turn embeds once, queries one RAG, composes via $from(), answers, and degrades to a 200 when the RAG fails.
+        status: implemented
+    test_suites:
+      - id: test-rel00.0-chatbot-mesh
+        summary: Tracers for the RAG server query and the single-RAG chatbot turn with a degraded RAG.
+        status: implemented
+
+  - version: "01.0"
+    name: Tier selection and multi-RAG fan-out
+    lineage: substrate
+    description: |
+      The chatbot turn (srd002 R2, R3) gains the LLM $tool tier selector that classifies a
+      question to one chat-LLM word, and the sequential multi-RAG fan-out that
+      embeds once and queries N RAGs, each degraded (CommandError) or
+      embedding-mismatch-excluded (QueryRejected) source routing on as a visible
+      machine transition, compose assembling the surviving per-source chunks.
+
+      The fan-out was demonstrated from this release; the $tool dispatch was
+      not. Every turn answered on the default word through the ParseFailed
+      fallback, and the release's assertion could not distinguish that from a
+      dispatch, because the fallback word is also a declared answer word with a
+      configured model. GH-75 made the dispatch work; GH-84 gave it an
+      assertion that fails when a turn falls back. The release stays
+      implemented and carries the history rather than a status that would be
+      stale on arrival.
+    status: implemented
+    srds:
+      - srd002-chatbot-agent
+    use_cases:
+      - id: rel01.0-uc001-routed-fanout
+        summary: A tier-selected chat turn dispatches one chat-LLM word via $tool and fans the one embedding out to two RAGs, citing both corpora and degrading when one fails. The dispatch half earned its evidence at GH-75 and GH-84, not at this release.
+        status: implemented
+    test_suites:
+      - id: test-rel01.0-routing-fanout
+        summary: Tracers for the $tool tier-selector dispatch, the two-RAG fan-out over disjoint corpora, and the degraded and embedding-mismatch paths.
+        status: implemented
+
+  - version: "02.0"
+    name: Observability
+    lineage: substrate
+    description: |
+      The observability surface (srd002 R5.1, R5.3): a per-agent monitor panel fed
+      by each agent's monitor read_state and SSE stream through the chatbot's
+      same-origin monitor_proxy, and a cross-agent trace waterfall that renders a
+      turn's connected trace from the Jaeger query API, real because the
+      request-scoped machine exports its spans and propagates traceparent to the
+      RAG servers (agent-core srd016).
+    status: implemented
+    srds:
+      - srd002-chatbot-agent
+    use_cases:
+      - id: rel02.0-uc001-observability
+        summary: The observability panel shows each agent's run state and event stream and renders a selected turn's connected cross-agent trace as a span waterfall.
+        status: implemented
+    test_suites:
+      - id: test-rel02.0-observability
+        summary: Tracers for the per-agent monitor panels over monitor_proxy and the cross-agent trace waterfall from the trace backend.
+        status: implemented
+
+  - version: "03.0"
+    name: Mesh deployment and tiered swap
+    lineage: substrate
+    description: |
+      The mesh deploys as one Helm chart (srd003) with values-driven RAG pairs,
+      co-generated chatbot client config and N-RAG fan-out from one source, a
+      tiered hot swap (repoint is a Service change; add-RAG re-renders and rolls
+      the chatbot after draining active turns), and OTLP observability. The
+      provisioning deployment API (srd003 R4) is the control-plane release
+      (rel05.0); this release covers the topology and the swap paths.
+    status: implemented
+    srds:
+      - srd003-chatbot-deployment
+    use_cases:
+      - id: rel03.0-uc001-mesh-deployment
+        summary: One Helm chart deploys the mesh on a kind cluster with values-to-config co-generation, a Service repoint, and an add-RAG rollout that drains active turns.
+        status: implemented
+    test_suites:
+      - id: test-rel03.0-mesh-deployment
+        summary: Tracers for the kind deploy smoke, the co-generation drift lock, and the repoint and add-RAG swaps.
+        status: implemented
+
+  - version: "04.0"
+    name: In-cluster LLM tier
+    lineage: substrate
+    description: |
+      The chart promotes Ollama from an external values-driven endpoint to a
+      first-class, chart-owned LLM tier (srd003 R6): an optional Ollama subchart,
+      enabled by default, with PVC-backed model storage, a model-preload Job, agent
+      readiness gated on model presence, and GPU scheduling values. A fresh-cluster
+      install is self-contained; setting ollama.enabled=false with an endpoint
+      override reproduces the external-endpoint behavior, and the co-generation
+      contract (R2) is unchanged either way.
+    status: implemented
+    srds:
+      - srd003-chatbot-deployment
+    use_cases:
+      - id: rel04.0-uc001-in-cluster-llm-tier
+        summary: A fresh-cluster install with defaults answers a chat turn with zero external LLM dependency; the disabled-tier override reproduces the external endpoint, and agents are not ready until the models are pulled.
+        status: implemented
+    test_suites:
+      - id: test-rel04.0-llm-tier
+        summary: Tracers for the default-install turn, the disabled-tier endpoint override, the preload-gate ordering, and the CPU-only kind smoke.
+        status: implemented
+
+  - version: "05.0"
+    name: Control plane
+    lineage: substrate
+    description: |
+      The mesh gains a control plane on top of the data-plane topology: a
+      `provisioning-workflow-orchestrator` actor (srd004) that currently assumes Executor / Workflow
+      Orchestrator, binds a user's provisioning intent, sequences
+      the ingestion and reconfiguration workflows, and decides the values changes,
+      and a `creator` actor (srd005) that assumes Creator / Instance Manager and
+      Agent Owner / Agent Lifecycle Manager, realizes each instance operation, and alone
+      holds the deployment-API authority. A provisioning intent flows chatbot ->
+      provisioning-workflow-orchestrator -> creator: the chatbot delegates through a declared client, the
+      provisioning-workflow-orchestrator sequences corpus-ingest runs and the rollout, the creator executes
+      the request-draining rollout through the deployment API (srd003 R4) and
+      reports health, and the new source serves a grounded turn.
+      The shipped provisioning-workflow-orchestrator request machine has no synchronization,
+      conflict-resolution, negotiation, or consensus state, so it does not assume
+      canonical Coordinator; GH-1077 completed its coordinated mechanical rename.
+    status: implemented
+    srds:
+      - srd004-provisioning-workflow-orchestrator
+      - srd005-creator
+    use_cases:
+      - id: rel05.0-uc001-control-plane-provisioning
+        summary: >-
+          A provisioning intent flows panel -> provisioning-workflow-orchestrator -> creator and
+          reconfigures the mesh; only the creator holds the deployment-API
+          authority. The values-only apply -- the panel's operator intent -- is
+          realized end to end and proven by mage integration:controlPlane. One
+          ingest-carrying intent is driven through the corpus-ingest child run,
+          the request-draining rollout, and a turn grounded in the newly added
+          source by mage integration:controlPlaneLive, against a real cluster.
+          Of the create, restart, and terminate workflows, only restart is driven.
+        status: implemented
+    test_suites:
+      - id: test-rel05.0-control-plane
+        summary: >-
+          Two cases. The apply -> reconfigure -> verify tracer asserts the decided
+          values document crosses each hop and the authority boundary holds,
+          realized as mage integration:controlPlane (deterministic, no cluster),
+          which also reads the panel's mesh view back through both hops (srd006
+          R1.5). The live case, mage integration:controlPlaneLive, drives one
+          ingest-carrying intent on a kind cluster and holds each leg to evidence:
+          the release revision moves, and the turn composes over a document only
+          the ingested fixture carries.
+        status: implemented
+
+  - version: "06.0"
+    name: Declarative applier agent
+    lineage: substrate
+    description: |
+      The deployment API (srd003 R4) moves from the standard-library Go provisioner
+      to the applier (srd006), a declarative agent whose container carries the helm
+      and kubectl CLIs bound as exec tools. A decided values patch from the creator
+      is validated against the chart's values.schema.json by a helm dry-run, applied
+      as a values-file rollout (helm upgrade --reuse-values --atomic) rather than
+      per-field --set construction, verified via kubectl rollout status, and rolled
+      back on failure. The authority boundary is unchanged -- the apply path is
+      reached only by the creator and authority stays set by declared, validated
+      config -- and no agent-core change is required.
+    status: implemented
+    srds:
+      - srd006-applier
+    use_cases:
+      - id: rel06.0-uc001-declarative-applier
+        summary: The applier agent validates a values patch against the chart schema, applies it as a values-file rollout, verifies the rollout, and rolls back on failure, replacing the Go provisioner with zero agent-core changes. The live on-cluster rollout shipped with GH-735, proving a patch applied through the applier changes a real release. The provisioning panel's initial mesh-view load (GET /provisioning/api/state, srd006 R1.5) shipped with GH-750/752/753 -- the applier reads the deployed release's computed values, and the creator and provisioning-workflow-orchestrator carry the flat response through to the panel, which reassembles it client-side.
+        status: implemented
+    test_suites:
+      - id: test-rel06.0-applier
+        summary: Tracer for the validate -> apply -> verify -> rollback flow against the applier agent, asserting schema rejection, values-file apply, rollout verification, and the authority boundary. Realized as mage integration:applier, which drives the shipped profile against recording fake helm and kubectl; the chart schema is proven against real helm and the enabled chart against its render. The live on-cluster tier is mage integration:applierLive (GH-735). The state-read chain (GH-750/752/753) is covered by unit tests pinning every hop's field mapping and failure-status behavior, and mage integration:controlPlane automates the creator/provisioning-workflow-orchestrator state round trip after the GH-755 selector fix.
+        status: implemented
+
+  - version: "07.0"
+    name: Declarative collector agent
+    lineage: substrate
+    description: |
+      A persistent collector profile replaces contrib on the OTLP trace path.
+      Its machine visibly composes bounded receive, await, policy, deterministic
+      stdouttrace spool, optional unchanged relay to Jaeger, retry, monitor,
+      control, and stop. Its own telemetry is file-only, with a direct self-loop
+      proof. Migration is staged: contrib retains agent metrics export and Dolt
+      Prometheus scraping until a later metrics-ingress replacement is specified.
+    status: implemented
+    srds:
+      - srd007-collector-agent
+    use_cases:
+      - id: rel07.0-uc001-collector-ingress
+        summary: A chatbot trace batch enters the collector agent, remains attributable in spool and Jaeger, while contrib retains metrics evidence.
+        status: implemented
+    test_suites:
+      - id: test-rel07.0-collector
+        summary: Profile, intake, self-loop, staged Helm, identity, retained-evidence proofs, and lifecycle listener rebind and terminal state for collector ingress.
+        status: implemented
+
+  - version: "09.0"
+    name: Canonical collector and Jaeger retirement
+    lineage: substrate
+    description: |
+      The mesh removes its Jaeger dependency entirely. The collector agent's
+      spool query surface (port 18193) replaces the Jaeger query API as the
+      trace backend for the UX waterfall. Collector mode derives from
+      externalOTLPEndpoint presence (relay when set, spool otherwise) instead
+      of from jaeger.enabled. Helm drops the Jaeger Deployment, Service,
+      values block, and schema entry. The collector program is consumed from
+      the catalog rather than carried locally. Integration tests assert
+      spool identity and metrics evidence without Jaeger cross-checks.
+    status: implemented
+    srds:
+      - srd007-collector-agent
+      - srd003-chatbot-deployment
+    use_cases:
+      - id: rel09.0-uc001-canonical-collector
+        summary: The mesh deploys with no Jaeger workload; the UX waterfall reads traces from the collector query surface and integration tests verify spool identity and metrics evidence.
+        status: implemented
+    test_suites:
+      - id: test-rel09.0-canonical-collector
+        summary: Helm render purity, UX waterfall transform, spool identity, metrics evidence, and catalog consumption proofs for the Jaeger-free collector.
+        status: implemented
+
+  - version: "08.0"
+    name: Fleet observer agent
+    lineage: substrate
+    description: |
+      A persistent observer agent discovers mesh members from the Kubernetes API
+      and polls each agent's monitor surface to serve a fleet-level view. Beyond
+      the per-agent cast list, the observer discovers the deployment topology
+      (Deployments and Services) and polls metrics.k8s.io for per-pod CPU and
+      memory, so the UX shows what the deployment looks like and what it consumes,
+      grouping pods by owning Deployment and fronting Service and degrading
+      explicitly when the metrics API is absent. The UX auto-refreshes on a
+      declared interval. The observer is itself a declarative agent on the same
+      runtime, and its profile is the punchline of the demo deck (#1125).
+
+      The agent-core REST client has no SSE consumer, so the observer polls
+      monitor snapshots rather than consuming event streams. This is an explicit
+      design, not a workaround; client-side streaming is a separate agent-core
+      concern.
+
+      Once the catalog observer family ships (catalog srd021-observer, release
+      99.0), this mesh observer rebinds to the catalog family and srd008 becomes
+      the mesh-local generalization source, retaining the descriptive observer
+      actor name via the historical_aliases pattern (GH-1247).
+    status: implemented
+    srds:
+      - srd008-observer-agent
+    use_cases:
+      - id: rel08.0-uc001-mesh-observer
+        summary: The observer discovers every mesh agent and the deployment topology, polls monitor surfaces and per-pod resource usage, and displays a fleet view that updates during a live chat turn.
+        status: implemented
+    test_suites:
+      - id: test-rel08.0-observer
+        summary: Profile validation, kube discovery, monitor fan-in, topology grouping, per-pod resource usage, fleet UX, RBAC proof, and lifecycle exit.
+        status: implemented
+
+  - version: "09.9"
+    name: Baseline demo from the repository root
+    lineage: substrate
+    description: |
+      The inherited mesh runs as this repository rather than as the tree it was
+      vendored from. The demo targets resolve the application composition from
+      the repository root, so an operator with a fresh clone reaches a seeded,
+      answering mesh without renaming a directory or moving a worktree. A
+      verification target closes the sequence: it posts a tasking and asserts
+      the chat API returned composed sources, so the baseline is checked rather
+      than eyeballed, and it reads that from the server's own source metadata
+      instead of scraping bracket citations out of the answer text as the SPA
+      panel does.
+
+      This release adds no capability to the mesh. It converts the inherited
+      implementation status of rel00.0 through rel09.0 into evidence gathered
+      here, and it stages the demo's opening act -- the Ollama turn that
+      composes from the corpus while reporting its sources only in server
+      metadata, which rel10.1 replaces with Command's structured citations.
+    status: implemented
+    srds:
+      - srd001-rag-server-agent
+      - srd002-chatbot-agent
+      - srd003-chatbot-deployment
+    use_cases:
+      - id: rel09.9-uc001-baseline-demo
+        summary: An operator with a fresh clone brings the mesh up, seeds each RAG unit, and serves a tasking whose answer reports composed sources, all from the repository root.
+        status: implemented
+    test_suites:
+      - id: test-rel09.9-baseline-demo
+        summary: Composition resolution from the root, cluster stand-up, per-unit seeding and rebinding, the composed-sources assertion and its failure messages, and clean teardown.
+        status: implemented
+
+  - version: "10.0"
+    name: Cohere Command composition tier
+    lineage: substrate
+    description: |
+      The additive Cohere provider enters the mesh: one declared REST client for
+      the Cohere API and a model tier that composes a command-staff brief with
+      Cohere Command as ministry-template markdown, passing the retrieved chunks
+      as documents rather than as a concatenated prompt string. End-to-end
+      tracer: a tasking runs the full turn composed by Cohere Command, while the
+      Ollama tier remains selectable and unchanged. Adds the cohere_chat REST
+      reference, the invoke_cohere_command tier word, the capture_brief normalizer that
+      keeps the answer a string across both paths, and their machine states.
+
+      The release carries one capability rather than two. The query-embedding
+      repoint is rel10.3, because it first requires reseeding every collection
+      with the Cohere embedding family or the srd002 R3.3 mismatch exclusion
+      drops every source from every turn -- operational work that proves nothing
+      about the provider path. What this release proves is the transport a
+      security reviewer audits, the tier word a selector reaches, and the
+      degradation that keeps a provider failure from failing a turn. It serves
+      the governed-additive-change criterion; the citation surfacing that opens
+      full attribution lands in rel10.1.
+    status: implemented
+    srds:
+      - srd009-cohere-provider
+      - srd012-brief-markdown-conformance
+    use_cases:
+      - id: rel10.0-uc001-cohere-command-tier
+        summary: A tasking is composed by Cohere Command through one declared client, the answer reaches the response as text, a provider failure degrades to the default chat word, and the Ollama tier stays selectable.
+        status: implemented
+    test_suites:
+      - id: test-rel10.0-cohere-command-tier
+        summary: Scenario critics for the Cohere turn and its fallback, the live tier with its credential and egress proofs, the disabled-provider render, and the deployed verification.
+        status: implemented
+
+  - version: "10.1"
+    name: Structured citations
+    lineage: substrate
+    description: |
+      The turn surfaces the citation spans Command returns as structured source
+      metadata, replacing the SPA's bracket-scraping extractSources heuristic.
+      End-to-end tracer: the same tasking returns a brief whose assertions each
+      carry a citation to a source document, opened from the brief. Adds the
+      parse_citations word and the SurfacingCitations state. This release serves the
+      full-attribution success criterion.
+    status: implemented
+    srds:
+      - srd009-cohere-provider
+    use_cases:
+      - id: rel10.1-uc001-structured-citations
+        summary: Command's citation spans are surfaced as structured source metadata, each resolved to an openable retrieved chunk, with unresolvable and citation-free answers reported distinguishably.
+        status: implemented
+    test_suites:
+      - id: test-rel10.1-structured-citations
+        summary: The live citation-shape proof, the surfaced-entry and resolution assertions, the dropped and uncited scenarios, the declaration check, the panel's removal of the bracket heuristic, and the disabled render.
+        status: implemented
+
+  - version: "10.2"
+    name: RAG rerank
+    lineage: substrate
+    description: |
+      Retrieval reorders the RAG candidates with Cohere Rerank before composition,
+      the first of the cascade's rerank passes; the second search-branch pass and
+      the fusion pass complete in rel12.1 once the search branch lands. End-to-end
+      tracer: the same tasking lifts a relevant document that embedding retrieval
+      left below the cutoff into the top-N passed to Command. Adds the cohere_rerank_rag
+      word, the RerankingRag state, and the cohere_rerank REST reference. This
+      release serves the retrieval-recall success criterion.
+    status: implemented
+    srds:
+      - srd009-cohere-provider
+    use_cases:
+      - id: rel10.2-uc001-rag-rerank
+        summary: A rerank pass reorders the fan-out candidates against the tasking without retrieving, lifting a document embedding retrieval buried into the declared top-N Command composes from.
+        status: implemented
+    test_suites:
+      - id: test-rel10.2-rag-rerank
+        summary: The live ordering-shape proof, the buried-document lift, the permutation and declared top-N assertions, the refusal and empty-ordering degradations, the shared-operation declaration check, and the disabled render.
+        status: implemented
+
+  - version: "10.3"
+    name: Cohere embedding tier
+    lineage: substrate
+    description: |
+      Query embedding repoints from Ollama to Cohere Embed, completing the model
+      stack the provider declares. embed_query embeds the tasking once through
+      the Cohere embeddings operation and the single resulting vector remains the
+      fan-out input to every selected rag-server, unchanged. End-to-end tracer:
+      the same tasking runs embedded by Cohere Embed and composed by Cohere
+      Command, with every source surviving the embedding-model comparison. Adds
+      the cohere_embed REST reference and repoints embed_query, while the Ollama
+      embedding declaration remains selectable.
+
+      The local proof came first: the turn embeds at Cohere, both integration
+      corpora are seeded there, and no source is excluded by the identity
+      comparison. The deployed verification then waited on the corpus-ingest
+      agent, whose embed word the catalog pinned to Ollama
+      (Nokia-Bell-Labs/declarative-agents#1852), so the cluster corpus could not
+      be reseeded through Cohere. Upstream made that word provider-selectable;
+      we repinned to the release carrying the fix (GH-134) and mage demo:seed
+      now chooses the operation through CORPUS_INGEST_EMBEDDING_REST_REF and
+      CORPUS_INGEST_EMBEDDING_OPERATION. On the reseeded cluster a tasking runs
+      against the deployed mesh embedded by Cohere Embed with no source excluded
+      (GH-137), and the suite's deployed case is implemented.
+
+      This release is scheduled after the composition tier because it is the one
+      Cohere addition that is not purely additive at run time. The rag-server
+      reports the embedding-model identity its collection was seeded with, and
+      the chatbot excludes any source whose identity differs from the query
+      vector's, so repointing the query embedding without reseeding excludes
+      every source from every turn. The release therefore carries the corpus
+      migration -- reseeding each collection with the Cohere embedding family and
+      proving the reported identities agree -- alongside the declaration change.
+    status: implemented
+    srds:
+      - srd009-cohere-provider
+    use_cases:
+      - id: rel10.3-uc001-cohere-embedding-tier
+        summary: A tasking is embedded once by Cohere Embed, the single vector fans out unchanged, and every source survives the embedding-model comparison on a reseeded mesh.
+        status: implemented
+    test_suites:
+      - id: test-rel10.3-cohere-embedding-tier
+        summary: The live response-shape and dimension proof, the normalization critics and their negative cases, the reseed's source-survival assertion, the chart render, and the deployed verification.
+        status: implemented
+
+  # ===========================================================================
+  # Plan: the ordered forward schedule. Document order is the schedule, which
+  # is why rel10.4 opens the block and rel12.2 precedes rel12.0. Release ids
+  # are stable because srd010-017 reference them, so the order is expressed by
+  # position rather than by renumbering.
+  # ===========================================================================
+
+  - version: "10.4"
+    name: Corpus build with cached embeddings
+    lineage: plan
+    description: |
+      An offline build pipeline chunks the synthetic corpus, computes the Cohere
+      embeddings once, and stores each chunk beside its vector and metadata --
+      source id, keywords, clearance, and Admiralty rating -- as YAML on disk.
+      Vectors are keyed by embedding-model identity, so Ollama- and Cohere-family
+      vectors coexist in one store and a reseed re-embeds only when the family
+      changes. Demo seeding then loads vectors from disk, so starting the demo
+      costs no provider spend. End-to-end tracer: a corpus build produces chunk
+      records carrying vector and metadata, and a demo seeded from them answers a
+      tasking without calling the embedding provider. This release comes first in
+      the plan because the rest depends on it: it supplies the clearance tags
+      rel11.0 filters on, the facets rel11.5 selects by, and the
+      source-evaluation rows the rel12.2 form is checked against.
+    status: implemented
+    srds:
+      - srd015-corpus-build
+    use_cases:
+      - id: rel10.4-uc001-corpus-build
+        summary: >-
+          A build chunks the corpus, embeds each chunk once through the mesh's
+          own Cohere client, and writes chunk records carrying vector and
+          declared metadata; a demo seeded from those records answers a tasking
+          with the embedding provider uncalled. mage integration:corpusBuild
+          proves the whole tracer: it writes the records, seeds a live Chroma
+          from them counting zero embedding requests at the client, and then
+          stands the rag-servers and the chatbot over that collection and serves
+          the corpus's primary tasking against it, for one counted embedding
+          request, with the identity the store wrote equal to the one the
+          rag-server reports and no source excluded on it.
+        status: implemented
+    test_suites:
+      - id: test-rel10.4-corpus-build
+        summary: The tracer, the seed's zero embedding requests counted at the client, rebuild idempotence, two families coexisting under their identities, the stored identity agreeing with what the rag-server reports, metadata copied from declared front matter, the corpus conditions downstream releases exercise, the missing-identity seed failing closed, the partial-record build failure, and the store's versioned, legible, corpus-only shape. All ten cases are implemented, the served turn closing the three that needed one.
+        status: implemented
+
+  - version: "10.5"
+    name: Real multi-source demo corpus
+    lineage: plan
+    description: |
+      The synthetic Sable Strait corpus is replaced by a real one, drawn from
+      five source tiers of the 2022 Ukraine war and bounded to the twelve-month
+      window where all five overlap: daily assessments from the Institute for
+      the Study of War, a public Telegram news corpus, a missile and drone
+      attack dataset, daily loss figures, and one synthetic HUMINT tier written
+      over the public rumour stream so the clearance demonstration still has
+      classified-looking material to gate. Four of the five are real reporting
+      that declares no classification, so clearance becomes a declared property
+      of the tier rather than something read out of a document.
+
+      The rel10.4 build extends in three directions. One normalized envelope
+      reads every tier, so chunking and the store consume one shape. The
+      searchable material is chunked at four named profiles rather than one,
+      with the rel10.4 profile reproduced character for character so the
+      vectors already stored stay valid. Every chunk carries lineage to its
+      parent document, across the profiles of that document, and across tiers
+      to the reporting it was derived from, which is what lets a retrieved
+      fragment reconstruct to a citable source.
+
+      Embedding is the one step that costs money and the corpus is now two
+      orders of magnitude larger, so what gets embedded becomes a specified
+      artifact: a declared selection capped at three thousand chunks per
+      profile, counted and checked before the first request rather than after
+      the last. Conversion covers the whole window regardless, so widening the
+      demonstration later embeds the chunks it adds and not the ones it keeps.
+
+      The store also becomes what the interface reads. A second collection in
+      the same vector store holds each document's raw envelope and all its
+      chunk-profile versions, addressed by identifier rather than by
+      similarity, behind the same clearance filter that governs retrieval --
+      a presentation path that reached documents the retrieval filter withholds
+      would undo rel11.0 rather than extend it. End-to-end tracer: a build over
+      the twelve-month slice produces multi-profile chunk records carrying
+      lineage, a demo seeded from them answers a windowed tasking at two
+      clearance levels, and a cited chunk resolves through the read API to its
+      parent document and its other chunk sizes.
+    status: implemented
+    srds:
+      - srd017-real-demo-corpus
+    use_cases:
+      - id: rel10.5-uc001-real-demo-corpus
+        summary: >-
+          A build over the twelve-month slice reads five real tiers through one
+          envelope, chunks the searchable material at four profiles carrying
+          lineage, and embeds a declared selection under a ceiling checked
+          before the first request. The demo seeds both collections without
+          calling the provider, answers a windowed tasking at a cleared and an
+          uncleared level, and the analyst follows a citation through the read
+          API to the chunk, the parent document it was cut from, and that
+          document's other chunk sizes, each step applying the analyst's
+          clearance exactly as retrieval did.
+        status: implemented
+    test_suites:
+      - id: test-rel10.5-real-demo-corpus
+        summary: >-
+          Sixteen cases. The tracer, the window's inclusive bounds with the
+          per-tier conversion counts, metadata-key parity across the five tiers,
+          the unsearchable material kept for citation and absent from every
+          vector, per-profile chunk counts with medium-900 byte-identical to the
+          rel10.4 chunker, lineage consistency and cross-tier resolution, the
+          clearance mapping with NOFORN as a caveat, the sampling cap and the
+          embed ceiling refusing an over-budget selection at zero requests, the
+          widened selection embedding only its delta, the store's co-location
+          and per-profile prune, both seeds with the provider uncalled and the
+          two-level turn, the cited chunk resolving to its parent and versions,
+          the over-clearance document unreachable by identifier, version, or
+          metadata query, the unestablishable publication date failing the
+          build, and the replacement retaining the conditions rel11.0 and srd014
+          exercise.
+        status: implemented
+
+  - version: "11.0"
+    name: Clearance-gated retrieval
+    lineage: plan
+    description: |
+      Per-clearance access control across clearance levels. Each chunk's clearance
+      tag and its accompanying metadata arrive from the rel10.4 corpus build rather
+      than being derived at ingest, the chatbot carries the analyst's maximum
+      clearance into the fan-out, and the rag-server filters the corpus to that
+      clearance before the vector search runs, so an over-clearance document is
+      never a retrieval candidate rather than a redacted result. The response
+      reports the level the filter was enforced at and records nothing about what
+      the filter excluded -- not content, not identifiers, and not a count, because
+      a count leaks the existence of material the requester is not cleared to know
+      about (srd010 R5.3). End-to-end tracer: the same
+      tasking run at two clearance levels shows the cleared analyst receives an
+      over-clearance document while the uncleared analyst never has it as a
+      candidate. Adds the clearance carried through the fan-out and a rag-server
+      metadata where-filter applied before the vector search. The agent-core
+      dependency -- a Chroma query operation accepting a metadata filter bound
+      from command_state -- was verified and discharged in GH-55, so this release
+      needs no platform change. It serves the clearance-isolation success
+      criterion, proven by an access-control test that records zero unauthorized
+      cross-clearance retrievals.
+    status: implemented
+    srds:
+      - srd010-clearance-gated-retrieval
+    use_cases:
+      - id: rel11.0-uc001-clearance-gated-retrieval
+        summary: The same tasking run at two clearance levels returns a brief citing the restricted document for the cleared analyst, while the uncleared analyst never had it as a retrieval candidate.
+        status: implemented
+    test_suites:
+      - id: test-rel11.0-clearance-gated-retrieval
+        summary: The two-level tracer, the pre-search filter evidence read from the issued query, ingest tagging, clearance provenance, the fail-closed legs, the audit that records no excluded-document count, the declared level pairs, and the command-state where-filter binding.
+        status: implemented
+
+  - version: "11.5"
+    name: Two-panel INTSUM UI
+    lineage: plan
+    description: |
+      The single-page application becomes two panels: chat with the retrieval
+      facet selectors -- keywords, clearance, and source rating -- on the left,
+      and the live ministry INTSUM form on the right. This release defines the
+      ministry template artifact in the repository: the INTSUM form structure
+      carrying a classification banner, a date-time-group and originator header,
+      the bottom line up front, the threat-activity sections, the Admiralty
+      source-evaluation table, the gaps and outlook sections, and the citation
+      index. That artifact is what the rel12.2 conformance check validates, so
+      the form is defined before the check that reads it. The left panel also
+      carries the clearance line, which names the level the turn was enforced at
+      and not how much it withheld: srd010 R5.3 bars a suppressed count, because
+      an analyst who varies the tasking and reads that count maps the restricted
+      corpus without reading any of it. End-to-end tracer: an analyst filters
+      retrieval by facet, watches the INTSUM form fill from the turn, and reads
+      the enforced clearance level. The release also draws the provenance walk
+      rel10.5 built the read API for, and it serves those documents to the
+      browser through the request boundary where srd010 R3.1 establishes the
+      analyst's clearance, so the presentation path withholds what retrieval
+      withholds. Its software requirements, use case, and test suite are
+      authored ahead of the code, so every implementation issue in the release
+      is checked against cases that already exist.
+    status: implemented
+    srds:
+      - srd016-intsum-ui
+    use_cases:
+      - id: rel11.5-uc001-intsum-ui
+        summary: An analyst narrows retrieval by facet, reads the INTSUM form filling from the turn, and walks a citation to the chunk, the whole report it was cut from, and that report's other versions, with a document above their clearance reachable by no operation and drawn as no node.
+        status: implemented
+    test_suites:
+      - id: test-rel11.5-intsum-ui
+        summary: The tracer and the two-column layout, the route cross-check, the template artifact and the form rendering from it, field-level provenance and the empty form on every degraded outcome, the Admiralty table and the deduplicated citation index, pre-search facets that narrow and never widen, the read boundary and its clearance origin, the provenance walk with collapsed duplicates, the two-level withholding across all four operations, and the bar on a withheld count by display or by subtraction.
+        status: implemented
+
+  - version: "12.2"
+    name: Template conformance
+    lineage: plan
+    description: |
+      A structural conformance check confirms each brief's markdown matches the
+      ministry template before it is surfaced. This release declares the markdown
+      structural schema and the check that reads it, which is the representation
+      srd012 owns among the template's three; the form rel11.5 defines is the
+      interface representation of the same template, and ARCHITECTURE decision 12
+      carries the duplication and its drift risk deliberately. It is scheduled
+      ahead of the OSINT branch because the filled form is the demonstration
+      centerpiece -- a conforming brief is what a reviewer is shown, and the
+      second retrieval branch improves what fills it rather than whether it can be
+      shown at all. End-to-end tracer: a brief that
+      conforms to the ministry template passes the check, and a malformed one is
+      flagged rather than surfaced as final. Adds the check_conformance word, the
+      CheckingConformance state, and the versioned template schema. This release
+      serves the template-conformance success criterion.
+    status: implemented
+    srds:
+      - srd012-brief-markdown-conformance
+    use_cases:
+      - id: rel12.2-uc001-template-conformance
+        summary: A conforming brief passes the structural check while a malformed one is surfaced with its verdict and defect list rather than presented as final.
+        status: implemented
+    test_suites:
+      - id: test-rel12.2-template-conformance
+        summary: The pass and flag legs, the unmodified failing brief, the retained draft and its verdict reaching export approval, outcome separability, determinism with no model call, the population conformance rate, the composition target, the versioned structure-only schema, the no-approval-language check, and the sole-authority and drift-follow-up assertions.
+        status: implemented
+
+  - version: "12.0"
+    name: OSINT search tool
+    lineage: plan
+    description: |
+      The second retrieval branch. An OSINT search tool restricted to a fixed
+      allowlist of approved domains augments retrieval, and a request to any other
+      host is dropped and logged; in an air-gapped deployment the search tool is
+      disabled and the turn runs retrieval-only. End-to-end tracer: a tasking is
+      augmented by an allowlisted search result that appears in the brief, while a
+      request to a non-allowlisted host is dropped and logged. Adds the osint_search
+      word, the Searching state, and the allowlisted REST reference. This release
+      realizes the approved-domain-augmentation control, and it carries the
+      external-content trust boundary, because the first external document to
+      reach the composition set is the first that can carry attacker-influenced
+      text.
+    status: implemented
+    srds:
+      - srd011-osint-search-cascade-rerank
+    use_cases:
+      - id: rel12.0-uc001-osint-search
+        summary: An allowlisted search result reaches the brief as a cited document while a request to any other host is refused by the client, logged, and reported.
+        status: implemented
+    test_suites:
+      - id: test-rel12.0-osint-search
+        summary: The augmentation and refusal legs, hop-bounding past the first request, the inputs that cannot widen the allowlist, candidate normalization, egress minimization, the injected-instruction and provenance trust-boundary cases, branch degradation and outcome reporting, and the disabled branch whose host is absent from the network policy.
+        status: implemented
+
+  - version: "12.1"
+    name: Cascade rerank
+    lineage: plan
+    description: |
+      The search results are reranked on their own, the second cascade pass, and a
+      fusion rerank reorders the union of the RAG and search branches against the
+      tasking to produce the top-N passed to Command -- the third pass, completing
+      the cascade begun in rel10.2. End-to-end tracer: a tasking whose RAG and
+      search candidates fuse into one reranked top-N, ordered on one relevance scale
+      rather than a merge of incomparable scores. Adds the cohere_rerank_search and
+      cohere_rerank_fused words and their states. This release serves the retrieval-recall
+      success criterion across both branches.
+    status: implemented
+    srds:
+      - srd011-osint-search-cascade-rerank
+    use_cases:
+      - id: rel12.1-uc001-cascade-rerank
+        summary: RAG and search candidates fuse into one reranked top-N in which every document was re-scored against the tasking on a single relevance scale.
+        status: implemented
+    test_suites:
+      - id: test-rel12.1-cascade-rerank
+        summary: The cross-source ordering known in advance, the re-scoring that no arithmetic merge reproduces, the declared fused top-N, the one shared rerank reference across all three passes, the fusion and search-rerank degradation paths, the branch trim to a declared cutoff, the permutation property, and the single-fusion latency tunable.
+        status: implemented
+
+  - version: "13.0"
+    name: Evaluation and first-draft-time proof
+    lineage: plan
+    description: |
+      An evaluation over labeled taskings that puts numbers behind the criteria.
+      End-to-end tracer: the evaluation runs the turn over the labeled taskings and
+      reports retrieval recall against a labeled relevant set with and without
+      Rerank, citation coverage over generated briefs, and the end-to-end time from
+      tasking to an accepted first draft against the half-day baseline. This release
+      is a Go evaluation harness and test suite over the existing turn rather than a
+      turn change. It serves the first-draft-time and retrieval-recall criteria as
+      measured evidence rather than assertion. Its test suite and evaluation corpus
+      are authored when the release is scheduled.
+    status: implemented
+    srds:
+      - srd014-evaluation
+    use_cases:
+      - id: rel13.0-uc001-evaluation
+        summary: The evaluation reports retrieval recall with and without the rerank passes, citation coverage from structured metadata, and first-draft time split into system and analyst-edit segments against the half-day baseline.
+        status: implemented
+    test_suites:
+      - id: test-rel13.0-evaluation
+        summary: The three metrics against their thresholds, recall measured at the composition top-N and reported twice over one tasking set, coverage over a declared deterministic segmentation with unresolvable citations counted against it, independent labeling, the corpus conditions, the unmodified shipped turn, per-tasking reporting with failures retained, and the synthetic-corpus labeling in the output.
+        status: implemented
+
+  - version: "13.1"
+    name: Generated references and the in-demo evaluation
+    summary: >
+      A second labeled corpus built backwards from ground truth -- references
+      sampled from the retrieval corpus, a report composed from them alone, a
+      tasking derived from the report -- scored by the rel13.0 recall machinery
+      through a corpus selector and reported separately from the analyst-labeled
+      corpus. An /eval chat command runs a demo-sized slice through the shipped
+      turn and reports the recall table in the conversation, adding no profile
+      bytes to the deployed mesh.
+    status: implemented
+    srds:
+      - srd014-evaluation
+    use_cases:
+      - id: rel13.1-uc001-generated-references
+        summary: The generator fixes references before the tasking exists, guards against leakage, and commits a versioned provenance-carrying corpus; recall reports the two corpora separately; /eval reports a labeled recall table in the chat window and agrees with the harness.
+        status: implemented
+    test_suites:
+      - id: test-rel13.1-generated-references
+        summary: Generation order and independence, the leakage guard, version and provenance and per-set clearance, separate denominators under the corpus selector, the labeled in-chat report, the zero-profile-bytes constraint, and command-harness agreement.
+        status: implemented
+
+  - version: "14.0"
+    name: Brief export to PDF
+    lineage: plan
+    description: |
+      Delivery of the finished brief. An exporter agent converts the approved,
+      analyst-edited brief markdown to PDF through md-to-tex and a LaTeX engine, in
+      a sandboxed, network-denied container. End-to-end tracer: an analyst edits the
+      brief and exports it to a ministry-conformant PDF a reviewer approves. The
+      export is analyst-triggered after the human edit the VISION requires, so it
+      runs on the reviewed markdown rather than the raw generation and off the
+      generation turn's latency. Adds the exporter agent profile with the md_to_tex
+      and render_pdf exec words and its Helm workload; the md-to-tex and LaTeX
+      binaries are added to the container image, which is packaging rather than
+      machine YAML.
+    status: implemented
+    srds:
+      - srd013-exporter-agent
+    use_cases:
+      - id: rel14.0-uc001-brief-export
+        summary: The analyst edits and approves the brief, then exports it to a ministry-conformant PDF rendered in a sandboxed, network-denied container.
+        status: implemented
+    test_suites:
+      - id: test-rel14.0-brief-export
+        summary: The edit-then-export tracer, the analyst trigger off the turn's latency, rendering without re-deriving structure or re-running conformance, the request-scoped machine, fixed argv with content as a file, the shell-escape and file-access boundary against hostile fixtures, the isolation and single-caller render, clean failure with no partial PDF, and the separate workload on a sanctioned-divergence image.
+        status: implemented

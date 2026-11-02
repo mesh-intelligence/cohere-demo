@@ -1,0 +1,19 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Cohere embeddings for this scenario. The turn embeds its query here before it
+# fans out, so a scenario without this mock faults at the first word rather than
+# exercising whatever it was written to exercise.
+#
+# The chat route is absent on purpose: this scenario's tier selector never names
+# the Cohere word, and a mock answering a call the scenario does not expect would
+# hide a routing change rather than surface it.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]

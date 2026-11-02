@@ -1,0 +1,129 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel10.1-structured-citations
+title: Test Suite for Release 10.1 Structured Citations
+release: "10.1"
+
+traces: [rel10.1-uc001-structured-citations]
+
+preconditions:
+  - The rel10.0 Cohere composition tier is standing, so compose_brief already captures the provider's citations array into command state and this release reads a value that exists rather than adding its capture.
+  - The live tiers require COHERE_API_KEY exported by the operator. The credential is operator-supplied and gitignored, read by no code in the repository.
+  - The scenario tiers require no credential and no network; their mocks stand where the declared client points, reached by the environment overrides the scenario supplies.
+  - A seeded corpus whose chunks carry resolvable identities, so a cited document can be resolved back to something a reader opens rather than to an index into the request's own document list.
+  - The SPA suite runs under node, which mage audit already treats as optional and skips with a stated reason when absent.
+
+test_cases:
+  - use_case: rel10.1-uc001-structured-citations
+    name: The provider's citations array shape is established against the real API
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A live composition records what a citation entry carries — how it names the span of the answer it covers, and how it names the documents it was computed against. This runs before the surfacing word is declared, so the mapping is authored against an observed shape. No scenario critic can substitute, because a fixture returns whatever shape it declares, so a mock written from the same reading that produced the declaration confirms the declaration against itself. This is the failure rel10.0 paid for once, when a reasoning model's content blocks faulted a word every mock had reported healthy.
+    expected:
+      http_status: 200
+      citation_entry_shape_recorded: true
+      span_addressing_recorded: true
+      document_reference_form_recorded: true
+      skips_without_credential: true
+      skip_names_variable: COHERE_API_KEY
+    traces:
+      - rel10.1-uc001-structured-citations S6
+      - srd009-cohere-provider AC4
+
+  - use_case: rel10.1-uc001-structured-citations
+    name: A composed turn surfaces one structured entry per returned citation
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A live tasking returns a brief whose response metadata carries one structured entry for each citation the provider returned, each naming the assertion span it covers. The assertion is over the surfaced metadata rather than the answer text, because bracket tokens in the prose are written by the model and a turn can carry provider citations while writing none, so counting brackets would pass a turn that surfaced nothing and fail one that surfaced everything.
+    expected:
+      http_status: 200
+      surfaced_entry_count_equals_returned_citation_count: true
+      each_entry_names_its_span: true
+      assertion_reads_metadata_not_answer_text: true
+    traces:
+      - rel10.1-uc001-structured-citations S1
+      - srd009-cohere-provider AC4
+      - srd009-cohere-provider AC3
+
+  - use_case: rel10.1-uc001-structured-citations
+    name: Each surfaced citation resolves to an openable retrieved chunk
+    integration_target: mage integration:cohere
+    status: implemented
+    description: Every surfaced entry names a source by the identity the rag-server returned for the chunk, and that identity is present in the composed document set. A count that matches while the identities are provider-local indices leaves the reader an index into a list they never see, which is the opaque identifier the release exists to remove.
+    expected:
+      http_status: 200
+      every_entry_names_a_rag_server_identity: true
+      every_named_identity_present_in_composed_set: true
+      no_entry_names_a_provider_local_index: true
+    traces:
+      - rel10.1-uc001-structured-citations S2
+      - srd009-cohere-provider AC4
+      - srd001-rag-server-agent AC2
+
+  - use_case: rel10.1-uc001-structured-citations
+    name: A citation outside the composed set is dropped and reported
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A scripted composition returns a citation naming a document the turn never composed. The surfaced sources omit it and the response reports it as dropped. Scripting is the right instrument here — a live provider cites the documents it was given, so the unresolvable case does not arise on demand — and the scenario stands where the declared client points.
+    expected:
+      http_status: 200
+      unresolvable_citation_absent_from_sources: true
+      unresolvable_citation_reported_as_dropped: true
+      turn_still_answers: true
+    traces:
+      - rel10.1-uc001-structured-citations S3
+      - srd009-cohere-provider AC4
+
+  - use_case: rel10.1-uc001-structured-citations
+    name: A citation-free answer is uncited, distinguishably from an all-dropped turn
+    integration_target: mage integration:cohere
+    status: implemented
+    description: Two scripted compositions produce the same empty surfaced-source list and must remain distinguishable in the response — one returns an empty citations array, the other returns citations that all resolve outside the composed set. They mean opposite things — the provider cited nothing, or the provider cited only documents the turn cannot vouch for — and a response that renders both as "no sources" tells the reader neither.
+    expected:
+      http_status: 200
+      empty_citations_reported_as_uncited: true
+      all_dropped_reported_as_dropped: true
+      the_two_outcomes_are_distinguishable: true
+    traces:
+      - rel10.1-uc001-structured-citations S4
+      - srd009-cohere-provider AC4
+
+  - use_case: rel10.1-uc001-structured-citations
+    name: The surfacing word and its state are declared configuration
+    status: implemented
+    description: The shipped profile declares the SurfacingCitations state and its word, reading the captured citations through a fixed selector, with no runtime-supplied authority and no model-authored value deciding what is surfaced. The check reads the profile unexpanded and needs neither credential nor network, so it runs where the live tiers skip. The go_test pointer is added when the test exists — the evidence resolver validates every declared pointer regardless of case status, so naming a test before writing it fails the gate rather than recording an intention.
+    expected:
+      state_declared: true
+      word_reads_captured_citations_by_fixed_selector: true
+      no_runtime_supplied_authority: true
+      surfacing_not_model_decided: true
+    traces:
+      - rel10.1-uc001-structured-citations S1
+      - srd009-cohere-provider AC4
+
+  - use_case: rel10.1-uc001-structured-citations
+    name: The panel reads structured metadata and the bracket heuristic is gone
+    integration_target: mage ui
+    status: implemented
+    description: The SPA suite proves attribution and the displayed citation list both come from response metadata, and that extractSources is absent from the sources and the shipped bundle rather than retained behind a metadata-missing branch. A fallback fires exactly when the provider cited nothing, which is the case the reader most needs told plainly, so retaining it restores the failure the structured path removes.
+    expected:
+      panel_renders_citations_from_metadata: true
+      extract_sources_absent_from_sources: true
+      extract_sources_absent_from_bundle: true
+      no_citation_originates_in_answer_text: true
+    traces:
+      - rel10.1-uc001-structured-citations S5
+      - srd009-cohere-provider AC4
+
+  - use_case: rel10.1-uc001-structured-citations
+    name: The disabled provider reproduces the prior deployment
+    go_test: go test ./magefiles -run '^TestChartStagesTheCitationSurfacingChain$|^TestChartOmitsCohereWhenDisabled$'
+    status: implemented
+    description: A render with the provider disabled carries none of the citation-surfacing configuration, and a turn on that mesh attributes exactly as it did before the release. The surfaced-citation metadata is absent rather than present and empty, so a disabled deployment does not report an uncited turn for a path it never ran.
+    expected:
+      disabled_render_carries_no_citation_configuration: true
+      attribution_unchanged_when_disabled: true
+      surfaced_metadata_absent_not_empty: true
+    traces:
+      - rel10.1-uc001-structured-citations S7
+      - srd009-cohere-provider AC6

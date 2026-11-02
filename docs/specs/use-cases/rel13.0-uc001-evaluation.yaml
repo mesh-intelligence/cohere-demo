@@ -1,0 +1,173 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel13.0-uc001-evaluation
+title: The Evaluation Reports Recall With and Without Rerank, Citation Coverage, and First-Draft Time Against the Half-Day Baseline
+
+summary: |
+  A harness runs the shipped turn over a corpus of taskings whose relevant
+  documents were labeled in advance, and reports three numbers against three
+  declared thresholds. Retrieval recall, measured at the document set Command
+  composes from, reported twice over the same taskings with the rerank passes on
+  and off. Citation coverage, computed from the structured citation metadata over
+  a declared assertion segmentation. First-draft time, from tasking submission to
+  an accepted draft, split into the system's segment and the analyst's edit.
+
+  Three of the VISION's criteria are claims about a population, and no single
+  demonstration establishes any of them. A turn that answers one tasking well is
+  evidence about that tasking. This release is where the claims stop being
+  assertions and become measurements with denominators someone can argue with.
+
+  Rerank is reported as a difference rather than an attribution. The architecture
+  claims Rerank lifts documents embedding retrieval left below the cutoff, and a
+  single recall figure with Rerank in the path cannot support that claim -- it
+  shows the system works, not that Rerank is why. Running the same taskings with
+  the passes disabled and reporting both numbers is what makes the contribution
+  measured.
+
+  The harness changes nothing about the turn. It drives the ordinary request
+  boundary and reads ordinary responses, because a measurement that alters the
+  path it measures is a measurement of something else. Nor does it tune anything
+  to move a number, which is the failure this release exists to avoid rather than
+  commit.
+
+  What the numbers may be claimed to support is bounded in the output itself.
+  The corpus is synthetic and clearly fictional, the taskings are designed, and
+  good numbers over designed taskings are demonstration figures. That belongs in
+  the report rather than in a footnote someone drops when the slide is made, so
+  the method is what transfers to a customer corpus and the numbers are not.
+
+actor: Engineer or reviewer evaluating whether the assistant meets the measurable criteria
+trigger: The evaluation harness is run over the versioned labeled-tasking corpus.
+
+flow:
+  - F1: The harness reads the versioned corpus, each tasking paired with a relevant set labeled independently of any run.
+  - F2: It drives the shipped turn through its ordinary request boundary, modifying no agent, profile, machine, or prompt.
+  - F3: For each tasking it records the document set passed to Command, the structured citation metadata, and the timing of each segment.
+  - F4: It computes retrieval recall as the fraction of the tasking's labeled relevant documents appearing in that top-N, averaged over the corpus.
+  - F5: It repeats the run over the same taskings with the rerank passes disabled, reports the cosine order truncated to the same N beside the rerank figure (so the pair isolates ordering), and reports the untrimmed run separately as the retrieval boundary.
+  - F6: It computes citation coverage from the structured metadata over a declared deterministic assertion segmentation, counting a citation that does not resolve to a document in the composition set against coverage rather than dropping it.
+  - F7: It measures first-draft time from tasking submission to an accepted draft, reporting the system segment and the analyst edit segment alongside the total, and excluding export time.
+  - F8: It compares each metric to its threshold and reports pass or fail rather than the number alone.
+  - F9: It emits per-tasking results alongside the aggregates, and reports a failed or errored tasking as such rather than dropping it from a denominator.
+  - F10: It records the corpus version, the run configuration -- N, the enabled retrieval branches, the clearance level -- and the model identities, so two results are comparable only when those match.
+  - F11: Every reported figure is labeled in the output as measured over a synthetic, clearly fictional corpus.
+
+touchpoints:
+  - id: T1
+    target: srd014-evaluation AC4
+    reason: The release is this acceptance criterion -- first-draft time from submission to an accepted draft, split into system and analyst-edit segments, compared against a half-day baseline recorded as a stated assumption, excluding export, reported as pass or fail against ninety minutes.
+  - id: T2
+    target: srd014-evaluation AC2
+    reason: Recall is measured against the labeled relevant set at the top-N Command composes from, reported with and without the rerank passes over the same taskings, qualified by N, branches, and clearance, and reported against the ninety percent threshold.
+  - id: T3
+    target: srd014-evaluation AC3
+    reason: Coverage is computed from the srd009 structured citation metadata over a declared deterministic segmentation, counts unresolvable citations against coverage, and reports any short brief individually.
+  - id: T4
+    target: srd014-evaluation AC1
+    reason: The corpus pairs taskings with independently labeled relevant sets, spans multi-source, multi-clearance, and below-cutoff conditions, is versioned, and is clearly fictional by construction.
+  - id: T5
+    target: srd014-evaluation AC5
+    reason: The harness drives the shipped turn without modifying it, contributes the release's only Go, emits per-tasking results, records the configuration for reproducibility, and reports failed taskings rather than dropping them.
+  - id: T6
+    target: srd014-evaluation AC6
+    reason: The output labels every figure as measured over a synthetic corpus, describes the result as method evidence rather than operational performance, and does not carry the clearance-isolation or template-conformance criteria, which are population checks elsewhere.
+  - id: T7
+    target: srd009-cohere-provider AC5
+    reason: Recall is measured at the reranked top-N the provider's rerank passes produce, which the evaluation observes and does not alter.
+  - id: T8
+    target: srd011-osint-search-cascade-rerank AC4
+    reason: The rerank passes the evaluation toggles span both retrieval branches, and the reported configuration names which branches a run had enabled.
+
+success_criteria:
+  - id: S1
+    criterion: First-draft time is measured from tasking submission to a draft a reviewer accepts, with the system segment and the analyst edit segment reported alongside the total, and export time excluded because export runs after approval and off the drafting path.
+    traces:
+      - srd014-evaluation AC4
+  - id: S2
+    criterion: The total is compared against the half-day baseline, that baseline is recorded in the output as a stated assumption about current practice rather than a figure this harness measured, and the result is reported as pass or fail against ninety minutes.
+    traces:
+      - srd014-evaluation AC4
+  - id: S3
+    criterion: Retrieval recall is the fraction of a tasking's labeled relevant documents appearing in the document set passed to Command, averaged over the corpus, and measured at that top-N rather than at any earlier candidate set. An earlier set contains documents the brief could not draw on.
+    traces:
+      - srd014-evaluation AC2
+  - id: S4
+    criterion: The same taskings are run under the rerank order and under the cosine order at the same N, both figures are reported beside the untrimmed retrieval boundary and the ceiling-normalised recall, so the ordering effect is a same-N difference rather than a cutoff artifact.
+    traces:
+      - srd014-evaluation AC2
+  - id: S5
+    criterion: Each reported recall figure names N, the retrieval branches enabled, and the clearance level the run executed at, and is reported as pass or fail against the ninety percent threshold rather than as a bare number.
+    traces:
+      - srd014-evaluation AC2
+  - id: S6
+    criterion: Citation coverage is computed from the structured citation metadata rather than by scraping the answer text, so the measurement uses the same evidence the interface does, over an assertion segmentation that is declared and deterministic and therefore cannot be moved by re-segmenting.
+    traces:
+      - srd014-evaluation AC3
+  - id: S7
+    criterion: A citation that does not resolve to a document in the composition set counts against coverage rather than being discarded from the denominator, and any brief short of complete coverage is reported individually rather than absorbed into an average.
+    traces:
+      - srd014-evaluation AC3
+  - id: S8
+    criterion: The corpus pairs each tasking with a relevant set labeled independently of any evaluation run and never derived, adjusted, or extended from what the system retrieved. A relevant set assembled after seeing the retrieval is not a labeled relevant set.
+    traces:
+      - srd014-evaluation AC1
+  - id: S9
+    criterion: The corpus spans the conditions the criteria depend on -- relevant documents across multiple sources, taskings at more than one clearance level, and relevant sets including documents embedding retrieval ranks below the cutoff -- is versioned so a number names the corpus it came from, and is clearly fictional by construction.
+    traces:
+      - srd014-evaluation AC1
+  - id: S10
+    criterion: The harness drives the shipped turn through its ordinary request boundary and reads its ordinary responses, modifying no agent, profile, machine, or prompt to obtain a measurement, and rel13.0 introduces no turn change.
+    traces:
+      - srd014-evaluation AC5
+  - id: S11
+    criterion: A run emits per-tasking results alongside the aggregates, records the corpus version, the run configuration, and the model identities, and reports a failed or errored tasking rather than dropping it from a denominator. Dropping failures inflates every metric computed over the remainder.
+    traces:
+      - srd014-evaluation AC5
+  - id: S12
+    criterion: Every reported figure is labeled in the evaluation output itself as measured over a synthetic, clearly fictional corpus, the result is described as evidence that the method measures what it claims rather than as an operational performance result, and a met threshold is stated as met over this corpus.
+    traces:
+      - srd014-evaluation AC6
+  - id: S13
+    criterion: The evaluation is not used to support the clearance-isolation or template-conformance criteria, which are proven by the access-control test and the conformance check as population checks rather than by a sampled measurement.
+    traces:
+      - srd014-evaluation AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: Recall is reported once, with Rerank enabled, since that is the shipped configuration and the number meets the threshold.
+    expected: Insufficient; R2.3 requires both. One number establishes that the system retrieves well, not that the rerank passes are why, and the architecture's claim is specifically about documents embedding retrieval left below the cutoff. The pair is the evidence; the single figure is consistent with Rerank contributing nothing.
+  - id: E2
+    scenario: The relevant sets are refined after an initial run, since the first pass revealed documents the labeler had missed.
+    expected: Rejected; R1.2 requires labeling independent of any run. A relevant set adjusted toward what the system retrieved measures the system's agreement with itself, and the adjustment is most tempting exactly where it does the most damage -- on the taskings the system handled poorly.
+  - id: E3
+    scenario: Recall is measured over the candidate set the fan-out returned, since that is what retrieval produced.
+    expected: Rejected; R2.2 measures at the top-N passed to Command. The brief can only draw on what composition received, so recall over a larger earlier set reports a number about the retriever rather than about the assistant, and it would score a document that was retrieved and then dropped as recalled.
+  - id: E4
+    scenario: A citation that does not resolve to a composition-set document is excluded from the denominator, since it is malformed rather than missing.
+    expected: Rejected; R3.3 counts it against coverage. Excluding unresolvable citations makes coverage rise as citation quality falls, which inverts the metric. An assertion whose citation points nowhere is an uncited assertion from the reviewer's position.
+  - id: E5
+    scenario: Coverage is computed by segmenting assertions with a language model, since sentence boundaries are a poor proxy for assertions.
+    expected: Rejected; R3.2 requires a declared deterministic segmentation. A model-chosen segmentation makes the denominator irreproducible and the number movable, and the objection is right about sentences without licensing a segmentation nobody can re-derive. The rule may be sophisticated; it must be deterministic.
+  - id: E6
+    scenario: Taskings that errored are dropped from the run so the aggregates reflect the taskings the system actually handled.
+    expected: Rejected; R5.5 reports them. Dropping failures inflates every metric computed over the remainder, and the failures are the population the thresholds are meant to constrain. A run where a tenth of taskings errored and the rest scored perfectly is not a passing run.
+  - id: E7
+    scenario: Retrieval parameters are tuned between runs until recall clears ninety percent, and the passing configuration is reported.
+    expected: Rejected; the SRD names this as the failure it exists to prevent. The harness measures the shipped configuration, and a threshold met by a configuration nobody ships is a number about an artifact. Tuning is legitimate engineering; reporting the tuned run as the measurement is not.
+  - id: E8
+    scenario: The evaluation's recall figure is cited as evidence that clearance isolation holds, since the runs executed at more than one clearance level.
+    expected: Rejected; R6.3 assigns clearance isolation to the access-control test. That criterion is zero unauthorized retrievals across the declared level pairs, which is a population property, and a sampled evaluation that happened not to observe a violation is not evidence that none can occur.
+  - id: E9
+    scenario: The report states the thresholds were met, with the synthetic-corpus caveat left to the accompanying prose.
+    expected: Rejected; R6.1 puts the label in the output itself. A caveat in prose is separated from the number the first time someone copies the number, and the VISION already commits to stating the distinction openly rather than in a footnote.
+
+out_of_scope:
+  - Authoring the corpus content and its labels, which depend on the synthetic intelligence corpus rel10.4 builds; the schema and the method are specified and the corpus is populated when those documents exist.
+  - Measuring clearance isolation or template conformance, which are proven by the access-control test and the conformance check as population checks.
+  - Benchmarking the Cohere models against other providers; the evaluation measures this system over this corpus.
+  - Tuning retrieval, rerank, or composition to improve a metric.
+  - Establishing the half-day baseline empirically; it is recorded as a stated assumption about current practice.
+  - Export time and the export path, which run after approval and off the drafting path.
+
+test_suite_trace: test-rel13.0-evaluation
+status: implemented

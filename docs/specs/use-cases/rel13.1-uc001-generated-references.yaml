@@ -1,0 +1,122 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel13.1-uc001-generated-references
+title: A Generated Corpus Labels Recall Backwards From Its References, and an /eval Command Reports It During the Demo
+
+summary: |
+  We build a second labeled corpus backwards from ground truth. A generator
+  samples reference chunks from the retrieval corpus, has Command compose a
+  short report grounded only in those references, and derives a tasking from
+  the report. The references are the tasking's relevant set, so the label
+  exists before the question does and independence from any evaluation run
+  holds by construction rather than by discipline.
+
+  The tasking derives from the report rather than the raw references. A
+  question written against one chunk of a six-chunk set is answerable without
+  the other five, and a recall denominator padded with references the question
+  never needed measures generosity, not retrieval. The report is what binds
+  the references together, so the question inherits that binding.
+
+  The generated corpus never mixes with the analyst-labeled one. The two are
+  different labeling methods with different failure modes -- an analyst misses
+  a relevant document, a generator writes a question its own references answer
+  too easily -- and averaging them produces a number neither method stands
+  behind. Each file carries its own version, and every reported figure names
+  the corpus that produced it.
+
+  The demo gains an /eval command. The evaluation exists to be shown, and a
+  harness someone runs from a terminal after the meeting is weaker evidence
+  than a recall table appearing in the same chat window the audience just
+  watched answer taskings. The command drives the same shipped turn the
+  harness drives and adds nothing to the deployed mesh, because the release
+  Secret budget has no room for a new machine and the measurement must not
+  alter the path it measures.
+
+actor: Engineer evaluating retrieval recall, or a demo presenter running the evaluation live
+trigger: The generator is run to build the corpus; later, the harness or the /eval command is run over it.
+
+flow:
+  - F1: The generator samples reference sets of three to six chunks from the committed chunk store, clustered within a document or date window so a coherent report is possible, recording each set's minimum clearance.
+  - F2: For each set it has Command compose a short report grounded only in the sampled excerpts.
+  - F3: It derives one natural-language tasking from the report, not from the raw chunks.
+  - F4: It rejects any tasking that leaks a chunk id, a metadata literal, or text naming its references directly, and regenerates or discards the set.
+  - F5: It writes the versioned generated corpus with the tasking, the reference ids, the set's clearance, and generator provenance, before any evaluation run over it exists, and writes each report to the private data checkout, because a report composed from keep-private excerpts is itself keep-private (srd017 R9.7).
+  - F6: The recall harness accepts a corpus selector and reports the generated corpus and the analyst-labeled corpus separately, each against the ninety percent threshold, denominators never combined.
+  - F7: The /eval chat command runs a demo-sized slice of the generated corpus through the shipped turn, computes per-tasking and aggregate retrieval recall, and reports them in the chat window with the corpus name, version, slice size, clearance, and the synthetic-corpus label.
+  - F8: Over the same taskings and configuration, the command's per-tasking results agree with the harness's.
+
+touchpoints:
+  - id: T1
+    target: srd014-evaluation AC7
+    reason: The release is this criterion -- references sampled first, the report grounded only in them, the tasking derived from the report, leakage rejected, provenance and clearance recorded, the file versioned and separate, generation complete before any scored run.
+  - id: T2
+    target: srd014-evaluation AC8
+    reason: The /eval command drives the shipped boundary, adds no profile bytes, labels its output in the message, and agrees with the harness over shared taskings.
+  - id: T3
+    target: srd014-evaluation AC2
+    reason: Recall over the generated corpus is the same metric measured the same way -- at the top-N passed to Command, qualified by N, branches, and clearance -- over a second ground truth.
+  - id: T4
+    target: srd014-evaluation AC6
+    reason: Generated taskings are synthetic twice over; the bounded-claims labeling applies to every figure the corpus or the command reports.
+
+success_criteria:
+  - id: S1
+    criterion: Every generated tasking's relevant set was fixed before the tasking existed, and no set is derived, adjusted, or extended from what the system retrieved.
+    traces:
+      - srd014-evaluation AC7
+  - id: S2
+    criterion: The tasking derives from the generated report, so answering it draws on the reference set as a whole rather than on any single reference.
+    traces:
+      - srd014-evaluation AC7
+  - id: S3
+    criterion: No generated tasking contains a chunk id, a metadata literal, or text naming its references directly; the generator rejects leaks rather than shipping them.
+    traces:
+      - srd014-evaluation AC7
+  - id: S4
+    criterion: The generated corpus is its own versioned file with generator model identity, prompt version, and retrieval-corpus version recorded, and each set records the minimum clearance its references require.
+    traces:
+      - srd014-evaluation AC7
+  - id: S5
+    criterion: Recall over the generated corpus is reported separately from the analyst-labeled corpus, each figure naming its corpus and version, and the two denominators are never combined.
+    traces:
+      - srd014-evaluation AC7
+      - srd014-evaluation AC2
+  - id: S6
+    criterion: The /eval command reports per-tasking and aggregate recall in the chat window, naming the corpus, version, slice size, and clearance, with the synthetic-corpus label in the reported message itself.
+    traces:
+      - srd014-evaluation AC8
+      - srd014-evaluation AC6
+  - id: S7
+    criterion: The /eval command introduces no agent, profile, machine, or prompt, and drives the shipped turn through the ordinary request boundary.
+    traces:
+      - srd014-evaluation AC8
+  - id: S8
+    criterion: Over the same taskings and configuration, the command and the harness report the same per-tasking recall.
+    traces:
+      - srd014-evaluation AC8
+
+failure_scenarios:
+  - id: E1
+    scenario: Taskings are derived directly from the sampled chunks, one question per chunk, and the chunks are pooled as the relevant set.
+    expected: Rejected; R7.2 derives the tasking from the report. A per-chunk question is answerable from that chunk alone, so the other references pad the denominator and recall measures the padding, not the retrieval.
+  - id: E2
+    scenario: A generated tasking quotes a chunk's headline verbatim, since that makes the tasking realistic.
+    expected: Rejected where the quote names the reference; R7.3 rejects leaked identifiers and naming text. A tasking that names its reference is answered by string match, and the recall it produces is evidence about grep.
+  - id: E3
+    scenario: The generated sets are appended to evaluation/corpus.yaml so one file carries all the labels.
+    expected: Rejected; R7.4 keeps the corpora separate. The methods fail differently, a combined average is a number neither stands behind, and the analyst-labeled corpus's audit trail no longer describes the file.
+  - id: E4
+    scenario: The /eval command reports a recall the harness does not reproduce, and the difference is presented as the in-demo variant of the metric.
+    expected: Rejected; R8.4 makes disagreement a defect. Two numbers for one measurement over one configuration means one of the implementations is wrong, and shipping both teaches the audience whichever is larger.
+  - id: E5
+    scenario: The /eval slice is re-sampled until the aggregate clears ninety percent, and that slice becomes the demo default.
+    expected: Rejected; this is the tuning failure srd014 exists to prevent, applied to the sample instead of the parameters. The default slice is declared, and a slice that fails is a result to show, not to reroll.
+
+out_of_scope:
+  - Replacing or revising the analyst-labeled corpus; the generated corpus is a second ground truth beside it.
+  - Regenerating the corpus per evaluation run; generation is a one-time, committed step and runs are free of generation cost.
+  - Measuring citation coverage or first-draft time through /eval; the command reports retrieval recall, and the harness owns the full metric set.
+  - Server-side /eval machinery; the release Secret budget forecloses new profile bytes, and the command runs client-side over shipped endpoints.
+
+test_suite_trace: test-rel13.1-generated-references
+status: implemented

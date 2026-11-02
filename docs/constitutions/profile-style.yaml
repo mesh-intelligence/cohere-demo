@@ -1,0 +1,117 @@
+# Profile Style Constitution
+#
+# This constitution governs authoring declarative agent profiles for
+# cohere-demo. The application is a mesh of YAML agent profiles the agent-core
+# runtime loads; there is no bespoke orchestration binary, so the profiles are
+# the deliverable and these rules are what a coding agent obeys when it changes
+# them. The rules are derived from the conventions visible in the vendored
+# chatbot-mesh agent tree (agents/chatbot, agents/rag-server, agents/creator,
+# agents/observer). Where a copied Go constitution and this one both apply, Go
+# rules govern magefiles/ and this constitution governs agents/.
+
+articles:
+  - id: P1
+    title: One agent, one directory, fixed file layout
+    rule: |
+      Each agent is a directory under agents/ holding a fixed set of files.
+      profile.yaml names the agent and lists its machine, tools,
+      tool_declarations, and rest_definitions. machine.yaml holds the state
+      machine. declarations.yaml declares the agent's tool words. rest.yaml
+      declares REST clients and servers with their limits. tools.yaml wires
+      tool config. Request-scoped behavior lives in request-*.yaml variants
+      (request-machine.yaml, request-declarations.yaml, and fan-out or topology
+      variants where the agent needs them), never mixed into the long-lived
+      machine. Prompts are separate .md files referenced by name. Do not invent
+      new file roles; add an agent by adding a directory with this layout.
+
+  - id: P2
+    title: Copyright and license header on every file
+    rule: |
+      Every YAML file in an agent directory opens with the two-line header
+      "# Copyright (c) 2026 Mesh Intelligence Inc." and
+      "# SPDX-License-Identifier: MIT-0". A file without a license header is
+      incomplete.
+
+  - id: P3
+    title: One terminal signal per distinct outcome
+    rule: |
+      A tool word declares every signal it can emit in its emits list, and each
+      distinct outcome gets its own signal. Success and failure are never the
+      same signal. A rejected query is not a command failure: QueryRejected (the
+      request was understood and refused) stays distinguishable from
+      CommandError (the tool could not execute). Reusing CommandError for a
+      domain rejection erases the distinction the state machine routes on. When
+      a new outcome appears, add a new signal rather than overloading an
+      existing one.
+
+  - id: P4
+    title: Every declaration is fully specified
+    rule: |
+      A tool declaration carries, at minimum, problem (the situation the word
+      addresses), goals (what a success achieves), requirements (input, output,
+      errors), non_goals (what it explicitly does not do), side_effects (kind,
+      target, resulting state), reversibility (the classification, such as
+      compensatable or irreversible), and undo (the strategy and description for
+      reversing a compensatable effect). A declaration missing any of these is
+      not reviewable and is not done. side_effects name the concrete resource
+      touched; reversibility and undo must agree, and an irreversible effect
+      states so rather than claiming a compensating action it does not have.
+
+  - id: P5
+    title: Environment parameterization, never inline secrets
+    rule: |
+      Deployment-varying values use ${VAR:-default} expansion so a local run
+      works from the default and a values-driven deploy overrides it — for
+      example hosts: [${CHROMA_HOST:-127.0.0.1}]. Secrets never appear in YAML
+      in any form. Credentials are deployment-realized: a bearer or API key is
+      referenced through the auth token_ref mechanism and resolved from a
+      mounted Secret at runtime, never supplied inline and never accepted from a
+      runtime request. An agent that needs a credential declares the reference
+      and leaves the resolution to the deploy.
+
+  - id: P6
+    title: REST clients declare an explicit egress allowlist
+    rule: |
+      Every REST client references a named limits entry through limits_ref, and
+      that entry declares a network allowlist: the permitted schemes, hosts, and
+      ports, plus timeouts and request and response byte ceilings. The allowlist
+      is the egress boundary — a host not listed cannot be reached. A server
+      that must bind beyond loopback opts in explicitly (allow_public_listener)
+      rather than widening the host list. No REST client runs without a
+      limits_ref, and no limits entry omits its network block.
+
+  - id: P7
+    title: A new model provider is additive
+    rule: |
+      A new model provider — the Cohere tier this repository exists to add — is
+      introduced as a new REST client and a new RAG unit, never by editing an
+      existing client, an existing RAG server, or the chatbot's routing to
+      repurpose it. The existing tiers keep working unchanged; the new tier is
+      selectable alongside them. This invariant is what makes the addition
+      reviewable as a self-contained change and keeps the running mesh a
+      regression baseline. A change that mutates an existing provider to become
+      the new one violates this article and is rejected regardless of whether it
+      passes tests.
+
+  - id: P8
+    title: Request scope stays separate from agent scope
+    rule: |
+      Long-lived agent state lives in machine.yaml and declarations.yaml;
+      per-request behavior lives in the request-*.yaml variants and is launched
+      by a request machine bound at turn start. A tool word that runs once per
+      turn belongs in a request declaration, not the agent machine. Fan-out and
+      topology concerns get their own request variant
+      (request-fanout-declarations.yaml, request-topology-declarations.yaml)
+      rather than swelling a single file. Keeping the two scopes apart is what
+      lets one agent serve many concurrent turns without shared mutable state.
+
+  - id: P9
+    title: Profiles are the deliverable, not generated from a binary
+    rule: |
+      This application ships no main package and no cmd/ binary; the agent
+      profiles run on the published agent-core image. Do not add a Go entry
+      point to "drive" the mesh, and do not treat the profiles as generated
+      output of some source. Go is present only in magefiles/, governed by the
+      go-style constitution. When a task asks for behavior, the answer is a
+      profile change, a prompt change, or a magefile change — never a new
+      standalone program.

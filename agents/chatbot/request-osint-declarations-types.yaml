@@ -1,0 +1,145 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of request-osint-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-request-osint-declarations-types
+types:
+  - name: CohereRerankFusedOutput
+    schema:
+      properties:
+        mapped:
+          type: object
+      type: object
+  - name: CohereRerankSearchOutput
+    schema:
+      properties:
+        mapped:
+          type: object
+      type: object
+  - name: DeclareHarvestQuestionOutput
+    description: The harvest tasking, published under the harvest machine's declare_question label.
+    schema:
+      properties:
+        question:
+          type: string
+      required:
+        - question
+      type: object
+  - name: SearchQueries
+    description: The web search queries, parsed from the model's proposal or declared from the tasking as the fallback, both under the search_queries label.
+    schema:
+      properties:
+        queries:
+          items:
+            type: string
+          type: array
+      required:
+        - queries
+      type: object
+  - name: DeriveSearchTermsViaToolOutput
+    schema:
+      properties:
+        mapped:
+          type: object
+      type: object
+  - name: MarshalHarvestRowsOutput
+    description: The harvested rows with their document embeddings, the scratch ingest body.
+    schema:
+      properties:
+        rows:
+          items:
+            properties:
+              id:
+                type: string
+              text:
+                type: string
+              embedding:
+                type: array
+              url:
+                type: string
+              title:
+                type: string
+            required: [id, text, embedding, url, title]
+            type: object
+          type: array
+      required:
+        - rows
+      type: object
+  - name: OsintSearchInput
+    schema:
+      properties:
+        q:
+          type: string
+      type: object
+  - name: OsintSearchOutput
+    schema:
+      properties:
+        mapped:
+          type: object
+      type: object
+  - name: ReorderFusedDocumentsOutput
+    schema:
+      properties:
+        items:
+          type: array
+      type: object
+  - name: ReorderOsintResultsOutput
+    schema:
+      properties:
+        items:
+          type: array
+      type: object
+  - name: ParseUnionDocumentsOutput
+    description: The object parse_union_documents parses, as its parse schema admits it.
+    schema:
+      type: object
+      properties:
+        documents:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              data:
+                type: object
+            required:
+            - id
+            - data
+      required:
+      - documents
+  - name: EmbedHarvestResultOutput
+    description: The Cohere library embed_document envelope for one harvested row; marshal_harvest_rows reads the first embedding row.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object
+          properties:
+            embedding:
+              type: array
+        carried:
+          type: object
+          properties:
+            input:
+              description: The embedded snippet.
+            id:
+              description: The row's link.
+  - name: RagIngestOutput
+    description: The rag.ingest response envelope, naming the ids the unit ingested.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object
+          properties:
+            ingested_ids:
+              type: array
+  - name: PurgeRagUnitOutput
+    description: The rag.purge_harvest response envelope; the operation maps no response field, so the status is the outcome.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object

@@ -1,0 +1,58 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: machine
+schema_version: 1
+name: chatbot-harvest-purge-request
+purpose: |-
+  GH-648: the ingest relay's inverse. Each declared unit drops its own
+  web-harvest rows; this machine carries no filter and no ids, and a failed
+  unit is collected, not fatal.
+initial_state: AwaitingRequest
+budget:
+  # Above the rag client's 2m10s read ceiling, as the harvest machine's is;
+  # the endpoint's own timeout caps the request well before this.
+  command_timeout: 3m
+  max_iterations: 16
+states:
+  - {name: AwaitingRequest, meaning: Seeded by the trusted purge endpoint.}
+  - {name: Purging, meaning: One sequential for_each is relaying the purge to each declared unit.}
+  - {name: ComposingResponse, meaning: The purge receipt is being wrapped for the HTTP reply.}
+  - {name: PurgeServed, meaning: Terminal. The receipt is ready for the HTTP response., run_status: succeeded}
+  - {name: Failed, meaning: Terminal. A boundary word failed before any relay was attempted., run_status: failed}
+terminal_states:
+  - PurgeServed
+  - Failed
+signals:
+  - {name: Seed, trigger: The purge endpoint starts a request-scoped run.}
+  - {name: RagTopologyDeclared, trigger: The trusted topology rendered.}
+  - {name: UnitPurged, trigger: A unit dropped its harvested rows.}
+  - {name: UnitPurgeFailed, trigger: "A unit answered 500; collected, not fatal."}
+  - {name: PurgeRelaysCollected, trigger: Every declared unit was asked.}
+  - {name: PurgeRelayResponseComposed, trigger: The receipt was composed.}
+  - {name: CommandError, trigger: A boundary word failed.}
+transitions:
+  - {state: AwaitingRequest, signal: Seed, next: Purging, action: declare_rag_topology}
+  - {state: AwaitingRequest, signal: CommandError, next: Failed}
+  - state: Purging
+    signal: RagTopologyDeclared
+    next: Purging
+    action: purge_rag_unit
+    label: purge_rag_unit
+    for_each:
+      items: $from(declare_rag_topology).body.items
+      as: rag_unit
+      mode: sequential
+      failure: collect_all
+      continue_on: [UnitPurged, UnitPurgeFailed, CommandError]
+      join:
+        next: ComposingResponse
+        label: purge_relays
+        signals:
+          all_success: PurgeRelaysCollected
+          partial: PurgeRelaysCollected
+          failed: PurgeRelaysCollected
+          empty: PurgeRelaysCollected
+  - {state: Purging, signal: CommandError, next: Failed}
+  - {state: ComposingResponse, signal: PurgeRelaysCollected, next: ComposingResponse, action: compose_purge_relay_response, label: purge_relay_response}
+  - {state: ComposingResponse, signal: PurgeRelayResponseComposed, next: PurgeServed}
+  - {state: ComposingResponse, signal: CommandError, next: Failed}

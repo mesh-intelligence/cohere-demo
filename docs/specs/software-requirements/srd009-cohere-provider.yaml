@@ -1,0 +1,209 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd009-cohere-provider
+title: Cohere Provider Client and Command Tier
+
+role_realization_decision:
+  current_actor: chatbot
+  implemented_responsibility: Reach the Cohere API for embedding, reranking, and grounded composition through one declared REST client, and offer Command as a selectable chat-LLM word whose returned citations become structured source metadata.
+  canonical_role_sub_role: Planner / Intent Handler; Executor / Workflow Orchestrator; Knowledge Manager / Recommendation Generator.
+  retained_or_proposed_name: No new actor. The Cohere provider is a REST client, a tier word, and machine states added to the existing `chatbot` actor (srd002).
+  authority_boundary: The provider adds declared words and one declared REST client; it grants no lifecycle, deployment, or endpoint-selection authority, and no model-authored value reaches the Cohere base URL, path, or credential.
+  evidence: [agents/chatbot/rest.yaml, agents/chatbot/request-machine.yaml, srd009 R1-R6]
+  migration_impact: None. The Ollama tier words and the rag-server agents are unmodified; the provider is additive configuration on the running mesh.
+
+context: |
+  The mesh answers a chat turn on the `chatbot` actor's request-scoped machine
+  (srd002 R1): select a tier, embed once, fan out to the rag-server agents
+  (srd001, vector-in), compose, and invoke the selected chat-LLM word. Every step
+  is a declared word over a declared REST client, so a model provider is data the
+  runtime loads rather than code the agents carry.
+
+  The Cohere provider enters that machine additively (ARCHITECTURE design
+  decision 5). One rest.yaml client reaches three Cohere operations -- embeddings
+  at POST /v2/embed, reranking at POST /v2/rerank, and grounded composition at
+  POST /v2/chat with a documents list. embed_query repoints from the Ollama
+  embedding to Cohere Embed. invoke_cohere_command joins the existing chat-LLM words in
+  the Answering vocabulary, so the tier selector reaches the Cohere path through
+  the same $tool indirection it already uses. A RerankingRag state reorders the
+  fan-out result before composition, and a SurfacingCitations state reads the
+  citations Command returns.
+
+  Two properties make the provider worth specifying separately from srd002.
+  Attribution stops being a heuristic: Command composes with the retrieved
+  passages as first-class documents and returns a citations array mapping an
+  assertion span to the source it came from, which the turn surfaces directly
+  instead of scraping bracketed tokens out of answer text (ARCHITECTURE design
+  decision 7). And sovereignty is a configuration point rather than a rewrite:
+  the base URL addresses the hosted trial endpoint for the demonstration and a
+  private in-boundary deployment in production, with the application logic
+  unchanged (ARCHITECTURE design decision 9).
+
+  The REST client runtime, the credential and allowlist enforcement, the
+  machine_request binding, and the command-state store stay in agent-core. The
+  Cohere REST declarations, the tier vocabulary entry, the citation and rerank
+  words, and the machine states stay profile-owned.
+
+problem: |
+  The mesh must run the Cohere model stack -- Embed for retrieval, Rerank for
+  precision, Command for composition -- without modifying the retrieval and
+  answering agents already serving traffic, and it must do so in a way a defense
+  ministry can audit. Three things need naming that srd002 does not cover.
+
+  First, the transport: which Cohere operations the mesh reaches, where the base
+  URL comes from, where the credential comes from, and what bounds egress, so a
+  security reviewer sees that neither a model nor a request can redirect a call
+  that carries ministry data. Second, the composition contract: Command receives
+  the retrieved passages as documents and returns citation spans, and those spans
+  must become structured source metadata rather than being reconstructed from
+  prose by a regular expression that mislabels a correctly cited turn as
+  unattributed. Third, the rerank pass over the RAG candidates, which is the
+  first of the cascade and the one that must stand alone before a second
+  retrieval branch exists.
+
+  Without these as requirements, the additive-provider claim is a diagram rather
+  than something the corpus can trace and a test can check.
+
+goals:
+  - G1: Declare one Cohere REST client covering embed, rerank, and chat, with a configurable base URL, a credential read from the environment, and egress allowlisted to the configured host.
+  - G2: Repoint query embedding to Cohere Embed while the Ollama embedding and chat tiers remain declared, selectable, and unchanged.
+  - G3: Add invoke_cohere_command to the Answering chat-LLM vocabulary as a grounded composition word that passes the retrieved top-N as a documents list.
+  - G4: Surface the citations Command returns as structured source metadata, retiring the bracket-scraping heuristic rather than layering on top of it.
+  - G5: Reorder the RAG fan-out candidates with Cohere Rerank as the first cascade pass, degrading to the pre-rerank order on failure.
+  - G6: Keep the provider additive -- no edits to srd001 or srd002 behavior, and a deployment with the provider disabled runs the mesh exactly as before.
+
+requirements:
+  R1:
+    title: Cohere REST client
+    items:
+      - R1.1: The chatbot profile SHALL reach POST /v2/chat through one declared rest.yaml Cohere client (agent-core srd028), and POST /v2/embed and POST /v2/rerank through the Cohere provider library (agent-core srd058 R1.3), each expanded once, all on the configured Cohere host.
+      - R1.2: The client base URL SHALL be a deployment-supplied configuration value, so the hosted trial endpoint and a private in-boundary deployment differ by configuration alone and the application logic is identical against either.
+      - R1.3: The client SHALL authenticate with a bearer credential read from the COHERE_API_KEY environment variable; the credential SHALL NOT appear in a profile, a machine, a prompt, a log line, or an exported span.
+      - R1.4: Client egress SHALL be allowlisted to the configured Cohere host (agent-core srd028 R14); a request to any other host SHALL be refused by the client rather than by the machine that invoked it.
+      - R1.5: The method, path, authentication, operation, and network allowlist of every Cohere operation SHALL remain fixed declared configuration. No model-authored or request-supplied endpoint, URL, host, credential, or model name SHALL reach a Cohere operation.
+      - R1.6: A Cohere operation SHALL surface a transport, authentication, or rate-limit failure as a distinguishable machine outcome, so a provider failure is separable from an empty or unhelpful result.
+  R2:
+    title: Embedding tier
+    items:
+      - R2.1: embed_query SHALL embed the tasking once through the Cohere embeddings operation, and the single resulting vector SHALL remain the fan-out input to every selected rag-server (srd002 R1.3, unchanged).
+      - R2.2: The embedding model identity SHALL be declared configuration, and the served collections SHALL be seeded by the same embedding family, so the embedding-model metadata the rag-server reports (srd001 R2.3) matches the query vector and the srd002 R3.3 mismatch exclusion does not fire on a correctly configured mesh.
+      - R2.3: The Ollama embedding path SHALL remain declared and selectable; repointing embed_query SHALL be a configuration choice rather than the removal of the Ollama declaration.
+  R3:
+    title: Grounded composition with Command
+    items:
+      - R3.1: invoke_cohere_command SHALL be declared as a chat-LLM word in the Answering vocabulary alongside the existing Ollama chat-LLM words, so the tier selector reaches it through the established $tool indirection (srd002 R2.1, R2.2) with no change to the selector contract.
+      - R3.2: invoke_cohere_command SHALL invoke the Cohere chat operation with the retrieved top-N passed as a documents list, each document carrying the identity a citation resolves to, so composition grounds on the passages as first-class input rather than on a concatenated prompt string.
+      - R3.3: The composed brief and the citations the operation returns SHALL both be captured into command state, so the answer text and its attribution reach later states by $from() addressing (agent-core srd038) rather than by re-parsing the answer.
+      - R3.4: An invoke_cohere_command failure SHALL fall back to a configured default chat-LLM word rather than fail the turn, preserving the srd002 R2.3 fallback behavior for the added word.
+  R4:
+    title: Structured citation surfacing
+    items:
+      - R4.1: A SurfacingCitations state SHALL read the returned citations array and emit structured source metadata in which each citation names the assertion span it covers and the source document it resolves to.
+      - R4.2: Citation surfacing SHALL resolve each cited source id back to the retrieved document it names, so a reader opens the cited source from the brief rather than reading an opaque identifier.
+      - R4.3: The single-page application SHALL render the citations it displays from that structured metadata, and the bracket-scraping extractSources heuristic SHALL be removed rather than retained as a fallback, so every displayed citation resolves to a source the reader can open instead of reproducing an unverified token the model wrote into its prose. Whether a turn is attributed at all is decided from the source outcomes under srd002 R3 and R4, and is not restated here.
+      - R4.4: A citation naming a document not present in the composed document set SHALL be dropped and reported in response metadata rather than surfaced as a source.
+      - R4.5: An answer returned with an empty or absent citations array SHALL be surfaced as uncited, distinguishably from a turn whose citations were dropped by R4.4.
+  R5:
+    title: RAG rerank
+    items:
+      - R5.1: A RerankingRag state SHALL run after the fan-out join and before composition, reordering the retrieved RAG candidates through the Cohere rerank operation against the original tasking.
+      - R5.2: cohere_rerank_rag SHALL reorder within the candidate set the fan-out returned; it SHALL NOT retrieve, and it SHALL NOT introduce a document the vector search did not surface.
+      - R5.3: The reranked top-N SHALL be the document set passed to invoke_cohere_command, with N declared configuration rather than a model-selected value.
+      - R5.4: A rerank failure or an empty rerank response SHALL degrade the branch to its pre-rerank order and record the degradation in response metadata; the turn SHALL NOT fail.
+      - R5.5: cohere_rerank_rag SHALL be the first cascade pass over one shared rerank operation; the search-branch and fusion passes are additional callers of the same operation and are specified separately.
+  R6:
+    title: Additive provider boundary
+    items:
+      - R6.1: The provider SHALL be added as declared REST operations, words, and machine states; it SHALL NOT modify the rag-server agent contract (srd001) or the srd002 turn shape, selection, fan-out, degradation, or session requirements.
+      - R6.2: The Ollama chat-LLM tier words SHALL remain declared and selectable after the provider is added, so the Ollama and Cohere composition paths are one tier selection apart.
+      - R6.3: A deployment with the Cohere provider disabled SHALL run the turn on the Ollama tier with the pre-provider behavior, so the provider is switchable configuration rather than a fork of the mesh.
+
+non_goals:
+  - Define Go package APIs for the agent-core REST client, credential, allowlist, or command-state runtime; those are platform contracts cited externally.
+  - The clearance metadata filter on retrieval and the clearance carried through the fan-out; that is srd010.
+  - The OSINT search branch, its allowlist, the search-branch rerank, and the fusion rerank; those are srd011, which reuses the R5 rerank operation.
+  - The ministry-template markdown structure the brief is composed as, and the structural conformance check over it; those are srd012.
+  - PDF rendering and the exporter agent; that is srd013.
+  - Measuring recall, citation coverage, and first-draft time; that evaluation is srd014.
+  - Training, fine-tuning, or hosting the Cohere models; the mesh composes with them through their API.
+  - Provisioning an in-boundary Cohere deployment; R1.2 specifies the configuration point, not the enclave build.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: One declared Cohere client covers embed, rerank, and chat with a deployment-supplied base URL, a COHERE_API_KEY bearer that never reaches a profile, prompt, log, or span, egress allowlisted to the configured host, fixed method/path/auth/operation, and a distinguishable provider-failure outcome.
+    traces: [R1.1, R1.2, R1.3, R1.4, R1.5, R1.6]
+  - id: AC2
+    criterion: The tasking is embedded once through Cohere Embed and fanned out unchanged, the declared embedding identity matches the seeded collections so the srd002 R3.3 mismatch exclusion does not fire, and the Ollama embedding path remains declared and selectable.
+    traces: [R2.1, R2.2, R2.3]
+  - id: AC3
+    criterion: invoke_cohere_command is selectable through the unchanged $tool tier contract, composes with the top-N as a documents list carrying resolvable identities, captures the brief and its citations into command state for $from() addressing, and falls back to the default chat-LLM word on failure.
+    traces: [R3.1, R3.2, R3.3, R3.4]
+  - id: AC4
+    criterion: Returned citations become structured source metadata resolving each assertion span to an openable source document, the SPA reads that metadata with the bracket-scraping heuristic removed rather than retained, and unresolvable citations and citation-free answers are reported distinguishably. This is the full-attribution success criterion made checkable, and the rel10.1 tracer.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5]
+  - id: AC5
+    criterion: A RerankingRag pass reorders the fan-out candidates without retrieving or adding documents, its declared top-N is what Command composes from, a failure degrades to the pre-rerank order with the degradation reported, and the pass is one caller of a shared rerank operation. This is the retrieval-recall success criterion on the RAG branch, and the rel10.2 tracer.
+    traces: [R5.1, R5.2, R5.3, R5.4, R5.5]
+  - id: AC6
+    criterion: The provider adds only declared operations, words, and states, leaves the srd001 and srd002 contracts unmodified, keeps the Ollama tier selectable, and reproduces pre-provider behavior when disabled. This is the governed-additive-change success criterion, and the rel10.0 tracer that runs a full tasking on Cohere while the Ollama tier stays available.
+    traces: [R6.1, R6.2, R6.3]
+
+depends_on:
+  - srd_id: srd002-chatbot-agent
+    symbols_used: [R1, R2, R3]
+  # The reranked top-N (R5.3) is drawn from the chunks the vector-in query contract
+  # returns; the embedding identity check (R2.2) reads the embedding-model metadata
+  # the query response carries. Neither changes the rag-server contract.
+  - srd_id: srd001-rag-server-agent
+    symbols_used: [R2]
+
+platform_dependencies:
+  # agent-core runtime contracts this provider builds on. External references,
+  # owned by agent-core, not part of this application's corpus.
+  - srd_id: srd028-rest-client-tools
+    provider: agent-core
+    symbols_used: [R14]
+  - srd_id: srd030-machine-request-rest-binding
+    provider: agent-core
+    symbols_used: [R1]
+  - srd_id: srd038-command-state-store
+    provider: agent-core
+    symbols_used: [R1]
+
+implementation_status:
+  planned:
+    - >-
+      rel10.0 (Cohere provider tier live): the cohere_embed and cohere_chat REST
+      references, embed_query repointed to Cohere Embed, and invoke_cohere_command added
+      to the Answering vocabulary with its machine states (R1, R2, R3, R6). The
+      tracer runs a full tasking-to-brief turn embedded by Cohere Embed and
+      composed by Cohere Command while the Ollama tier stays selectable.
+    - >-
+      rel10.1 (Structured citations): the parse_citations word and the
+      SurfacingCitations state, with the SPA reading structured source metadata
+      and the extractSources heuristic removed (R4). The tracer returns a brief
+      whose assertions each carry a citation a reader opens from the brief.
+    - >-
+      rel10.2 (RAG rerank): the cohere_rerank_rag word, the RerankingRag state, and the
+      cohere_rerank REST reference (R5). The tracer lifts a relevant document
+      that embedding retrieval left below the cutoff into the top-N passed to
+      Command.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: Run the Cohere stack additively, with auditable transport and citations that are a property of the answer"] --> Goals["Goals: Cohere Provider Client and Command Tier"]
+      Goals --> R1["R1: Cohere REST client"]
+      Goals --> R2["R2: Embedding tier"]
+      Goals --> R3["R3: Grounded composition with Command"]
+      Goals --> R4["R4: Structured citation surfacing"]
+      Goals --> R5["R5: RAG rerank"]
+      Goals --> R6["R6: Additive provider boundary"]
+      R1 --> AC1["AC1: one client, configurable base URL, env credential, allowlisted egress"]
+      R2 --> AC2["AC2: embed once via Cohere Embed, Ollama path retained"]
+      R3 --> AC3["AC3: invoke_cohere_command as a tier word composing over documents"]
+      R4 --> AC4["AC4: structured citations replace bracket scraping (rel10.1)"]
+      R5 --> AC5["AC5: RAG rerank as the first cascade pass (rel10.2)"]
+      R6 --> AC6["AC6: additive; Ollama selectable; disabled reproduces prior behavior (rel10.0)"]
+    ```

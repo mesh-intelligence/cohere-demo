@@ -1,0 +1,902 @@
+// Copyright (c) 2026 Mesh Intelligence Inc.
+// SPDX-License-Identifier: MIT-0
+
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"time"
+
+	"github.com/mesh-intelligence/declarative-agents/magefiles/kindrig"
+)
+
+const (
+	applierLiveRelease = "live"
+
+	applierReadyWait = 3 * time.Minute
+)
+
+// applierLiveRollbackHook is test-only chart instrumentation. A post-upgrade
+// hook runs after Helm has waited for the ordinary resources and before the
+// upgrade command returns. For the reserved fixture value it runs the real
+// kubectl from the pinned CLI donor image (the applier itself runs agent-core,
+// GH-2222) to regress the chatbot Deployment. That makes
+// the following declared kubectl rollout status fail deterministically, without
+// racing an out-of-band patch against Helm's own --wait.
+//
+// The strategic patch also drops the chatbot's progressDeadlineSeconds so the
+// unpullable image trips ProgressDeadlineExceeded in seconds rather than after
+// kubectl rollout status --timeout 120s expires. Without it the verify would
+// consume nearly the whole apply request budget (rest.yaml apply timeout 130s),
+// leaving no headroom for helm_upgrade and helm_rollback, so the request machine
+// was cancelled mid-verify and the endpoint answered 504 machine_timeout instead
+// of the RolledBack -> 500 the scenario proves (a race lost on a slow node). The
+// short deadline makes the RolledBack path fit the budget deterministically. The
+// underlying production concern -- a real stalled apply's 120s verify racing the
+// 130s budget -- is tracked separately from image consolidation.
+//
+// The extra Role is installed by the host-side initial install. The applier
+// therefore already holds these test-only permissions when an in-cluster upgrade
+// re-applies the chart; no production chart or production RBAC is widened.
+const applierLiveRollbackHook = `{{- if .Values.applier.enabled }}
+{{- $fullname := include "chatbot-mesh.fullname" . -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-applier-live-rollback-trigger
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-applier-live-rollback-trigger
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-applier-live-rollback-trigger
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-applier
+{{- if eq (int .Values.applier.params.nResults) 751 }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $fullname }}-applier-live-rollback-trigger
+  annotations:
+    helm.sh/hook: post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  serviceAccountName: {{ $fullname }}-applier
+  restartPolicy: Never
+  containers:
+    - name: regress-chatbot
+      {{- $donor := .Values.applier.cliDonor.image }}
+      image: "{{ $donor.repository }}:{{ $donor.tag }}{{ with $donor.digest }}@{{ . }}{{ end }}"
+      imagePullPolicy: {{ $donor.pullPolicy | default "IfNotPresent" }}
+      command: [kubectl]
+      args:
+        - patch
+        - deployment/{{ $fullname }}-chatbot
+        - --type=strategic
+        - -p
+        - '{"spec":{"progressDeadlineSeconds":5,"template":{"spec":{"containers":[{"name":"chatbot","image":"invalid.local/applier-live-rollback:missing"}]}}}}'
+{{- end }}
+{{- end }}
+`
+
+// ApplierLive proves the applier against a real cluster, which the fake-CLI
+// tracer cannot: integration:applier drives recording stand-ins that take their
+// exit codes from the scenario, so it is evidence about the machine and the
+// arguments it constructs, not about helm and kubectl behaving as the
+// declarations assume (srd006 R5.3, GH-735).
+//
+// It is a separate target from integration:applier on purpose. That one runs
+// anywhere in seconds; this one needs docker and kind, builds an image, and
+// stands up a cluster. Keeping them apart means a cluster failure reads as a
+// cluster failure rather than as a tracer failure.
+func (Integration) ApplierLive() error {
+	profilesRoot, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	coreRoot := demoCoreRoot(profilesRoot)
+	if reason := applierLiveSkipReason(coreRoot); reason != "" {
+		fmt.Printf("SKIP applierLive: %s\n", reason)
+		return nil
+	}
+	return runApplierLive(coreRoot, profilesRoot)
+}
+
+// applierLiveSkipReason reports why the live tier cannot run, or "" when every
+// dependency is present. A recorded skip keeps a checkout without docker or kind
+// runnable; it is never silent.
+func applierLiveSkipReason(coreRoot string) string {
+	for _, bin := range []string{"docker", "kind", "kubectl", "helm"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			return fmt.Sprintf("%s not found on PATH", bin)
+		}
+	}
+	if !agentCoreAvailable(coreRoot) {
+		return fmt.Sprintf("agent-core checkout not found at %s (set core_root in demo.yaml)", coreRoot)
+	}
+	return ""
+}
+
+func runApplierLive(coreRoot, profilesRoot string) (result error) {
+	images, err := resolveChatbotIntegrationImages(profilesRoot)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("applierLive: building runtime image %s from %s\n", images.Runtime, coreRoot)
+	if err := buildSmokeRuntimeImage(coreRoot, images.Runtime); err != nil {
+		return err
+	}
+	chartDir := applicationChartDir(profilesRoot)
+	staged, cleanupChart, err := stageApplierLiveChart(chartDir, profilesRoot)
+	if err != nil {
+		return err
+	}
+	defer cleanupChart()
+	assets, cleanupAssets, err := externalizeUIAssets(staged, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupAssets()
+	profiles, cleanupProfiles, err := externalizeProfiles(staged, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	defer cleanupProfiles()
+
+	// The chart reaches the applier pod as a mounted volume, not baked into an
+	// image (GH-1368): the staged chart is packaged to a tarball and
+	// carried by a ConfigMap provisioned out-of-release (GH-1407), referenced by the
+	// chart's applier.chartArchiveConfigMap value. One coherent instrumented chart is
+	// both installed host-side and mounted at /chart, so a values change re-renders
+	// the same chart.
+	chartArchive, cleanupArchive, err := packageApplierChart(staged)
+	if err != nil {
+		return err
+	}
+	defer cleanupArchive()
+	if err := assertApplierChartArchiveCarriesProfiles(chartArchive, profiles); err != nil {
+		return err
+	}
+
+	// The applier runs the agent-core runtime built above; its helm and kubectl
+	// come from the pinned CLI donor, loaded onto the node below and copied into
+	// the pod's read-only /opt/tools by the cli-donor init container (GH-2222).
+
+	// The applier tier stands up the full mesh (chatbot, rag, chroma, dolt,
+	// collector, observer), so the kind node needs every external dependency
+	// image. Preload them from the host the same way helmSmoke and demo do
+	// (GH-1368): the host docker pulls (and caches) them, then they are imported
+	// into the kind node, so the node never pulls from a registry itself. A node
+	// that pulls directly fails behind a TLS-intercepting proxy it does not trust.
+	// The applier's helm_upgrade runs --atomic --wait, so unlike helmSmoke it
+	// gates on EVERY release pod reaching Ready. The shared smoke set includes
+	// the observer proxy and utility init image as of GH-1321, so no release pod
+	// can stall in ImagePullBackOff on a node that cannot reach the registry.
+	dependencyImages, err := applierLiveDependencyImages(chartDir)
+	if err != nil {
+		return err
+	}
+	if err := runApplierLivePhase("dependency-pull", func() error {
+		return pullIntegrationDependencyImages(
+			"applierLive", dependencyImages, runHelmSmokeCommand)
+	}); err != nil {
+		return err
+	}
+
+	var cluster kindrig.Cluster
+	if err := runApplierLivePhase("cluster-ensure", func() error {
+		var ensureErr error
+		cluster, ensureErr = acquireIntegrationCluster(profilesRoot)
+		return ensureErr
+	}); err != nil {
+		return err
+	}
+	commands, cleanupCommands, err := kindrig.ClusterCommands(
+		kindrig.CaptureRun, cluster.Name)
+	if err != nil {
+		cluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	defer cleanupCommands()
+	var namespace string
+	var cleanupNamespace func() error
+	if err := runApplierLivePhase("namespace-prepare", func() error {
+		var prepareErr error
+		namespace, cleanupNamespace, prepareErr = prepareScenarioNamespace(
+			commands.Run, "applier-live", applierLiveRelease)
+		return prepareErr
+	}); err != nil {
+		cluster.Release(kindrig.DefaultRun)
+		return err
+	}
+	cleanupNamespaceFn := func() error {
+		return runApplierLivePhase("namespace-cleanup", cleanupNamespace)
+	}
+	defer func() { result = errors.Join(result, cleanupNamespaceFn()) }()
+	contextRun := applierLiveCommandRunner(commands.RunContext)
+	evidenceDir := helmScenarioEvidenceDirectory(
+		profilesRoot, cluster.Name, images.Revision)
+	evidence := kindrig.FailureEvidence{
+		Directory:  evidenceDir,
+		Namespaces: []string{namespace},
+		Run: boundedHelmEvidenceRunnerWith(
+			helmDiagnosticRunner(commands.RunContext), helmEvidenceCommandTimeout),
+	}
+	defer func() {
+		failed := result != nil
+		if failed {
+			diagnostics := captureApplierLiveDiagnostics(
+				evidenceDir, contextRun, applierLiveDiagnosticsTimeout)
+			result = fmt.Errorf("%w\n%s", result, diagnostics)
+		}
+		if releaseAggregateKindCluster(
+			cluster, commands.KindRun, evidence, result,
+		) {
+			if failed && scenarioClusterGone(cluster.Name) {
+				cleanupNamespaceFn = func() error { return nil }
+			}
+			return
+		}
+		result = errors.Join(result, releaseDirectScenarioCluster(
+			cluster, commands.KindRun, failed, evidence, &cleanupNamespaceFn))
+	}()
+
+	if err := runApplierLivePhase("image-loads", func() error {
+		if loadErr := kindrig.EnsureCLIDonorImage(commands.Run, cluster.Name); loadErr != nil {
+			return loadErr
+		}
+		if loadErr := loadKindImageWithCommands(
+			commands, cluster.Name, images.Runtime); loadErr != nil {
+			return loadErr
+		}
+		for _, image := range dependencyImages {
+			if loadErr := loadSmokeDependencyImageWithCommands(
+				commands, cluster.Name, image); loadErr != nil {
+				return loadErr
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if err := runApplierLivePhase("helm-install", func() error {
+		return helmInstallApplierLive(
+			commands.Run, staged, chartArchive, images.Runtime, images.Runtime, assets, profiles)
+	}); err != nil {
+		return err
+	}
+	// Check the object the API server actually accepted before readiness can
+	// obscure a release-storage regression behind a Deployment timeout.
+	if err := assertHelmReleaseSecretsWithRunner(
+		commands.Run, applierLiveRelease, chartArchive, assets); err != nil {
+		return err
+	}
+	if err := runApplierLivePhase("initial-readiness", func() error {
+		return waitApplierLiveInitialReadiness(
+			contextRun, func() error {
+				return waitApplierDeploymentReady(commands.Run)
+			})
+	}); err != nil {
+		return err
+	}
+	var helmVersion string
+	if err := runApplierLivePhase("cli-donor", func() error {
+		var verifyErr error
+		helmVersion, verifyErr = kindrig.VerifyCLIDonor(applierDeclaredHelmMajor,
+			func(args ...string) (string, error) {
+				exec := append([]string{"exec",
+					"deployment/" + applierLiveRelease + "-chatbot-mesh-applier", "-c", "applier", "--"}, args...)
+				output, runErr := commands.Run("kubectl", exec...)
+				return strings.TrimSpace(string(output)), runErr
+			})
+		return verifyErr
+	}); err != nil {
+		return err
+	}
+	if err := assertExternalUIAssetsMountedWithRunner(
+		commands.Run, applierLiveRelease, assets, applierReadyWait); err != nil {
+		return err
+	}
+	if err := assertHelmReleaseSecretsWithRunner(
+		commands.Run, applierLiveRelease, chartArchive, assets); err != nil {
+		return err
+	}
+	if err := runApplierLivePhase("apply-proof", func() error {
+		return assertApplierServesItsSurface(commands, profilesRoot)
+	}); err != nil {
+		return err
+	}
+	if err := assertHelmReleaseSecretsWithRunner(
+		commands.Run, applierLiveRelease, chartArchive, assets); err != nil {
+		return err
+	}
+	fmt.Printf("integration:applierLive PASS - revision %s the applier runs the agent-core runtime under test with "+
+		"helm %s from the pinned CLI donor on a read-only /opt/tools, reads a real Deployment's rollout, applies a "+
+		"values patch that moves the release to a new revision, compensates a post-upgrade verification failure "+
+		"with a real Helm rollback, and rejects a non-conforming patch against the real chart schema without "+
+		"touching it\n", images.Revision, helmVersion)
+	return nil
+}
+
+func runApplierLivePhase(name string, run func() error) error {
+	started := time.Now()
+	err := run()
+	outcome := "passed"
+	if err != nil {
+		outcome = "failed"
+	}
+	kindrig.LogPhase("applierLive", name, outcome, started, "")
+	return err
+}
+
+// applierLiveDependencyImages is the full external image set for the applier
+// tier. Its kind values disable Ollama, so this is the same collector, Chroma,
+// Dolt, observer-proxy, and utility set used by the smoke topology.
+func applierLiveDependencyImages(chartDir string) ([]string, error) {
+	return smokeDependencyImages(chartDir)
+}
+
+// stageApplierLiveChart gives only this live tier a deterministic post-upgrade
+// regression hook. Both the host-side install and /chart in the applier image
+// use this same staged directory, so Helm records and rolls back one coherent
+// instrumented chart.
+func stageApplierLiveChart(chartDir, profilesRoot string) (string, func(), error) {
+	staged, cleanup, err := stageSmokeChart(chartDir, profilesRoot)
+	if err != nil {
+		return "", nil, err
+	}
+	hook := filepath.Join(staged, "templates", "applier-live-rollback-trigger.yaml")
+	if err := os.WriteFile(hook, []byte(applierLiveRollbackHook), 0o644); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("stage applier live rollback trigger: %w", err)
+	}
+	return staged, cleanup, nil
+}
+
+// applierLiveChartConfigMap names the ConfigMap that carries the packaged chart
+// to the applier pod. It is provisioned out-of-release (see helmInstallApplierLive)
+// and referenced by the chart's applier.chartArchiveConfigMap value.
+const applierLiveChartConfigMap = applierLiveRelease + "-applier-chart"
+
+// helmInstallApplierLive installs the mesh with the applier enabled. The two
+// values files layer: the kind footprint every cluster test shares, then the
+// applier the others deliberately disable. The chart the applier mounts at /chart
+// is delivered as data (GH-1368): the packaged tarball is carried by a ConfigMap
+// this tooling provisions OUT of the Helm release (kubectl apply) and the chart
+// references by name via applier.chartArchiveConfigMap. Keeping it out of the
+// release is what holds the release Secret under the 1 MiB apiserver limit -- the
+// chatbot-mesh chart embeds the collector UI, so carrying the archive in-release
+// (values plus a rendered binaryData ConfigMap) stored it twice and overflowed
+// (GH-1407). This mirrors the GH-1402 curator-UI shard provisioning.
+func helmInstallApplierLive(
+	run helmLLMCommandRunner,
+	chartPath, chartArchive, runtimeImage, applierImage string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+) error {
+	valueArgs := applierLiveValueArgs(chartPath, runtimeImage, applierImage, assets, profiles)
+	measured, err := measureHelmReleaseBudget(
+		applierLiveRelease, chartPath, chartArchive, valueArgs)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("applierLive: release budget PASS - %s\n", measured.String())
+	if err := provisionApplierChartConfigMap(
+		run, applierLiveChartConfigMap, chartArchive); err != nil {
+		return err
+	}
+	for _, asset := range assets {
+		if err := provisionExternalUIAssetWithRunner(run, asset); err != nil {
+			return err
+		}
+	}
+	if err := provisionExternalProfiles(run, profiles); err != nil {
+		return err
+	}
+	args := append([]string{"install", applierLiveRelease, chartPath},
+		valueArgs...)
+	args = append(args, "--timeout", helmInstallTimeout.String())
+	if out, err := run("helm", args...); err != nil {
+		return fmt.Errorf("helm install %s: %w: %s",
+			applierLiveRelease, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// applierLiveValueArgs is the exact values vector shared by the pre-install
+// release projection and Helm install. General external-asset arguments are
+// appended to the applier tier's own chart, image, and LLM settings.
+func applierLiveValueArgs(
+	chartPath, runtimeImage, applierImage string,
+	assets []externalUIAsset,
+	profiles profilesExternalizationResult,
+) []string {
+	repo, tag := splitImageRef(runtimeImage)
+	applierRepo, applierTag := splitImageRef(applierImage)
+	args := []string{
+		"--values", filepath.Join(chartPath, "ci", "kind-values.yaml"),
+		"--values", filepath.Join(chartPath, "ci", "kind-applier-values.yaml"),
+		"--set", "applier.chartArchiveConfigMap=" + applierLiveChartConfigMap,
+		"--set", "image.repository=" + repo,
+		"--set-string", "image.tag=" + tag,
+		"--set", "image.pullPolicy=Never",
+		"--set", "applier.image.repository=" + applierRepo,
+		"--set-string", "applier.image.tag=" + applierTag,
+		"--set", "llm.externalURL=http://host.docker.internal:11434",
+	}
+	args = append(args, externalUIAssetValueArgs(assets)...)
+	return append(args, externalProfileValueArgs(profiles)...)
+}
+
+// provisionApplierChartConfigMap creates the out-of-release ConfigMap carrying the
+// packaged chart. kubectl stores the tarball under binaryData because it is not
+// valid UTF-8, and the chart's stage-chart init container unpacks it at /chart.
+//
+// `kubectl create` is used rather than `kubectl apply`: apply records the object
+// in a last-applied-configuration annotation, and the base64 chart tarball
+// (~0.5 MiB) blows past the 256 KiB annotation limit. A pre-delete keeps it
+// idempotent when the kind cluster is reused.
+// The name is a parameter because each live scenario provisions its own: the
+// ConfigMap has to be the one that scenario's release names in
+// applier.chartArchiveConfigMap, and a shared literal made a second scenario look
+// wired when it was reading another release's ConfigMap or none at all.
+func provisionApplierChartConfigMap(
+	run helmLLMCommandRunner,
+	configMap string,
+	chartArchive string,
+) error {
+	if out, err := run(
+		"kubectl", "delete", "configmap", configMap, "--ignore-not-found"); err != nil {
+		return fmt.Errorf("clear stale applier chart ConfigMap %s: %w: %s",
+			configMap, err, strings.TrimSpace(string(out)))
+	}
+	if out, err := run("kubectl", "create", "configmap", configMap,
+		"--from-file=chart.tgz="+chartArchive); err != nil {
+		return fmt.Errorf("create applier chart ConfigMap %s: %w: %s",
+			configMap, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// waitApplierDeploymentReady waits for the applier alone. The install does not
+// use --wait: the chatbot needs an LLM this tier does not require, so blocking on
+// the whole mesh would make the applier's own readiness depend on something
+// unrelated to it.
+func waitApplierDeploymentReady(run helmLLMCommandRunner) error {
+	deployment := "deployment/" + applierLiveRelease + "-chatbot-mesh-applier"
+	if out, err := run("kubectl", "rollout", "status", deployment,
+		"--timeout", applierReadyWait.String()); err != nil {
+		return fmt.Errorf("the applier Deployment never became ready: %w: %s",
+			err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// packageApplierChart packages the staged chart directory into a gzipped tarball
+// and returns its path. This is the chart the applier's `helm upgrade
+// chatbot-mesh /chart` word installs, delivered to the pod as data through the
+// out-of-release chart ConfigMap rather than baked into the image (GH-1368). It is
+// the same instrumented chart the host installs, so an in-cluster upgrade
+// re-renders one coherent chart.
+func packageApplierChart(chartDir string) (string, func(), error) {
+	dest, err := os.MkdirTemp("", "chatbot-mesh-applier-chart-tgz-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dest) }
+	output, err := exec.Command("helm", "package", chartDir, "--destination", dest).CombinedOutput()
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("helm package applier chart: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	archive := filepath.Join(dest, "chatbot-mesh-0.1.0.tgz")
+	if _, err := os.Stat(archive); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("packaged applier chart %s: %w", archive, err)
+	}
+	return archive, cleanup, nil
+}
+
+// assertApplierChartArchiveCarriesProfiles renders the packaged chart the applier
+// will mount at /chart, using the host helm and the release's own external-profile
+// values, and requires every agent profile an enabled Deployment mounts to still
+// reach a pod afterwards.
+//
+// This is what an apply actually does. The applier runs
+// `helm upgrade chatbot-mesh /chart --reuse-values`, which re-renders the
+// co-generated topology (srd006 R2.2), so the ConfigMaps that render produces
+// replace the live ones. If the mounted chart carried no profiles the render
+// would be nearly empty, the replacement would strip every agent profile, and no
+// agent would survive its next restart -- with the apply reporting success,
+// because helm did exactly what it was asked (GH-748). The chart is delivered as
+// data now (GH-1368), so this asserts the archive rather than the image.
+//
+// A key reaches a pod from either half of the projection (GH-785): the render's
+// own ConfigMap, or the provisioned one the reused values name, which an apply
+// does not touch. Asserting only the render would fail every externalized
+// install; asserting only the union would miss the empty-chart defect, so the
+// reused values are passed and the union is what has to be complete.
+func assertApplierChartArchiveCarriesProfiles(
+	archive string,
+	profiles profilesExternalizationResult,
+) error {
+	args := append([]string{"template", "chatbot-mesh", archive, "--set", "applier.enabled=true"},
+		externalProfileValueArgs(profiles)...)
+	out, err := exec.Command("helm", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("render packaged applier chart: %w\n%s", err, out)
+	}
+	render := string(out)
+	external := map[string]bool{}
+	for _, group := range profiles.Groups {
+		for _, key := range group.Keys {
+			external[key] = true
+		}
+	}
+	reaches := func(key string) bool {
+		return external[key] || strings.Contains(render, key)
+	}
+	for _, agent := range []string{"chatbot", "rag-server", "provisioning-workflow-orchestrator", "creator", "applier"} {
+		key := "agents__" + agent + "__profile.yaml"
+		if agent == "applier" {
+			key = "applications__chatbot-mesh__applier__profile.yaml"
+		}
+		if !reaches(key) {
+			return fmt.Errorf("the chart the applier mounts at /chart delivers no %s; an apply would replace the "+
+				"live profiles ConfigMap with one missing it, and that agent would not come back from a restart", key)
+		}
+	}
+	if !reaches("applications__catalog__applier__machine.yaml") {
+		return fmt.Errorf("the chart the applier mounts at /chart omits the canonical applier machine")
+	}
+	fmt.Println("applierLive: the chart the applier mounts at /chart delivers every agent profile")
+	return nil
+}
+
+// applierDeclaredHelmMajor is the helm major exec-declarations.yaml is written
+// for. TestApplierHelmFlagsMatchTheShippedHelm holds it to the CLI donor pin
+// (kindrig.CLIDonorHelmVersion); kindrig.VerifyCLIDonor checks the running pod.
+const applierDeclaredHelmMajor = "3"
+
+// assertApplierServesItsSurface proves the applier is an agent that started,
+// not just a container that is running, and that its rollout read reaches a real
+// Deployment.
+//
+// Readiness alone is the weaker claim: the probe hits the control server, which
+// the runtime serves once the profile loads, so it already means more than a
+// live process. What it cannot show is that the request machine dispatches --
+// the rollout read runs two kubectl words against the cluster's own API, using
+// the ServiceAccount the chart binds, so a working read is evidence about RBAC,
+// the kubeconfig the pod gets, and the counts word's go-template all at once.
+func assertApplierServesItsSurface(
+	commands kindrig.Commands,
+	profilesRoot string,
+) error {
+	localPorts, err := reserveLoopbackPorts(2)
+	if err != nil {
+		return err
+	}
+	applyURL := loopbackURL(localPorts[0], "/provisioning/api/apply")
+	rolloutURL := loopbackURL(localPorts[0], "/provisioning/api/rollout")
+	controlURL := loopbackURL(localPorts[1], "/api/lifecycle/health")
+	stop, err := kubectlPortForwardPairs(
+		commands, "svc/"+applierLiveRelease+"-chatbot-mesh-applier",
+		portForwardPair{local: localPorts[0], remote: 18090},
+		portForwardPair{local: localPorts[1], remote: 18091})
+	if err != nil {
+		return err
+	}
+	defer stop()
+
+	if err := waitHTTPStatus(controlURL, http.StatusOK, applierReadyWait); err != nil {
+		return fmt.Errorf("the applier control health never answered: %w", err)
+	}
+	fmt.Println("applierLive: the applier answers its control health")
+
+	body, status, err := requestInference(
+		http.MethodGet, rolloutURL, "", "applier live rollout read")
+	if err != nil {
+		return fmt.Errorf("rollout read failed: %w", err)
+	}
+	if err := assertLiveRolloutBody(body, status); err != nil {
+		return err
+	}
+
+	// The apply path, which is what the fake-CLI tracer cannot reach: a real
+	// helm upgrade against a real release (GH-747).
+	contextRun := applierLiveCommandRunner(commands.RunContext)
+	if err := runApplierLiveApplyStep(contextRun, "upgrade",
+		func() error {
+			return assertLiveApplyChangesTheRelease(
+				commands.Run, profilesRoot, applyURL)
+		}); err != nil {
+		return err
+	}
+	if err := runApplierLiveApplyStep(contextRun, "rollback",
+		func() error {
+			return assertLiveRollbackRestoresTheRelease(
+				commands.Run, profilesRoot, applyURL)
+		}); err != nil {
+		return err
+	}
+	if err := runApplierLiveApplyStep(contextRun, "schema rejection",
+		func() error {
+			return assertLiveSchemaRejection(
+				commands.Run, profilesRoot, applyURL)
+		}); err != nil {
+		return err
+	}
+
+	// After a real apply, the rollout read must still answer off the cluster.
+	body, status, err = requestInference(
+		http.MethodGet, rolloutURL, "", "applier live rollout recheck")
+	if err != nil {
+		return fmt.Errorf("rollout read after apply failed: %w", err)
+	}
+	return assertLiveRolloutBody(body, status)
+}
+
+// assertLiveRolloutBody checks a rollout read against a real Deployment. The
+// phase is deliberately not pinned: whether the chatbot has rolled out depends on
+// an LLM this tier does not stand up, and both complete and progressing are
+// honest answers about a real cluster. What must hold is that the counts are the
+// Deployment's own -- a 502 would mean the applier could not reach it at all,
+// and a zero desired would mean it read something that is not there (srd006
+// R3.3, GH-686).
+func assertLiveRolloutBody(body []byte, status int) error {
+	if status != http.StatusOK {
+		return fmt.Errorf("rollout read status = %d, want 200; the applier could not read the Deployment: %s",
+			status, body)
+	}
+	var rollout struct {
+		Phase    string `json:"phase"`
+		Ready    int    `json:"ready"`
+		Desired  int    `json:"desired"`
+		Revision int    `json:"revision"`
+	}
+	if err := json.Unmarshal(body, &rollout); err != nil {
+		return fmt.Errorf("decode rollout response: %w: %s", err, body)
+	}
+	if rollout.Phase != "complete" && rollout.Phase != "progressing" {
+		return fmt.Errorf("rollout phase = %q, want complete or progressing: %s", rollout.Phase, body)
+	}
+	if rollout.Desired < 1 {
+		return fmt.Errorf("rollout desired = %d; the counts did not come from a real Deployment: %s",
+			rollout.Desired, body)
+	}
+	if rollout.Revision < 1 {
+		return fmt.Errorf("rollout revision = %d; a deployed release has at least revision 1: %s",
+			rollout.Revision, body)
+	}
+	fmt.Printf("applierLive: rollout read reports phase %s, %d/%d ready, revision %d from the live Deployment\n",
+		rollout.Phase, rollout.Ready, rollout.Desired, rollout.Revision)
+	return nil
+}
+
+// assertLiveApplyChangesTheRelease drives a real values patch through the apply
+// endpoint and proves the release actually changed.
+//
+// A 200 is not evidence here: the fake-CLI tracer already returns one, and that
+// is exactly what it cannot distinguish. What makes this different is the helm
+// revision -- the applier's helm_upgrade ran in-cluster against the release,
+// re-rendering the co-generated topology (srd006 R2.2), so a revision that did
+// not move means nothing was applied whatever the response said.
+func assertLiveApplyChangesTheRelease(
+	run helmLLMCommandRunner,
+	profilesRoot string,
+	applyURL string,
+) error {
+	before, err := helmReleaseRevision(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("applierLive: release at revision %d before the apply\n", before)
+
+	patch, err := applierValuesPatch(profilesRoot, "conforming.yaml")
+	if err != nil {
+		return err
+	}
+	body, status, err := requestInference(
+		http.MethodPost, applyURL, patch, "applier live apply")
+	if err != nil {
+		return fmt.Errorf("apply request failed: %w", err)
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("apply status = %d, want 200: %s", status, body)
+	}
+	if !strings.Contains(string(body), `"status":"applied"`) {
+		return fmt.Errorf("apply did not report applied: %s", body)
+	}
+
+	after, err := helmReleaseRevision(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	if after <= before {
+		return fmt.Errorf("the release is still at revision %d after an apply reported success; "+
+			"helm_upgrade did not reach the release, so the 200 proved nothing", after)
+	}
+	fmt.Printf("applierLive: the apply moved the release from revision %d to %d\n", before, after)
+	return nil
+}
+
+// assertLiveRollbackRestoresTheRelease proves the compensating action with real
+// Helm and kubectl (srd006 R3.2, GH-751). The staged post-upgrade hook regresses
+// the chatbot only after helm upgrade --wait has succeeded. The applier must
+// therefore reach Verifying, observe kubectl's real timeout, run helm rollback,
+// and map RolledBack to the distinct 500 response.
+//
+// Helm rollback creates a new release revision; it does not move the revision
+// number backwards. Restoration is proved by comparing the computed release
+// values and by waiting for the chatbot Deployment to become ready again.
+func assertLiveRollbackRestoresTheRelease(
+	run helmLLMCommandRunner,
+	profilesRoot string,
+	applyURL string,
+) error {
+	beforeRevision, err := helmReleaseRevision(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	beforeValues, err := helmReleaseValues(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	patch, err := applierValuesPatch(profilesRoot, "rollback-trigger.yaml")
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: applierReadyWait}
+	body, status, err := requestHTTPWithClient(
+		client, http.MethodPost, applyURL, patch)
+	if err != nil {
+		return fmt.Errorf("rollback-triggering apply request failed: %w", err)
+	}
+	if status != http.StatusInternalServerError {
+		return fmt.Errorf("rollback-triggering apply status = %d, want 500: %s", status, body)
+	}
+	for _, want := range []string{`"error":"rolled_back"`, `"status":"rolled_back"`} {
+		if !strings.Contains(string(body), want) {
+			return fmt.Errorf("rollback response does not contain %s: %s", want, body)
+		}
+	}
+
+	afterRevision, err := helmReleaseRevision(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	if afterRevision < beforeRevision+2 {
+		return fmt.Errorf("release revision moved from %d to %d, want an upgrade and a rollback revision",
+			beforeRevision, afterRevision)
+	}
+	afterValues, err := helmReleaseValues(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(afterValues, beforeValues) {
+		beforeJSON, _ := json.Marshal(beforeValues)
+		afterJSON, _ := json.Marshal(afterValues)
+		return fmt.Errorf("helm rollback did not restore the prior computed values:\nbefore: %s\nafter:  %s",
+			beforeJSON, afterJSON)
+	}
+
+	deployment := "deployment/" + applierLiveRelease + "-chatbot-mesh-chatbot"
+	if out, err := run(
+		"kubectl", "rollout", "status", deployment, "--timeout", applierReadyWait.String()); err != nil {
+		return fmt.Errorf("chatbot Deployment did not recover after rollback: %w\n%s", err, out)
+	}
+	fmt.Printf("applierLive: real helm rollback restored revision %d values in new revision %d and recovered the chatbot\n",
+		beforeRevision, afterRevision)
+	return nil
+}
+
+// assertLiveSchemaRejection closes the loop GH-732 opened with a local dry-run:
+// the same non-conforming document, now against a real release on a cluster.
+// The release must not move -- a rejected patch applies nothing (srd006 R2.1).
+func assertLiveSchemaRejection(
+	run helmLLMCommandRunner,
+	profilesRoot string,
+	applyURL string,
+) error {
+	before, err := helmReleaseRevision(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	patch, err := applierValuesPatch(profilesRoot, "non-conforming.yaml")
+	if err != nil {
+		return err
+	}
+	body, status, err := requestInference(
+		http.MethodPost, applyURL, patch, "applier live reject")
+	if err != nil {
+		return fmt.Errorf("apply request failed: %w", err)
+	}
+	if status != http.StatusBadRequest {
+		return fmt.Errorf("a non-conforming patch returned %d, want 400: %s", status, body)
+	}
+	if !strings.Contains(string(body), "validate_rejected") {
+		return fmt.Errorf("the rejection did not report validate_rejected: %s", body)
+	}
+	after, err := helmReleaseRevision(run, applierLiveRelease)
+	if err != nil {
+		return err
+	}
+	if after != before {
+		return fmt.Errorf("the release moved from revision %d to %d on a rejected patch; "+
+			"a schema rejection must apply nothing", before, after)
+	}
+	fmt.Printf("applierLive: the non-conforming patch was rejected and left the release at revision %d\n", after)
+	return nil
+}
+
+// applierValuesPatch reads a shared fixture and wraps it as the apply request
+// the creator would send (srd006 R1.4). The fixtures are GH-732's, so the local
+// dry-run tier and this one validate the same documents.
+func applierValuesPatch(profilesRoot, fixture string) (string, error) {
+	path := filepath.Join(profilesRoot, "testdata", "integration", "applier-values", fixture)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read values fixture %s: %w", fixture, err)
+	}
+	request := map[string]string{"schema_version": "1", "content": string(content)}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+// helmReleaseRevision reads the release's current revision, which is what a real
+// upgrade moves and a rejected patch leaves alone.
+func helmReleaseRevision(run helmLLMCommandRunner, release string) (int, error) {
+	out, err := run("helm", "get", "metadata", release, "-o", "json")
+	if err != nil {
+		return 0, fmt.Errorf("helm get metadata %s: %w\n%s", release, err, out)
+	}
+	var metadata struct {
+		Revision int `json:"revision"`
+	}
+	if err := json.Unmarshal(out, &metadata); err != nil {
+		return 0, fmt.Errorf("decode helm metadata: %w: %s", err, out)
+	}
+	return metadata.Revision, nil
+}
+
+// helmReleaseValues reads the fully computed values so a rollback is compared
+// by released state, not by its ever-increasing numeric revision.
+func helmReleaseValues(
+	run helmLLMCommandRunner,
+	release string,
+) (map[string]any, error) {
+	out, err := run("helm", "get", "values", release, "--all", "-o", "json")
+	if err != nil {
+		return nil, fmt.Errorf("helm get values %s: %w\n%s", release, err, out)
+	}
+	var values map[string]any
+	if err := json.Unmarshal(out, &values); err != nil {
+		return nil, fmt.Errorf("decode helm values: %w: %s", err, out)
+	}
+	return values, nil
+}

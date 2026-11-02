@@ -1,0 +1,53 @@
+direction: right
+
+vars: {
+  d2-config: {
+    theme-id: 0
+    pad: 6
+  }
+}
+
+classes: {
+  step: {
+    style: {
+      border-radius: 8
+      fill: "#f6f8fb"
+      stroke: "#7a8699"
+      font-size: 19
+    }
+  }
+  model: {
+    style: {
+      border-radius: 8
+      fill: "#f1eafc"
+      stroke: "#7d33f2"
+      font-size: 19
+      font-color: "#4b2d91"
+    }
+  }
+}
+
+(* -> *)[*].style.stroke: "#7a8699"
+
+tasking: Tasking\n"... between 16\nand 18 December\n2022 ..." {
+  shape: page
+  style: {fill: "#fbfcfe"; stroke: "#3d70b8"; font-size: 19}
+}
+propose: Command A\nproposes the\nwindow by\ntool call {
+  class: model
+}
+filter: The machine\nrenders the\ndeclared filter --\nthe model shapes\nnothing else {
+  class: step
+}
+store: Chroma matches\neach chunk's\ndate_key, seeded\nfrom its document's\nissued date {
+  class: step
+}
+intsum: Brief from\nin-window\nreporting only {
+  shape: page
+  style: {fill: "#eef6ef"; stroke: "#2f7d4f"; font-size: 19}
+}
+
+tasking -> propose
+propose -> filter: 20221216 -\n20221218 {style.font-size: 16}
+filter -> store: tiers AND\ndate_key in range {style.font-size: 16}
+store -> intsum

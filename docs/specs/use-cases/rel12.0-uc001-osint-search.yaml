@@ -1,0 +1,173 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel12.0-uc001-osint-search
+title: An Allowlisted Search Result Reaches the Brief While a Request to Any Other Host Is Dropped and Logged
+
+summary: |
+  A tasking draws on open-source reporting no internal corpus holds. A second
+  retrieval branch queries an approved OSINT domain, the result is normalized
+  into the same candidate shape the RAG fan-out produces, and it reaches the
+  brief carrying provenance that marks it as external. A request aimed at any
+  host outside the approved list is refused, logged, and visible in the
+  response, and the turn continues.
+
+  The control is the client's egress policy, not a check inside the machine.
+  That distinction is the release. A machine that avoids non-allowlisted hosts
+  is correct only while its logic is correct, and it is exactly the logic a
+  crafted tasking would try to influence. A client whose network policy names
+  the approved domains refuses everything else regardless of what the machine
+  asked for, which is a property a security lead can audit by reading
+  configuration rather than by reasoning about state transitions.
+
+  The allowlist bounds every hop rather than the first. A search response that
+  points somewhere else is a link the branch does not follow, because an
+  allowlist enforced only on the initial request is an allowlist any allowlisted
+  host can escape on the system's behalf.
+
+  What leaves the enclave is as constrained as where it goes. The outbound
+  request carries the tasking and nothing else -- not the content of retrieved
+  corpus chunks, not the analyst's clearance or identity, not the conversation.
+  A search request assembled from whatever command state happened to be in scope
+  is an exfiltration path that looks like a feature, so the permitted contents
+  are declared on the operation and reviewable without reading the machine.
+
+  What comes back is attacker-influenceable text handed to a language model. So
+  external content is data and never direction. It reaches the model only inside
+  the documents list, it carries provenance a citation exposes, it holds no
+  clearance and is never dressed as cleared internal reporting, and instructions
+  written into a retrieved page change nothing about the turn.
+
+  The branch is also the part DefTech may switch off entirely. A deployment with
+  search disabled makes no external request at all -- because the host is absent
+  from the client's network policy, not because a state was skipped -- and the
+  turn behaves exactly as the retrieval-only turn did before this release.
+
+actor: Intelligence analyst posing a tasking whose answer depends on open-source reporting the internal corpus does not hold
+trigger: The analyst submits a tasking to a mesh with the OSINT search branch enabled.
+
+flow:
+  - F1: The turn runs the clearance-filtered RAG fan-out unchanged, producing its candidate set.
+  - F2: A Searching state runs the declared osint_search word as a second retrieval branch, independent of the RAG branch.
+  - F3: The outbound request carries the tasking or a query derived from it, and carries no retrieved chunk content, no clearance level, no analyst identity or authenticated context, and no conversation history; what it may carry is declared on the operation.
+  - F4: The client's network policy admits the request because its host is on the fixed approved-domain allowlist, which no model output, tasking text, conversation, or request field can widen.
+  - F5: The search returns results, which are normalized into the candidate shape the RAG branch produces, so both branches present one document set downstream.
+  - F6: Each external document carries explicit provenance marking it open-source rather than internal, carries no clearance tag, and is not clearance-filtered.
+  - F7: The external document reaches Command only as an entry in the documents list, never as a system instruction or a prompt fragment outside it, and the brief cites it with its provenance visible.
+  - F8: A request aimed at a host outside the allowlist is refused by the client, logged, and reported in response metadata, and the turn continues from the RAG branch.
+  - F9: A redirect or reference in a search response pointing outside the allowlist is not followed.
+  - F10: A search error, timeout, or empty result leaves the turn composing from the RAG branch, without failing and without waiting on the external host longer than the declared bound.
+  - F11: Response metadata reports each branch's outcome distinguishably from the per-source RAG outcomes already separated there.
+  - F12: With the branch disabled by deployment configuration, the Searching state does not run, the allowlisted host is absent from the client's network policy so no external request is possible, and the turn behaves as the pre-search turn did.
+
+touchpoints:
+  - id: T1
+    target: srd011-osint-search-cascade-rerank AC1
+    reason: The release is this acceptance criterion -- a declared second branch whose fixed allowlist is enforced by the client's network policy, whose non-allowlisted requests are dropped, logged, and visible, which follows no redirect out of the allowlist, which no input can widen, and whose results normalize into the RAG candidate shape.
+  - id: T2
+    target: srd011-osint-search-cascade-rerank AC2
+    reason: The outbound request carries the tasking and not chunk content, clearance, identity, context, or history, with its permitted contents declared on the operation rather than assembled from command state in scope.
+  - id: T3
+    target: srd011-osint-search-cascade-rerank AC7
+    reason: The first external document to reach the composition set is the first that can carry attacker-influenced text, so the trust boundary lands with this release -- data not direction, documents-list only, provenance exposed, no clearance, no influence over the selectors.
+  - id: T4
+    target: srd011-osint-search-cascade-rerank AC5
+    reason: A search error, timeout, or empty result collapses to the RAG branch without failing the turn or blocking on search latency, one branch's failure leaves the other intact, and each branch outcome is separately reported.
+  - id: T5
+    target: srd011-osint-search-cascade-rerank AC6
+    reason: The air-gapped deployment disables the branch, makes no external request because the host is absent from the network policy rather than only skipped in the machine, and reproduces the pre-search turn.
+  - id: T6
+    target: srd010-clearance-gated-retrieval AC3
+    reason: The clearance enforced on the RAG branch is unchanged by the presence of a second branch, and the search request carries no clearance level out of the enclave.
+  - id: T7
+    target: srd002-chatbot-agent AC1
+    reason: The branch is additive on the existing turn; how the turn embeds, selects sources, and fans out to the RAG units is unmodified.
+
+success_criteria:
+  - id: S1
+    criterion: A tasking is augmented by a result from an approved domain, and that result appears in the brief as a cited document. Asserting only that a search call was made is not this, because a call whose result never reached composition looks identical in a log.
+    traces:
+      - srd011-osint-search-cascade-rerank AC1
+  - id: S2
+    criterion: A request to a host outside the allowlist is refused by the client's network policy rather than avoided by machine logic, is logged, and is visible in response metadata, and the turn continues. The refusal has to come from the client, because a machine that merely declines to ask is correct only while its logic is.
+    traces:
+      - srd011-osint-search-cascade-rerank AC1
+  - id: S3
+    criterion: A redirect or reference in a search response pointing outside the allowlist is not followed, so the allowlist bounds every hop. An allowlist enforced on the first request only is one any allowlisted host can escape on the system's behalf.
+    traces:
+      - srd011-osint-search-cascade-rerank AC1
+  - id: S4
+    criterion: No model output, tasking text, conversation history, or request body field selects a host, adds a domain, widens the allowlist, or alters the search operation's method, path, auth, or network policy. A tasking written to name a target host changes nothing about where the request goes.
+    traces:
+      - srd011-osint-search-cascade-rerank AC1
+  - id: S5
+    criterion: Search results are normalized into the candidate shape the RAG branch produces, so downstream stages receive one document set rather than two formats to reconcile.
+    traces:
+      - srd011-osint-search-cascade-rerank AC1
+  - id: S6
+    criterion: The outbound request carries the tasking or a query derived from it and carries no retrieved chunk content, no clearance level, no identity or authenticated context, and no conversation history. Its permitted contents are declared on the operation, so the egress payload is reviewable without reading the machine.
+    traces:
+      - srd011-osint-search-cascade-rerank AC2
+  - id: S7
+    criterion: Instructions, directives, or claims of authority written into retrieved external content do not alter the turn's behavior, and external content reaches the model only as an entry in the documents list rather than as a system instruction, a tool selection, or a prompt fragment outside it.
+    traces:
+      - srd011-osint-search-cascade-rerank AC7
+  - id: S8
+    criterion: Every external document carries explicit provenance a citation exposes, so a reviewer distinguishes an open-source extract from internal reporting without opening the source. External documents carry no clearance tag, are not clearance-filtered, are never presented as cleared internal material, and their presence does not alter the clearance enforced on the RAG branch.
+    traces:
+      - srd011-osint-search-cascade-rerank AC7
+  - id: S9
+    criterion: External content does not influence source selection, tier selection, or the clearance level. The selectors stay closed to it, so a retrieved page cannot widen what is queried or what is served.
+    traces:
+      - srd011-osint-search-cascade-rerank AC7
+  - id: S10
+    criterion: A search error, timeout, or empty result leaves the turn composing from the RAG branch without failing, and the RAG branch is not blocked by search latency. An unreachable external host removes augmentation rather than the brief.
+    traces:
+      - srd011-osint-search-cascade-rerank AC5
+  - id: S11
+    criterion: Each branch's outcome -- composed, empty, errored, or dropped for allowlist -- is reported distinguishably from the per-source RAG outcomes already separated in response metadata, and a failure in one branch leaves the other branch's candidates intact.
+    traces:
+      - srd011-osint-search-cascade-rerank AC5
+  - id: S12
+    criterion: A deployment with the branch disabled makes no external request at all, because the allowlisted host is absent from the client's network policy rather than because a state was skipped, and the turn behaves as the pre-search turn behaved rather than as a degraded variant of it.
+    traces:
+      - srd011-osint-search-cascade-rerank AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: The machine checks the target host against the allowlist before issuing the request, which avoids non-allowlisted hosts without needing a client policy.
+    expected: Rejected; R1.2 puts enforcement in the client's network allowlist. A machine-level check is enforcement by logic the tasking can influence and a reviewer must trace through states; a client policy refuses regardless of what the machine asked for and is auditable as configuration. The check may exist as well, but it does not satisfy the requirement.
+  - id: E2
+    scenario: A search result links to a source on another domain, and the branch fetches it because the allowlisted engine surfaced it.
+    expected: Rejected; R1.4 forbids following it. Treating an allowlisted host's references as trusted delegates the allowlist to that host, and the search provider is precisely the party whose output an adversary tries to influence. Deep retrieval beyond what the operation returns is also a stated non-goal.
+  - id: E3
+    scenario: The tasking names a specific domain to search, and the branch honors it because the analyst asked.
+    expected: Rejected; R1.5 bars any input from selecting a host. The analyst's authority is over what is asked, not over where the system reaches, and a tasking field that selects a host is the same mechanism an injected instruction would use. Widening the list is a deployment configuration change.
+  - id: E4
+    scenario: The search query is enriched with the top retrieved corpus chunks so the external engine returns better-matched results.
+    expected: Rejected; R2.1 forbids carrying chunk content. This is the exfiltration path the release is written to close -- classified retrieved text leaving the enclave in a query string to a public host, with better search results as the justification. The tasking goes out; the corpus does not.
+  - id: E5
+    scenario: The analyst's clearance is sent with the search request so the provider can filter what it returns.
+    expected: Rejected; R2.2 forbids it, and the premise is wrong twice. External results are public by construction and need no clearance filter, and the clearance level is itself sensitive -- an outbound request carrying it discloses the requester's authorization to a third party.
+  - id: E6
+    scenario: A retrieved page contains text instructing the assistant to ignore its template and report differently, and the composition follows it because it appeared among the documents.
+    expected: Rejected; R7.1 and R7.2 make external content data rather than direction. It enters only as a document in the composition set, where its status as retrieved material is structural rather than a matter of the model noticing. This is the concrete attack the trust boundary exists for.
+  - id: E7
+    scenario: External documents are given the lowest clearance level so they sort naturally alongside internal ones.
+    expected: Rejected; R7.4 gives them no clearance tag at all. A clearance level on external material implies it was classified by someone, and sorting it into the cleared set is exactly the confusion the provenance marking exists to prevent. They are outside the clearance model rather than at its bottom.
+  - id: E8
+    scenario: A search timeout fails the turn, since a brief missing its open-source augmentation is incomplete.
+    expected: Rejected; R5.1 and R5.2 collapse to the RAG branch. The internal corpus answer is the answer the previous release produced and is worth delivering, and an external host's availability is not something the enclave controls. Metadata reports the branch outcome so the analyst knows augmentation is absent.
+  - id: E9
+    scenario: The air-gapped deployment disables the branch by skipping the Searching state, leaving the allowlisted host in the client's network policy.
+    expected: Insufficient; R6.2 requires the host to be absent from the policy. A machine-level skip means the capability to reach outside still exists and a defect or a future edit re-enables it silently. In an air-gapped deployment the property to prove is that no external request is possible, not that none is currently made.
+
+out_of_scope:
+  - Choosing or specifying the external search provider; the allowlist and the request contract are the specification and the provider is deployment configuration.
+  - Crawling, scraping, or fetching full documents from allowlisted hosts beyond what the search operation returns.
+  - Clearance-gating the search branch; external results are public by construction and the allowlist is their control.
+  - Caching, persisting, or indexing search results into the corpus; the branch is request-scoped.
+  - Reranking the search branch and fusing the two branches, which are the cascade's second and third passes; that is rel12.1.
+  - Parallelizing the two branches, which follows the existing sequential fan-out decision and its recorded concurrency follow-on.
+
+test_suite_trace: test-rel12.0-osint-search
+status: implemented

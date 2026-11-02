@@ -1,0 +1,18 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The profile the export endpoint's machine_request binding loads: the export
+# machine and the rendering vocabulary, and deliberately nothing else. No LLM
+# client, no retrieval client, no provider client is declared anywhere in
+# this agent (srd013 R3.1) -- the export path can render the document it is
+# given and can do nothing besides.
+kind: agent-profile
+schema_version: 1
+name: exporter-export
+machine: export-machine.yaml
+tools:
+  - export-tools.yaml
+tool_declarations:
+  - export-declarations.yaml
+  - exec-declarations.yaml
+rest_definitions:
+  - rest.yaml

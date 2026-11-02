@@ -1,0 +1,83 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The ministry INTSUM template, markdown structural representation (srd012 R2).
+#
+# This is the schema the conformance check validates a composed brief against:
+# the sections the markdown must carry, their order, whether each is required,
+# the headings that open each, and what content each requires. It is data, not
+# code (R2.4), it is versioned so a verdict names what it was evaluated
+# against (R2.3), and it describes structure only -- nothing a renderer owns
+# appears here, because those concerns belong to the representations that
+# render (R2.5).
+#
+# ARCHITECTURE decision 12 records that the template lives in three
+# representations -- the interface artifact intsum-template.yaml beside this
+# file, this markdown structure, and the export rendering -- and carries the
+# drift risk deliberately. This file's sections are the interface artifact's
+# composed-markdown sections and nothing else: the banner, header, tables, and
+# index are assembled from response metadata at the interface and are not part
+# of the markdown a provider composes, so they have no place in a markdown
+# verdict. TestMarkdownSchemaMatchesTheTemplateArtifact holds the two
+# representations in correspondence, and single-sourcing the three stays an
+# open follow-up rather than a resolved one (srd012 AC6).
+#
+# what_conformance_asserts is the schema's own statement of scope, surfaced
+# with every verdict: structure, and only structure (srd012 R5).
+id: ministry-intsum-markdown
+version: "1"
+source_owner: agents/chatbot
+
+what_conformance_asserts: >-
+  The required sections are present, in order, and populated. Conformance does
+  not assert that any statement in the brief is accurate or supported, and it
+  does not assert that citations resolve; those are the srd009 citation chain's
+  and the analyst's own judgements.
+
+sections:
+  - id: bluf
+    label: Bottom Line Up Front
+    order: 0
+    required: true
+    headings:
+      - Bottom Line Up Front
+      - BLUF
+      - Key Judgements
+      - Key Judgments
+    content: >-
+      The assessment's bottom line as prose: what the reporting supports,
+      stated up front.
+
+  - id: threat-activity
+    label: Threat Activity
+    order: 1
+    required: true
+    headings:
+      - Threat Activity
+      - Assessment
+      - Supporting Reporting
+    content: >-
+      The activity the tasking asked about, argued from the composed
+      reporting.
+
+  - id: gaps
+    label: Gaps
+    order: 2
+    required: true
+    headings:
+      - Gaps
+      - Intelligence Gaps
+    content: >-
+      What the reporting does not establish: the collection gaps a reader
+      needs before weighing the assessment.
+
+  - id: outlook
+    label: Outlook
+    order: 3
+    required: false
+    headings:
+      - Outlook
+      - Assessment Outlook
+    content: >-
+      The expected trajectory where the reporting supports one. Optional: a
+      brief whose reporting supports no outlook conforms without it.

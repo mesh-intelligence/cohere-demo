@@ -1,0 +1,59 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The export relay's one word (srd013 R4.1, GH-352): forward the analyst's
+# approved brief markdown to the exporter through the declared operation. The
+# relay is the whole reason the SPA can export at all -- the exporter admits
+# only this agent as a caller -- and the word binds no model, retrieval, or
+# provider client on the way.
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-export-relay-declarations
+imports:
+  - export-relay-declarations-types.yaml
+tools:
+  - name: relay_export
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Forward the approved brief markdown to the exporter and return the rendered PDF.
+    problem: |
+      The analyst's export action lives in the browser, and the exporter
+      admits only this agent as a caller (srd013 R3.2, R3.3). The document
+      must cross through one declared operation whose payload is reviewable
+      on the operation, carrying the markdown and nothing else.
+    goals:
+      - Send the seeded schema_version and content through the declared exporter operation.
+      - Return the exporter's status and encoded document for the response mapping.
+    requirements:
+      input:
+        - The body is selected from the endpoint's seeded fields alone.
+      output:
+        - Output carries the exporter's status and pdf_base64 fields.
+      errors:
+        - A 500 from the exporter emits ExportFailed; transport, egress, timeout, and mapping failures emit CommandError.
+    non_goals:
+      - Does not carry clearance, identity, or history to the exporter (srd013 R3.5).
+      - Does not accept runtime method, URL, or host overrides.
+      - Does not read, validate, or alter the document; the exporter renders what it is given (srd012 AC4).
+    output:
+      description: The exporter's render result, nested under mapped as every client invoke reports.
+    side_effects:
+      - kind: external_api
+        target: exporter.render_pdf
+        state: request_scoped_render
+    reversibility:
+      classification: irreversible
+      requires_confirmation: true
+    undo:
+      strategy: irreversible
+      description: The exporter has already rendered and returned the brief; the relay holds nothing to withdraw.
+    config:
+      rest_ref: exporter
+      operation: render_pdf
+    signature:
+      input: builtin.Message<chatbot-export-relay-declarations-types.RelayExportInput>
+      emits:
+        - {signal: ExportRendered, message: builtin.Message<chatbot-export-relay-declarations-types.RelayExportOutput>}
+        - {signal: ExportFailed, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

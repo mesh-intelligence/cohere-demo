@@ -1,0 +1,51 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of exec-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: exporter-exec-declarations-types
+types:
+  - name: CleanWorkspaceOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: EncodePdfOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: MdToTexOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: RenderPdfOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object

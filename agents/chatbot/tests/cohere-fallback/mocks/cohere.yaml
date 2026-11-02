@@ -1,0 +1,41 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Cohere v2 chat endpoint, scripted to refuse once and then succeed.
+#
+# The order carries the proof. A mock serves its responses in sequence and
+# repeats the last, so the turn takes the 429 and the critic's probe takes the
+# 200 that follows. A turn that never called the provider leaves the 429 for the
+# probe instead, which is how CohereUntouched is reached and why the fallback
+# answer alone is not accepted as evidence of degradation.
+#
+# 429 rather than 401 or 503 because a trial-tier rate limit is the refusal most
+# likely to interrupt a live demonstration; all three map to the same fallback
+# transition, so one exercises the path.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.11, 0.22, 0.33, 0.44]
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 429
+        body:
+          id: scenario-throttled
+          message: "You are being rate limited."
+      - status: 200
+        body:
+          probe: consumed
+          id: scenario-probe
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "PROBE: the refusal above was consumed by the turn."
+            citations: []

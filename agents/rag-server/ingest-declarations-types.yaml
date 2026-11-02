@@ -1,0 +1,121 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of ingest-declarations.yaml's tools (srd065): the four marshalled
+# columns and the add payload compose_add_payload merges them into.
+kind: tool-declaration
+schema_version: 1
+unit: rag-server-ingest-declarations-types
+types:
+  - name: MarshalIngestIdsOutput
+    schema:
+      properties:
+        ids:
+          items:
+            type: string
+          type: array
+      required:
+        - ids
+      type: object
+  - name: MarshalIngestDocumentsOutput
+    schema:
+      properties:
+        documents:
+          items:
+            type: string
+          type: array
+      required:
+        - documents
+      type: object
+  - name: MarshalIngestEmbeddingsOutput
+    description: The embeddings column. Its items stay untyped so a row missing its vector still fails at compose_add_payload's parse, as the ingest contract expects.
+    schema:
+      properties:
+        embeddings:
+          type: array
+      required:
+        - embeddings
+      type: object
+  - name: IngestMetadata
+    description: One record's metadata, written at the clearance floor from declared templates the request cannot influence.
+    schema:
+      properties:
+        chunk_id:
+          type: string
+        corpus:
+          type: string
+        corpus_version:
+          type: string
+        synthetic:
+          type: boolean
+        source_path:
+          type: string
+        source_id:
+          type: string
+        source_type:
+          type: string
+        clearance:
+          type: string
+        clearance_rank:
+          type: integer
+        admiralty_source_reliability:
+          type: string
+        admiralty_information_credibility:
+          type: string
+        keywords:
+          type: string
+      required: [chunk_id, corpus, clearance, clearance_rank]
+      type: object
+  - name: MarshalIngestMetadatasOutput
+    schema:
+      properties:
+        metadatas:
+          items:
+            $type: rag-server-ingest-declarations-types.IngestMetadata
+          type: array
+      required:
+        - metadatas
+      type: object
+  - name: ComposeAddPayloadOutput
+    description: The Chroma add body, parsed so every column is present before the write.
+    schema:
+      properties:
+        ids:
+          items:
+            type: string
+          type: array
+        documents:
+          items:
+            type: string
+          type: array
+        embeddings:
+          type: array
+        metadatas:
+          items:
+            $type: rag-server-ingest-declarations-types.IngestMetadata
+          type: array
+      required: [ids, documents, embeddings, metadatas]
+      type: object
+  - name: RagAddRecordsOutput
+    description: The chroma add response envelope; the operation maps no response field, so the status is the outcome.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object
+  - name: RagResolveIngestOutput
+    description: The chroma get-or-create response envelope; the add and purge relays read the collection id.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object
+          properties:
+            collection_id:
+              type: string
+  - name: RagPurgeRecordsOutput
+    description: The chroma delete response envelope; the operation maps no response field, so the status is the outcome.
+    schema:
+      type: object
+      properties:
+        mapped:
+          type: object

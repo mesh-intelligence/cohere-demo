@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-selection
+schema_version: 1
+tools:
+  - launch_creator_requests
+  - launch_creator_control
+  - launch_monitor_rest
+  - await_creator_control
+  - stop_monitor_rest
+  - stop_creator_requests
+  - exit_agent

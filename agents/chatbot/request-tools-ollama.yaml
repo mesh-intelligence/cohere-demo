@@ -1,0 +1,15 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The chat-LLM vocabulary the pre-provider request machine may dispatch through
+# $tool. invoke_cohere_command is absent, not disabled: it binds the Cohere client
+# (srd009 R3.1), which a deployment with the provider disabled does not declare,
+# and a registered word whose rest_ref is undefined is refused at load.
+#
+# The separation from the persistent agent tools.yaml is the same one
+# request-tools.yaml documents: an invoke_llm word registered on the persistent
+# agent makes its max_time that agent every run budget (GH-86).
+kind: tool-selection
+schema_version: 1
+tools:
+  - invoke_llm_fast
+  - invoke_llm_deep

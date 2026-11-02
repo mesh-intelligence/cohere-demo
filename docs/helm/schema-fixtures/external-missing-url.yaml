@@ -1,0 +1,7 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# ollama disabled but no external endpoint (MeshView.Validate not-in-cluster branch).
+ollama:
+  enabled: false
+llm:
+  externalURL: ""

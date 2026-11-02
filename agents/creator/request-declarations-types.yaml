@@ -1,0 +1,156 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of request-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: creator-request-declarations-types
+types:
+  - name: ApplyInstanceInput
+    schema:
+      properties:
+        content:
+          type: string
+        operation:
+          type: string
+      type: object
+  - name: ApplyInstanceOutput
+    schema:
+      properties:
+        carried:
+          type: object
+        status:
+          type: string
+      type: object
+  - name: CountAfterIngestInput
+    schema:
+      properties:
+        collection:
+          type: string
+      type: object
+  - name: CountAfterIngestOutput
+    schema:
+      properties:
+        count:
+          type: string
+      type: object
+  - name: CountBeforeIngestInput
+    schema:
+      properties:
+        collection:
+          type: string
+      type: object
+  - name: CountBeforeIngestOutput
+    schema:
+      properties:
+        count:
+          type: string
+      type: object
+  - name: IngestWroteDocumentsOutput
+    schema:
+      properties:
+        held:
+          type: boolean
+        left:
+          type: string
+        op:
+          type: string
+        operand_type:
+          type: string
+        right:
+          type: string
+      type: object
+  - name: ReadStateOutput
+    schema:
+      properties:
+        llmChatModel:
+          type: string
+        llmChatModels:
+          type: array
+        llmEmbedModel:
+          type: string
+        llmExternalURL:
+          type: string
+        llmInCluster:
+          type: boolean
+        llmTierModel:
+          type: string
+        llmTopology:
+          type: string
+        paramsChunkCap:
+          type: integer
+        paramsNResults:
+          type: integer
+        paramsTierDefault:
+          type: string
+        rags:
+          type: array
+      type: object
+  - name: ReportIngestOutcomeOutput
+    schema:
+      properties:
+        collection:
+          type: string
+        count:
+          type: string
+      required:
+        - count
+        - collection
+      type: object
+  - name: RequestedFamilyMatchesOutput
+    schema:
+      properties:
+        held:
+          type: boolean
+        left:
+          type: string
+        op:
+          type: string
+        operand_type:
+          type: string
+        right:
+          type: string
+      type: object
+  - name: ResolveIngestCollectionOutput
+    schema:
+      properties:
+        collection_id:
+          type: string
+        collection_name:
+          type: string
+      type: object
+  - name: RunCorpusIngestInput
+    schema:
+      properties:
+        collection:
+          description: The collection the caller asked to ingest into, handed to the child through CORPUS_INGEST_COLLECTION.
+          type: string
+        directory:
+          description: The corpus directory to ingest, which becomes the child's workspace; the corpus-ingest profile roots its document resource at the workspace.
+          type: string
+      required:
+        - directory
+        - collection
+      type: object
+  - name: RunCorpusIngestOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: VerifyHealthOutput
+    schema:
+      properties:
+        desired:
+          type: integer
+        health:
+          type: string
+        ready:
+          type: integer
+        revision:
+          type: integer
+      type: object

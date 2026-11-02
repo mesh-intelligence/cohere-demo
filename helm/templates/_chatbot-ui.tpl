@@ -1,0 +1,97 @@
+{{/*
+The chatbot ui.yaml, co-generated from .Values.ragUnits (srd003 R2), in the
+version 2 shape the kit shell reads (srd004 R7). The monitored-agents list
+derives from the same RAG list as the topology and the rest.yaml monitor_proxy
+upstreams, so the observability panel's per-agent sub-panels track the deployed
+RAGs. The panels list matches the packaged agents/chatbot/ui/ui.yaml, which
+stays the local source and the registry's counterpart; this render overrides
+that ConfigMap key in the cluster.
+*/}}
+{{- define "chatbot-mesh.chatbotUI" -}}
+version: 2
+id: chatbot-ui
+title: Chatbot Agent UI
+source_owner: agents/chatbot
+panels:
+  - id: chat
+    package: local
+    route: /chat
+    label: Chat
+    sidebar_group: chat
+  - id: observability
+    package: local
+    route: /observability
+    label: Traces
+    sidebar_group: observability
+    hidden: true
+  - id: corpus
+    package: local
+    route: /corpus
+    label: Corpus
+    sidebar_group: chat
+  - id: provisioning
+    package: local
+    route: /provisioning
+    label: Provisioning
+    sidebar_group: provisioning
+sidebar:
+  title: Chatbot
+  groups:
+    chat:
+      label: Chat
+      order: 0
+    observability:
+      label: Observability
+      order: 1
+    provisioning:
+      label: Provisioning
+      order: 2
+actions:
+  chat_send:
+    ui_action: chat_send
+    request_machine_action: chat
+    route: chat
+    endpoint: /api/v1/chat
+    method: POST
+  observability_view:
+    ui_action: observability_view
+    route: observability
+  provisioning_view:
+    ui_action: provisioning_view
+    route: provisioning
+monitored_agents:
+  - name: chatbot
+    label: Chatbot
+{{- range $i, $unit := .Values.ragUnits }}
+  - name: {{ $unit.name }}
+    label: RAG server {{ $i }}
+{{- end }}
+{{- /* enabled as well as implementation, so a disabled collector does not
+       leave the UI naming a trace backend that is not deployed (GH-220). */}}
+{{- if and .Values.collector.enabled (eq .Values.collector.implementation "agent") }}
+trace_backend:
+  name: collector
+  query_path: /monitor-proxy/collector/query/traces/{trace_id}
+{{- end }}
+{{- /* Gated on controlPlane, not applier, because that is what decides whether
+       the panel has anywhere to post. The panel submits same-origin to
+       /provisioning, an ingress route the chart renders only with the control
+       plane on (chatbot.yaml), and the orchestrator behind it is a control-plane
+       workload. The applier is a different question -- the deployment API the
+       creator calls, not the intake the browser reaches -- and gating on it
+       rendered an enabled panel whose route was absent at the chart's own
+       defaults, which is the shape GH-502 fixed once already (GH-214). */}}
+{{- if .Values.controlPlane.enabled }}
+deployment_api:
+  base_path: /provisioning/api
+  auth: none
+{{- end }}
+presentation:
+  history_client_side: true
+  source_citations: true
+  degraded_indicator: true
+  observability_per_agent_sse: true
+  observability_turn_correlation: time-window
+  observability_trace_waterfall: true
+  provisioning_panel: {{ .Values.controlPlane.enabled }}
+{{- end -}}

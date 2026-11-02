@@ -1,0 +1,133 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel10.0-cohere-command-tier
+title: Test Suite for Release 10.0 Cohere Command Composition Tier
+release: "10.0"
+
+traces: [rel10.0-uc001-cohere-command-tier]
+
+preconditions:
+  - The mesh substrate rel09.9 gates is standing, so the composition resolves from the repository root, the cluster installs, and each RAG unit is seeded.
+  - The chatbot profile declares the Cohere client, the invoke_cohere_command word, the capture_brief normalizer, and their machine states.
+  - The scenario tiers require no credential and no network; their mocks stand where the declared client points, reached by the environment overrides the scenario supplies.
+  - The live tier requires COHERE_API_KEY exported by the operator. The credential is operator-supplied and gitignored, read by no code in the repository.
+  - Host Ollama holds the tier-selector and fallback models, so a Cohere failure has a word to fall back to.
+
+test_cases:
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: The Cohere tier answers a turn against isolated mocks
+    integration_target: mage integration:rig
+    status: implemented
+    description: The cohere-command scenario critic drives one turn whose mocked tier selector names invoke_cohere_command. The declared client reaches the Cohere mock through the scenario's environment overrides, the mock returns a composed brief, and the critic passes only when the turn answered.
+    expected:
+      http_status: 200
+      dispatched_answer_word: invoke_cohere_command
+      ollama_chat_word_dispatched: false
+      composed_sources_present: true
+      live_network_calls: 0
+    traces:
+      - rel10.0-uc001-cohere-command-tier S1
+      - srd009-cohere-provider AC3
+
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: The composed brief reaches the response as text
+    integration_target: mage integration:rig
+    status: implemented
+    description: The same scenario asserts the answer field's type. The Cohere operation returns a mapped result while compose_response reads the previous result whole, so this fails without the normalizer between them and passes with it.
+    expected:
+      answer_type: string
+      answer_non_empty: true
+      answer_is_serialized_object: false
+    traces:
+      - rel10.0-uc001-cohere-command-tier S2
+      - srd009-cohere-provider AC3
+
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: A provider failure degrades to the default chat word
+    integration_target: mage integration:rig
+    status: implemented
+    description: The cohere-fallback scenario critic drives a turn whose tier selector names invoke_cohere_command against a Cohere mock returning a rate-limit status. The mapped failure signal routes back through Reporting to invoke_llm_fast, which answers over the same composed prompt. Both words must appear in the span log; a run where the selector never reached the Cohere word would pass the answer assertion while proving nothing.
+    expected:
+      http_status: 200
+      answer_non_empty: true
+      cohere_word_attempted: true
+      fallback_word_answered: invoke_llm_fast
+      composed_sources_present: true
+      degradation_recorded: true
+    traces:
+      - rel10.0-uc001-cohere-command-tier S4
+      - srd009-cohere-provider AC1
+      - srd009-cohere-provider AC3
+
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: The live API composes the brief through the declared client
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A tasking runs against the real Cohere API with the credential resolved from the environment. This is the tier the scenario critics cannot supply -- they are evidence about the request the machine constructs, not about the API behaving as the declarations assume. It skips, naming the missing variable, when no credential is exported.
+    expected:
+      http_status: 200
+      dispatched_answer_word: invoke_cohere_command
+      composed_sources_non_empty: true
+      skips_without_credential: true
+      skip_names_variable: COHERE_API_KEY
+    traces:
+      - rel10.0-uc001-cohere-command-tier S1
+      - srd009-cohere-provider AC3
+
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: The credential and the egress boundary hold
+    integration_target: mage integration:cohere
+    status: implemented
+    description: The credential resolves by reference from the environment and appears in no output the target prints; a base URL outside the configured host is refused by the client before any request leaves, rather than by the machine that invoked it; and an invalid credential surfaces as a distinguishable outcome rather than as an empty answer.
+    expected:
+      credential_in_output: false
+      credential_prefix_in_output: false
+      non_allowlisted_host_refused: true
+      refusal_origin: rest_client
+      provider_failure_distinguishable: true
+    traces:
+      - rel10.0-uc001-cohere-command-tier S3
+      - srd009-cohere-provider AC1
+
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: The Ollama tier remains selectable
+    integration_target: mage integration:rig
+    status: implemented
+    description: The single-turn and degraded-rag scenario critics pass unmodified after the provider is added. Their passing is what makes the additive claim checkable -- the words they exercise are still declared, still reachable through the selector, and still answer the turn.
+    expected:
+      single_turn_verdict: ScenarioPassed
+      degraded_rag_verdict: ScenarioPassed
+      existing_scenarios_modified: false
+    traces:
+      - rel10.0-uc001-cohere-command-tier S5
+      - srd009-cohere-provider AC6
+
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: The disabled provider reproduces the prior deployment
+    go_test: go test ./magefiles -run '^TestChartOmitsCohereWhenDisabled$|^TestChartRendersCohereClientAndSecretReference$|^TestChartAcceptsNoCohereCredentialValue$'
+    status: implemented
+    description: Rendering the chart with the provider disabled produces a chatbot rest.yaml and Deployment identical to the pre-provider output, and the chart rejects an enabled provider with no Secret reference. Byte identity is what separates switchable configuration from a fork of the mesh.
+    expected:
+      disabled_render_identical: true
+      enabled_render_declares_client: true
+      enabled_render_declares_secret_ref: true
+      enabled_without_secret_rejected: true
+      credential_value_in_manifests: false
+    traces:
+      - rel10.0-uc001-cohere-command-tier S6
+      - srd009-cohere-provider AC6
+
+  - use_case: rel10.0-uc001-cohere-command-tier
+    name: The deployed mesh answers a tasking on the Cohere tier
+    integration_target: mage app:verify
+    status: implemented
+    description: The verification target asserts the deployed turn was answered by invoke_cohere_command in addition to the composed-sources assertion rel09.9 established, so the release tracer is checked against a real deployment rather than only against the local rig.
+    expected:
+      http_status: 200
+      dispatched_answer_word: invoke_cohere_command
+      composed_documents_retrieved: true
+      prior_assertion_unchanged: true
+    traces:
+      - rel10.0-uc001-cohere-command-tier S1
+      - rel10.0-uc001-cohere-command-tier S6
+      - srd009-cohere-provider AC3

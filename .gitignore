@@ -1,0 +1,98 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file. go.work is committed: it declares the sibling
+# declarative-agents checkout the development loop builds against, and go.mod
+# carries the pin that GOWORK=off resolves instead (GH-110). Its checksum file
+# stays local.
+go.work.sum
+
+# env file
+.env
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+# --- cohere-demo additions ---
+
+# Compiled mage/orchestrator binaries
+bin/
+/build/
+
+# Local credentials, never committed (the tooling reads these at runtime). No
+# trailing slash: the path is a symlink here, and a trailing slash matches only
+# directories, which left the link showing as untracked.
+.secrets
+
+# Chatbot SPA dependencies. The built bundle agents/chatbot/ui/app/dist IS
+# committed and must stay tracked; only node_modules is ignored.
+**/node_modules/
+
+# Local observability run state (Prometheus/Grafana scratch)
+observability/.run/
+
+# Rendered Helm output
+helm/dist/
+# The agent-services library chart, vendored from the pinned release.
+helm/charts/
+
+# orchestrator.go init() writes this when run from magefiles/ (e.g. go test ./magefiles/);
+# the tracked configuration.yaml lives at the repo root.
+magefiles/configuration.yaml
+
+# The rel10.5 source datasets (data/) are 343MB of harvested reporting held
+# outside version control: the corpus build reads them, the store it writes is
+# what the repository carries. They are ignored rather than merely untracked
+# because `git add -A` would otherwise stage the whole 343MB, and the failure
+# is one command away from a commit nobody wants to undo.
+#
+# The per-tier READMEs are the exception. They record each tier's source,
+# licence, and retrieval date (srd017 R9.2), which is the part that has to
+# travel with the repository rather than with the data.
+/data/**
+!/data/
+!/data/*/
+!/data/*/README.md
+
+# The keep-private store tiers (srd017 R9.7, GH-910) are versioned in the
+# private mesh-intelligence/cohere-demo-data repository, never here. The build
+# writes them into that checkout, so these rules are defense in depth against a
+# misconfigured run leaving copyrighted chunks where `git add -A` would stage
+# them; corpus_dataset_ignore_test.go asserts the rules hold.
+/corpus/store/documents/isw-*/
+/corpus/store/documents/tg-*/
+/corpus/store/documents/losses-*/
+/corpus/store/documents/missile-*/
+
+# Evaluation run artifacts (srd014): reports are run outputs, not repo content.
+evaluation/report.json
+talks/.obsidian/
+.claude
+.cursor
+
+# Local GCP operator configuration (gcp:deploy); it names a real project.
+gcp.yaml
+
+# Terraform working directories and the bootstrap root's local state (infra/gcp).
+infra/gcp/**/.terraform/
+infra/gcp/bootstrap/terraform.tfstate*

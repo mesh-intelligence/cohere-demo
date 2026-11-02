@@ -1,0 +1,35 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Cohere v2 endpoints, claiming these behaviors:
+# - POST /v2/embed returns embeddings.float as an array of rows, one per text,
+#   which is the shape the live API returned on 2026-08-26 and the shape
+#   capture_query_vector unwraps.
+# - POST /v2/chat returns a composed brief so the turn reaches its answer.
+#
+# The vector is three short, distinctive values rather than a realistic 1536
+# floats: the critic compares the RAG request body exactly, and a long vector
+# would make that assertion unreadable without making it stronger.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      - status: 200
+        body:
+          id: scenario-embed-1
+          embeddings:
+            float:
+              - [0.101, 0.202, 0.303]
+
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-1
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject."
+            citations: []

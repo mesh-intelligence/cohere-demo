@@ -1,0 +1,53 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Cohere embeddings refusing the query call with a rate limit -- the condition
+# the ProviderThrottled transition out of Embedding exists for.
+#
+# The embed route is scripted to refuse first and succeed after, and a mock
+# repeats its last response, so the critic's own call to the endpoint returns
+# the refusal if the turn never consumed it and the success if it did. That is
+# what separates this critic from one that only watches the turn fail: an
+# unrelated fault fails the turn too, and leaves the 429 sitting here for the
+# probe to find. cohere-fallback settles the same question the same way on the
+# chat route.
+#
+# 429 rather than 401 or 503 because a trial-tier rate limit is the refusal most
+# likely to interrupt a live demonstration. The three refusal statuses map to
+# three distinct signals sharing one transition target, so this scenario drives
+# the path and TestCohereEmbedRefusalsReachTheMachine covers the two mappings it
+# does not.
+#
+# The chat route is present and must stay. It is what makes the scenario
+# falsifiable: cut the 429 below and the turn embeds, fans out, composes here,
+# and answers -- which the critic reads as the refusal having failed to stop it.
+routes:
+  - method: POST
+    path: /v2/embed
+    responses:
+      # The turn's call. Nothing downstream of Embedding runs after this.
+      - status: 429
+        body:
+          id: scenario-embed-throttled
+          message: "You are being rate limited."
+      # The probe's call, and the marker it reads back.
+      - status: 200
+        body:
+          probe: consumed
+          id: scenario-embed-probe
+          embeddings:
+            float:
+              - [0.101, 0.202, 0.303]
+
+  - method: POST
+    path: /v2/chat
+    responses:
+      - status: 200
+        body:
+          id: scenario-brief-refused
+          finish_reason: COMPLETE
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "ASSESSMENT: the corpus describes the rig subject."
+            citations: []

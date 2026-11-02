@@ -1,0 +1,532 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The template conformance chain (srd012 R3, R4, R5): every composed brief is
+# validated against the ministry template's markdown structural schema after
+# composition and citation surfacing, before the brief is surfaced. The check
+# is deterministic structural validation -- parse_structured over regex
+# patterns, no model call (R3.2) -- and its verdict, the template version it
+# evaluated against, and the specific defects reach response metadata beside
+# the source and citation outcomes, distinguishably from them (R3.3, R4.5).
+# Nothing here rewrites the brief, and no failure on this chain fails the
+# turn: a broken check declares the verdict unchecked and the analyst keeps
+# the draft (R4.2, R4.3).
+#
+# The patterns are authored here as declared configuration derived from
+# agents/chatbot/ui/intsum-markdown-schema.yaml, the markdown representation's
+# sole authority (srd012 AC6). TestConformancePatternsMatchTheMarkdownSchema
+# rebuilds each pattern from the schema and fails on drift, the same guard
+# shape that holds the schema to the interface artifact; mechanically
+# single-sourcing the representations stays the recorded open follow-up of
+# ARCHITECTURE decision 12 rather than a resolved one.
+kind: tool-declaration
+schema_version: 1
+unit: chatbot-request-conformance-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - request-conformance-declarations-types.yaml
+tools:
+  - name: wrap_brief_for_conformance
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Wrap the composed brief as a JSON document the structural checks can validate.
+    problem: |
+      The brief is markdown text and parse_structured validates JSON. Wrapping
+      the whole text as one string property is what lets a JSON Schema pattern
+      assert the markdown's structure without a markdown parser the runtime
+      does not carry.
+    goals:
+      - Present the composed brief to the section checks as one addressable JSON document.
+    requirements:
+      input:
+        - The brief is the turn's answer, read through the shared answer_text label.
+      output:
+        - Output is a JSON object whose markdown field is the brief verbatim.
+      errors:
+        - Rendering is deterministic.
+    non_goals:
+      - Does not alter, trim, or normalize the brief (srd012 R4.2).
+    output:
+      description: The brief wrapped for validation.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Wrapping text changes no external state.}
+    config:
+      signal: BriefWrapped
+      inputs:
+        answer: $from(answer_text).$
+      template: '{"markdown": {{ json answer }}}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: BriefWrapped, message: builtin.Message<chatbot-request-conformance-declarations-types.WrapBriefForConformanceOutput>}
+  # One presence-and-content check per required section (srd012 R5.1). Each
+  # pattern asserts the section's heading opens an ATX heading line and that
+  # non-whitespace content follows it. The alias lists and required flags come
+  # from the markdown schema; the guard test holds them there.
+  - name: check_bluf_section
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Confirm the brief carries a populated Bottom Line Up Front section.
+    problem: A brief without its bottom line is not the ministry template, and the reviewer must learn that from a verdict rather than from reading for it.
+    goals:
+      - Assert the section's heading is present with content after it.
+    requirements:
+      input:
+        - Source is the wrapped brief.
+      output:
+        - A match confirms presence; a miss is a named defect, not an error.
+      errors:
+        - An unresolved source emits CommandError.
+    non_goals:
+      - Does not judge the section's prose; structure only (srd012 R5.2).
+    output: {description: Validation outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Validation changes no external state.}
+    config:
+      source: $from(wrap_brief_for_conformance).$
+      schema:
+        type: object
+        properties:
+          markdown:
+            type: string
+            pattern: '(?s)(?:^|.*\n)#{1,6}[ \t]+(?:Bottom Line Up Front|BLUF|Key Judgements|Key Judgments)[ \t]*\n+[ \t]*[^\s#].*'
+        required: [markdown]
+      parsed: BlufConfirmed
+      unparsed: BlufMissing
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: BlufConfirmed, message: builtin.Message<chatbot-request-conformance-declarations-types.WrapBriefForConformanceOutput>}
+        - {signal: BlufMissing, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_threat_activity_section
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Confirm the brief carries a populated Threat Activity section.
+    problem: The assessment's body is a required section; its absence must surface as a verdict defect.
+    goals:
+      - Assert the section's heading is present with content after it.
+    requirements:
+      input:
+        - Source is the wrapped brief.
+      output:
+        - A match confirms presence; a miss is a named defect, not an error.
+      errors:
+        - An unresolved source emits CommandError.
+    non_goals:
+      - Does not judge the section's prose; structure only (srd012 R5.2).
+    output: {description: Validation outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Validation changes no external state.}
+    config:
+      source: $from(wrap_brief_for_conformance).$
+      schema:
+        type: object
+        properties:
+          markdown:
+            type: string
+            pattern: '(?s)(?:^|.*\n)#{1,6}[ \t]+(?:Threat Activity|Assessment|Supporting Reporting)[ \t]*\n+[ \t]*[^\s#].*'
+        required: [markdown]
+      parsed: ThreatActivityConfirmed
+      unparsed: ThreatActivityMissing
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ThreatActivityConfirmed, message: builtin.Message<chatbot-request-conformance-declarations-types.WrapBriefForConformanceOutput>}
+        - {signal: ThreatActivityMissing, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_gaps_section
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Confirm the brief carries a populated Gaps section.
+    problem: A brief that states no collection gaps reads as complete reporting; the template requires the gaps stated.
+    goals:
+      - Assert the section's heading is present with content after it.
+    requirements:
+      input:
+        - Source is the wrapped brief.
+      output:
+        - A match confirms presence; a miss is a named defect, not an error.
+      errors:
+        - An unresolved source emits CommandError.
+    non_goals:
+      - Does not judge the section's prose; structure only (srd012 R5.2).
+    output: {description: Validation outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Validation changes no external state.}
+    config:
+      source: $from(wrap_brief_for_conformance).$
+      schema:
+        type: object
+        properties:
+          markdown:
+            type: string
+            pattern: '(?s)(?:^|.*\n)#{1,6}[ \t]+(?:Gaps|Intelligence Gaps)[ \t]*\n+[ \t]*[^\s#].*'
+        required: [markdown]
+      parsed: GapsConfirmed
+      unparsed: GapsMissing
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: GapsConfirmed, message: builtin.Message<chatbot-request-conformance-declarations-types.WrapBriefForConformanceOutput>}
+        - {signal: GapsMissing, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_section_order
+    type: builtin
+    init: parse_structured
+    visibility: internal
+    category: word
+    description: Confirm the required sections appear in template order.
+    problem: Present sections in the wrong order are a different defect from an absent section, and the verdict must name which happened (srd012 R3.3).
+    goals:
+      - Assert the three required headings occur in the declared sequence.
+    requirements:
+      input:
+        - Source is the wrapped brief.
+      output:
+        - A match confirms order; a miss is a named defect, not an error.
+      errors:
+        - An unresolved source emits CommandError.
+    non_goals:
+      - Does not re-check presence; the per-section checks own that, and a brief missing a section fails both for both reasons, which is the specific defect list rather than a redundancy.
+    output: {description: Validation outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Validation changes no external state.}
+    config:
+      source: $from(wrap_brief_for_conformance).$
+      schema:
+        type: object
+        properties:
+          markdown:
+            type: string
+            pattern: '(?s)(?:^|.*\n)#{1,6}[ \t]+(?:Bottom Line Up Front|BLUF|Key Judgements|Key Judgments)[ \t]*\n.*\n#{1,6}[ \t]+(?:Threat Activity|Assessment|Supporting Reporting)[ \t]*\n.*\n#{1,6}[ \t]+(?:Gaps|Intelligence Gaps)[ \t]*(?:\n.*)?'
+        required: [markdown]
+      parsed: OrderConfirmed
+      unparsed: OrderBroken
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OrderConfirmed, message: builtin.Message<chatbot-request-conformance-declarations-types.WrapBriefForConformanceOutput>}
+        - {signal: OrderBroken, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The outcome legs. Each check routes to one of two compose words published
+  # under a shared label, the clearance words' fail-closed pattern: downstream
+  # binds one selector per check and cannot tell which leg ran. A confirmed
+  # check records an empty defect; a missed one records the specific defect
+  # string the verdict will carry (srd012 R3.3).
+  - name: record_bluf_defect
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record the missing or unpopulated Bottom Line Up Front section as a defect.
+    problem: The verdict must name the specific structural defect rather than reporting that something failed (srd012 R3.3).
+    goals: [Publish the specific defect under the shared bluf label.]
+    requirements:
+      input: [Nothing; the outcome is the routing.]
+      output: [Output carries the named defect.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not repair or annotate the brief.]
+    output: {description: Named defect record.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Recording changes no external state.}
+    config:
+      signal: BlufRecorded
+      inputs: {}
+      template: '{"defect": "required section Bottom Line Up Front is absent or has no content under its heading"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: BlufRecorded, message: builtin.Message<chatbot-request-conformance-declarations-types.ConformanceDefect>}
+  - name: record_threat_activity_defect
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record the missing or unpopulated Threat Activity section as a defect.
+    problem: The verdict must name the specific structural defect rather than reporting that something failed (srd012 R3.3).
+    goals: [Publish the specific defect under the shared threat-activity label.]
+    requirements:
+      input: [Nothing; the outcome is the routing.]
+      output: [Output carries the named defect.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not repair or annotate the brief.]
+    output: {description: Named defect record.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Recording changes no external state.}
+    config:
+      signal: ThreatActivityRecorded
+      inputs: {}
+      template: '{"defect": "required section Threat Activity is absent or has no content under its heading"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ThreatActivityRecorded, message: builtin.Message<chatbot-request-conformance-declarations-types.ConformanceDefect>}
+  - name: record_gaps_defect
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record the missing or unpopulated Gaps section as a defect.
+    problem: The verdict must name the specific structural defect rather than reporting that something failed (srd012 R3.3).
+    goals: [Publish the specific defect under the shared gaps label.]
+    requirements:
+      input: [Nothing; the outcome is the routing.]
+      output: [Output carries the named defect.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not repair or annotate the brief.]
+    output: {description: Named defect record.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Recording changes no external state.}
+    config:
+      signal: GapsRecorded
+      inputs: {}
+      template: '{"defect": "required section Gaps is absent or has no content under its heading"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: GapsRecorded, message: builtin.Message<chatbot-request-conformance-declarations-types.ConformanceDefect>}
+  - name: record_order_defect
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Record the out-of-order required sections as a defect.
+    problem: The verdict must name the specific structural defect rather than reporting that something failed (srd012 R3.3).
+    goals: [Publish the specific defect under the shared order label.]
+    requirements:
+      input: [Nothing; the outcome is the routing.]
+      output: [Output carries the named defect.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not repair or annotate the brief.]
+    output: {description: Named defect record.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Recording changes no external state.}
+    config:
+      signal: OrderRecorded
+      inputs: {}
+      template: '{"defect": "the required sections are not in template order: Bottom Line Up Front, then Threat Activity, then Gaps"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: OrderRecorded, message: builtin.Message<chatbot-request-conformance-declarations-types.ConformanceDefect>}
+  - name: collect_conformance_defects
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Collect the four check outcomes into one addressable row list.
+    problem: The partition that separates real defects from clean outcomes takes an array from command state, and the outcomes sit under four labels.
+    goals: [Publish the four defect records as one rows array.]
+    requirements:
+      input: [Fixed selectors read the four shared check labels.]
+      output: [Output carries rows, one entry per check.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not decide which rows are defects.]
+    output:
+      description: The check outcomes as rows.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Collecting changes no external state.}
+    config:
+      signal: ConformanceDefectsCollected
+      inputs:
+        bluf: $from(conformance_bluf).body.defect
+        threat: $from(conformance_threat_activity).body.defect
+        gaps: $from(conformance_gaps).body.defect
+        order: $from(conformance_order).body.defect
+      template: '{"rows": [{"defect": {{ json bluf }}}, {"defect": {{ json threat }}}, {"defect": {{ json gaps }}}, {"defect": {{ json order }}}]}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ConformanceDefectsCollected, message: builtin.Message<chatbot-request-conformance-declarations-types.CollectConformanceDefectsOutput>}
+  - name: partition_conformance_defects
+    type: builtin
+    init: partition
+    visibility: internal
+    category: response
+    description: Separate the named defects from the clean check outcomes.
+    problem: Every check publishes one row and only the failing rows belong in the verdict's defect list.
+    goals: [Keep the rows whose defect is non-empty.]
+    requirements:
+      input: [Items are the collected check rows.]
+      output: [matched holds the named defects; unmatched the clean checks.]
+      errors: [An unresolved selector emits CommandError.]
+    non_goals: [Does not rank or rewrite defects.]
+    output:
+      description: Partitioned check rows.
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Partitioning changes no external state.}
+    config:
+      items: $from(collect_conformance_defects).body.rows
+      field: defect
+      # non_empty is unary: an empty right operand is refused at registration,
+      # which a live request surfaced where the boot smoke could not.
+      op: non_empty
+      operand_type: string
+      satisfied: ConformanceDefectsPartitioned
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ConformanceDefectsPartitioned, message: builtin.Message<chatbot-request-conformance-declarations-types.PartitionConformanceDefectsOutput>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_conformance_defects
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the named defects as the verdict's JSON list body.
+    problem: The verdict template embeds a list, and render_each is what turns the matched rows into its comma-separated entries.
+    goals: [Render each defect string once, in check order.]
+    requirements:
+      input: [Items are the matched defect rows.]
+      output: [Output is the JSON string entries, comma separated.]
+      errors: [An entry missing the field emits CommandError.]
+    non_goals: [Does not filter or reorder.]
+    output: {description: Rendered defect entries.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(partition_conformance_defects).body.matched
+      item_template: '{{ json defect }}'
+      separator: ","
+      signal: ConformanceDefectsRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ConformanceDefectsRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: check_conformance
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Decide the verdict from the rendered defect list.
+    problem: A machine branches on signals, and the verdict is two legs of one shape; the empty defect list is what separates them.
+    goals: [Route an empty defect list to the conformant leg and a populated one to the non-conformant leg.]
+    requirements:
+      input: [The rendered defects are read from the render word.]
+      output: [Output is the emptiness outcome.]
+      errors: [An unresolved selector emits CommandError.]
+    non_goals: [Does not compose the verdict; the legs do.]
+    output: {description: Verdict routing outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $from(render_conformance_defects).$
+      op: empty
+      satisfied: BriefConformant
+      unsatisfied: BriefNonConformant
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: BriefConformant, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: BriefNonConformant, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  # The verdict legs, published under one label the response composition binds
+  # (srd012 R3.3, R4.5). template_version names the markdown schema version the
+  # patterns above derive from; the guard test pins the two equal. The
+  # what_conformance_asserts scope statement rides with every verdict so a
+  # reader is told what a pass does not claim (srd012 R5.3): no accuracy, no
+  # support, no citation resolution -- structure alone. None of the three
+  # verdict values is approval language, and the suite pins that.
+  - name: declare_brief_conformant
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Declare the brief structurally conformant to the template version.
+    problem: A passing verdict must name what it was evaluated against and what it does not assert.
+    goals: [Publish the conformant verdict under the shared verdict label.]
+    requirements:
+      input: [The rendered defect list is empty; the routing proved it.]
+      output: [Output carries verdict, template_version, empty defects, and the scope statement.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not describe the brief as approved, verified, or reviewed; conformance is structure, not review.]
+    output: {description: The conformance verdict.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring a verdict changes no external state.}
+    config:
+      signal: ConformanceVerdictDeclared
+      inputs: {}
+      template: '{"verdict": "conformant", "template_version": "1", "defects": [], "asserts": "structure only: required sections present, ordered, and populated; not accuracy, not support, not citation resolution"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ConformanceVerdictDeclared, message: builtin.Message<chatbot-request-conformance-declarations-types.ConformanceVerdict>}
+  - name: declare_brief_nonconformant
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Declare the brief non-conformant with its specific defects.
+    problem: A failing brief is surfaced with its defect list rather than presented as final (srd012 R4.1), and nothing rewrites it to pass (R4.2).
+    goals: [Publish the non-conformant verdict and the named defects under the shared verdict label.]
+    requirements:
+      input: [The rendered defect entries come from the render word.]
+      output: [Output carries verdict, template_version, the defects, and the scope statement.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not fail the turn or discard the draft (srd012 R4.3).]
+    output: {description: The conformance verdict.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring a verdict changes no external state.}
+    config:
+      signal: ConformanceVerdictDeclared
+      inputs:
+        defects: $from(render_conformance_defects).$
+      template: '{"verdict": "non_conformant", "template_version": "1", "defects": [{{ defects }}], "asserts": "structure only: required sections present, ordered, and populated; not accuracy, not support, not citation resolution"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ConformanceVerdictDeclared, message: builtin.Message<chatbot-request-conformance-declarations-types.ConformanceVerdict>}
+  - name: declare_conformance_unchecked
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Declare the check itself failed, keeping the turn and the draft.
+    problem: |
+      A broken check must not fail the turn or discard the composed brief
+      (srd012 R4.3), and it must not report conformant or non-conformant,
+      because neither was established. unchecked is the honest third value:
+      the analyst keeps the draft and is told the check did not run.
+    goals: [Publish the unchecked verdict under the shared verdict label.]
+    requirements:
+      input: [Nothing; the routing is a CommandError on the chain.]
+      output: [Output carries the unchecked verdict and the scope statement.]
+      errors: [Rendering configured JSON is deterministic.]
+    non_goals: [Does not mask the outage as a pass or a defect list.]
+    output: {description: The conformance verdict.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Declaring a verdict changes no external state.}
+    config:
+      signal: ConformanceVerdictDeclared
+      inputs: {}
+      template: '{"verdict": "unchecked", "template_version": "1", "defects": [], "asserts": "the structural check did not run on this brief"}'
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ConformanceVerdictDeclared, message: builtin.Message<chatbot-request-conformance-declarations-types.ConformanceVerdict>}

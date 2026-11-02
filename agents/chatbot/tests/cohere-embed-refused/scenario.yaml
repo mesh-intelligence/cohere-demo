@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The chatbot ships fixed listeners and its client limits admit only the real
+# dependency ports, so every mock stands exactly where the real service stands:
+# the LLM provider at 11434, the RAG servers at 18085 and 18095.
+#
+# The Cohere client is the exception, deliberately: its base URL and its egress
+# allowlist are one deployment-supplied pair (srd009 R1.2, R1.4), which is what
+# lets a private in-boundary deployment differ from the hosted endpoint by
+# configuration alone -- and what lets this scenario stand a mock on loopback.
+subject_address: 127.0.0.1:18080
+subject_health_path: http://127.0.0.1:18081/api/lifecycle/health
+fixture_address:
+  llm: 127.0.0.1:11434
+  rag0: 127.0.0.1:18085
+  rag1: 127.0.0.1:18095
+  cohere: 127.0.0.1:18120
+fixture_env:
+  cohere: COHERE_BASE_URL
+env:
+  - COHERE_HOST=127.0.0.1
+  - COHERE_SCHEME=http
+  - COHERE_PORT=18120
+  # Set for the falsifiability check rather than for the passing run: the turn
+  # here stops at Embedding and never reaches the fan-out, so no source identity
+  # is ever compared. Cut the mock's refusal and the turn runs to completion,
+  # where this value has to match what the RAG mocks report or the turn composes
+  # from nothing and the check reads the wrong reason for a failure.
+  - COHERE_EMBED_MODEL=embed-v4.0
+  # The mock does not verify the bearer. A literal here proves the credential
+  # resolves by reference through the declared token_ref; the live target proves
+  # it against the real provider.
+  - COHERE_API_KEY=scenario-not-a-real-key

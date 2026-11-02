@@ -1,0 +1,39 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Ollama provider, claiming these behaviors:
+# - POST /api/embeddings: the embed_query REST word maps $.embedding.
+# - POST /api/chat: adapter chatResp shape {message:{role,content},...}. The
+#   source selector, tier selector, and answer call hit this HTTP route in order.
+# The real-stack ladder (#408) validates these claims against live Ollama.
+routes:
+  - method: POST
+    path: /api/embeddings
+    responses:
+      - status: 200
+        body:
+          embedding: [0.11, 0.22, 0.33, 0.44]
+
+  - method: POST
+    path: /api/chat
+    responses:
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: '{"names":["rag0","https://attacker.invalid"]}'
+          eval_count: 4
+          prompt_eval_count: 12
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: '{"tool":"invoke_llm_fast"}'
+          eval_count: 4
+          prompt_eval_count: 12
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: "The corpus describes the scenario critic rig and its mocks."
+          eval_count: 11
+          prompt_eval_count: 42

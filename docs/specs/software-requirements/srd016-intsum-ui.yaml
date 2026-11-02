@@ -1,0 +1,291 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd016-intsum-ui
+title: Two-Panel INTSUM Interface
+
+role_realization_decision:
+  current_actor: chatbot
+  implemented_responsibility: Host the analyst surface -- the tasking and its retrieval facets on one side, the ministry INTSUM form the turn fills on the other, and the path from an assertion in that form back to the report it came from.
+  canonical_role_sub_role: Planner / Intent Handler, extended at the browser request boundary the chatbot already hosts. The rag-server gains no role; it gains a second query boundary inside the read-only retrieval authority it already holds.
+  retained_or_proposed_name: >-
+    No new agent. The surface is the single-page application the chatbot already
+    serves under its static assets, and the document read operations are
+    declared REST operations on the retrieval tier that owns the store
+    connection. Adding them is configuration on two profiles rather than a new
+    workload.
+  authority_boundary: The interface reads. It holds no authority over retrieval, composition, clearance, or the store, and it SHALL NOT reach a document the retrieval filter would withhold from the same requester.
+  evidence: [docs/road-map.yaml rel11.5, srd016 R1-R8]
+  migration_impact: >-
+    The three routed panels the shell carries today are unchanged and stay
+    reachable. The chat route gains a second column and its panel gains facet
+    controls beside the clearance selector rel11.0 already shipped. No existing
+    response field changes meaning.
+
+context: |
+  rel10.5 built the read API that turns a citation into a source. A chunk
+  identifier returned by retrieval resolves to its chunk, to the document that
+  chunk was cut out of, and to the other chunk-size versions of that document,
+  all from a second collection in the same vector store and all behind the
+  clearance filter that governs retrieval. Nothing draws it. The release closed
+  with the operations proven against a live store by a tracer and with no
+  surface an analyst can see them through.
+
+  The interface is further along than that gap suggests. The application
+  already carries a three-panel shell with declared routes, a clearance
+  selector that sends the analyst's level as a request header, a line that
+  reports the level the turn was enforced at as the server reported it rather
+  than as the client selected it, and citation chips that locate each cited
+  span inside the answer by rune offset. rel11.0 shipped all of that. What is
+  missing is the form the citations belong in, the facets beside clearance, and
+  the walk from a chip to the report behind it.
+
+  This release also owes rel12.2 an artifact. The conformance check that
+  release adds validates a brief's markdown against the ministry template, and
+  a check cannot be written against a template that does not exist. The form
+  the analyst reads is the interface representation of that template.
+  ARCHITECTURE decision 12 records that the template lives in three
+  representations -- this form, the markdown structure rel12.2 validates, and
+  the LaTeX rel14.0 renders -- and accepts the drift risk rather than building
+  a shared abstraction first.
+
+problem: |
+  A brief that cites its sources is not yet a brief a reviewer accepts. The
+  reviewer expects a ministry form with a classification banner, an originator
+  header, the bottom line first, threat activity in sections, a source
+  evaluation table, and an index of what was cited. An answer rendered as
+  paragraphs of prose with chips underneath is the same content in a shape
+  nobody in the ministry reads.
+
+  Attribution has the same gap one level down. A citation names a chunk
+  identifier. An analyst verifying an assertion does not want a nine-hundred
+  character fragment; they want the report, opened to the passage, with the
+  classification line and the endnotes that the search never indexed but a
+  reader needs. Between the chip and the report sits a join the interface has
+  no way to make today.
+
+  Both gaps are presentation, and presentation is where an access-control
+  failure is easiest to introduce. A retrieval path that filters by clearance
+  and a document path that does not is a system where the analyst reads through
+  the second path what the first withheld. The document operations enforce
+  clearance server-side, and the surface this release adds SHALL NOT acquire a
+  way around that -- not by naming its own level, not by reaching the store
+  directly, and not by reporting how much it was refused.
+
+goals:
+  - G1: Give the analyst the ministry INTSUM form as a live surface the turn fills, and define that form as a repository artifact the conformance check can later be written against.
+  - G2: Let the analyst narrow retrieval by facet -- keyword, source type, and source rating -- alongside the clearance level the surface already carries.
+  - G3: Turn a citation into its source, showing the chunk, the whole parent report, and the other versions of it, from the read API rel10.5 built.
+  - G4: Serve documents to the browser through the boundary that establishes clearance, so the presentation path enforces exactly what the retrieval path enforces.
+  - G5: Prove the release in a browser against a seeded mesh at two clearance levels, rather than asserting the panels render.
+
+requirements:
+  R1:
+    title: The INTSUM surface inside the panel shell
+    items:
+      - R1.1: The INTSUM surface SHALL be the chat route rendered as two columns -- the tasking, its facets, and the turn history on one side, and the ministry form on the other -- rather than a fourth routed panel, because the form is what one turn produces and not a separate destination.
+      - R1.2: The observability and provisioning routes SHALL remain reachable and SHALL render as they do today, so this release adds a surface without altering the ones an operator already uses.
+      - R1.3: Any panel this release adds or renames SHALL be declared in the interface configuration the deployment serves and mounted by the application's panel registry, because a panel present in one and absent from the other renders nothing instead of failing. The configuration is the only route table (srd004 R7).
+      - R1.4: The surface SHALL collapse to a single column below a declared viewport width, with the form reachable rather than clipped, so a narrow window degrades the layout and not the content.
+  R2:
+    title: The ministry template artifact
+    items:
+      - R2.1: The ministry INTSUM template SHALL exist as a versioned artifact in the repository, declaring structure alone and carrying no content, no example text, and no formatting the renderer owns.
+      - R2.2: The artifact SHALL declare the classification banner, the date-time-group and originator header, the bottom line up front, the threat-activity sections, the Admiralty source-evaluation table, the gaps and outlook sections, and the citation index.
+      - R2.3: The artifact SHALL be the interface representation of the template that ARCHITECTURE decision 12 records, and it SHALL state that the markdown structure rel12.2 validates and the LaTeX rel14.0 renders are separate representations of the same template.
+      - R2.4: The form SHALL render its sections from that artifact rather than from a section list written into a component, so the two cannot disagree about what the template contains.
+      - R2.5: The artifact SHALL carry a version identifier, because rel12.2 validates briefs against a named template version rather than against whatever the repository holds at the time.
+  R3:
+    title: The form fills from the turn
+    items:
+      - R3.1: Every field the form fills SHALL trace to data the turn response carries, through a declared contract that maps response fields onto template fields.
+      - R3.2: No field SHALL be filled by inference the response does not support. A section the turn produced nothing for SHALL render empty rather than plausible.
+      - R3.3: A degraded turn, an unattributed turn, and a turn that composed nothing SHALL each render the form with its sections and without content, so a reader sees that the turn produced no brief rather than seeing a brief that says nothing.
+      - R3.4: The source-evaluation table SHALL be populated from the Admiralty source-reliability and information-credibility values the composed chunks carry, and a source whose rating the corpus does not declare SHALL render as ungraded rather than as unrated blank.
+      - R3.5: The citation index SHALL list each cited source once with the assertions it supports, so a brief citing one chunk many times indexes one entry.
+      - R3.6: The classification banner SHALL show the highest clearance level among the composed sources, and SHALL NOT show the level the requester holds, because the banner marks the document and not the reader.
+  R4:
+    title: Retrieval facets
+    items:
+      - R4.1: The surface SHALL carry keyword, source-type, and source-rating facets beside the clearance selector the application already renders.
+      - R4.2: A facet SHALL reach retrieval as a constraint the store applies before the vector search, by the query mechanism srd010 R2 established for clearance, rather than as a filter over results the search already returned. The source-type and source-rating facets constrain the record metadata; the keyword facet constrains the chunk text through the store's document filter, because the served records carry no keyword vocabulary in their metadata and the store evaluates no substring operator over metadata fields.
+      - R4.3: A facet SHALL narrow what retrieval admits and SHALL NOT widen it. No facet SHALL raise the clearance level, relax the clearance filter, or reach a source the unfaceted turn could not.
+      - R4.4: A turn with no facet selected SHALL behave as the turn does today, so the facets are additive to the request contract rather than a new required shape.
+      - R4.5: The facet vocabularies SHALL be read from the corpus the deployment serves rather than written into the application, so a corpus with different source types offers different facets without a rebuild.
+  R5:
+    title: The document read boundary
+    items:
+      - R5.1: The four read operations SHALL be served over HTTP by the retrieval tier as an identifier-in boundary beside the vector-in boundary it already serves, over the document collection srd017 R8.1 places in the same store.
+      - R5.2: The browser SHALL reach those operations through the chatbot request boundary, because srd010 R3.1 derives the analyst's clearance from the authenticated request context at that boundary and a path that bypasses it has no authenticated level to enforce.
+      - R5.3: The clearance applied to a document read SHALL be derived exactly as the chat turn's is, and SHALL NOT be a parameter the request names, a field the client composes, or a value any model output can reach.
+      - R5.4: The operations SHALL be declared REST operations against the store the retrieval path already queries. This release SHALL NOT add a document database, and SHALL NOT expose the store to the browser directly.
+      - R5.5: A read whose clearance filter cannot be applied SHALL be refused rather than served unfiltered, matching srd010 R4.2 rather than degrading to an open read.
+      - R5.6: Lineage SHALL reach the client parsed, so the interface reconstructs the chunk-to-document relationship without rejoining against the store and without parsing a metadata encoding the store happens to use.
+      - R5.7: An identifier the requester is not cleared for SHALL be answered as absent rather than as refused, because a refusal distinguishable from a miss tells the requester the document exists.
+  R6:
+    title: The provenance walk
+    items:
+      - R6.1: A citation in the form SHALL resolve to the chunk it was computed against, to the parent document of that chunk, and to the other chunk-profile versions of that document.
+      - R6.2: The parent document SHALL be shown whole, including the segments the build marked unsearchable, because the classification line and the endnote tail are part of what an analyst reads even though the search never indexed them.
+      - R6.3: The chunk's character span SHALL locate the chunk inside the parent document, so a reader sees which passage of the report the assertion rests on.
+      - R6.4: Repeated citations of one chunk SHALL collapse to a single node carrying the assertions that cite it, so the walk shows the sources a brief drew on rather than one node per citation.
+      - R6.5: A document above the viewer's clearance SHALL render nothing at all, matching what the read operations return, and the walk SHALL NOT display a node for a document whose content it could not fetch.
+      - R6.6: Where a document carries cross-tier derivation, the walk SHALL show what it was derived from, so a rumour that a report was written over resolves to that report.
+  R7:
+    title: The enforced-clearance line
+    items:
+      - R7.1: The surface SHALL show the level the turn was enforced at, read from the response, so a requested level the deployment does not declare reads as the level that actually applied.
+      - R7.2: The surface SHALL NOT show the count, the identifiers, or the content of documents withheld by the clearance filter, extending srd010 R5.3 from the audit record to the interface for the reason that requirement gives.
+      - R7.3: The surface SHALL NOT display a figure from which a withheld count is recoverable by subtraction, such as a matched-document total shown beside a returned total.
+  R8:
+    title: Evidence
+    items:
+      - R8.1: The release SHALL be proven by a browser tracer that extends the existing interface integration target rather than by a separate harness, so one target remains the interface evidence.
+      - R8.2: The tracer SHALL run the same tasking at two clearance levels against a seeded mesh, asserting that the cleared analyst reaches a document above the lower level through the walk and that the uncleared analyst reaches nothing for it through any of the four operations.
+      - R8.3: The tracer SHALL assert rendered content -- form sections filled, facets applied, the walk resolved -- rather than asserting that requests returned successfully.
+      - R8.4: The committed interface bundle SHALL reproduce from the committed sources in the same change that alters them, because the existing reproduction check runs inside the consistency target and a bundle rebuilt in a later commit fails it.
+
+non_goals:
+  - Author the rel11.5 use case or its test suite. Those are the next documentation unit of this release.
+  - Validate a brief's markdown against the template. R2 defines the artifact; the structural check that reads it is srd012 and rel12.2.
+  - Render the template to PDF or define its LaTeX representation. That is srd013 and rel14.0, and ARCHITECTURE decision 12 records the three representations as separate.
+  - Change what retrieval returns, how it ranks, or what the composition provider is asked for. R4 narrows the candidate set through the existing filter mechanism and asserts nothing about relevance.
+  - Change the ordered clearance set, where a level comes from, or when the filter runs. srd010 owns all three, and R5.3 places the document path behind that enforcement rather than adding one.
+  - Introduce a document database, a store connection in the browser, or an export path out of the surface. srd017 R8.1 settles the first two and rel14.0 owns the third.
+  - Specify component structure, styling, or a state-management approach for the application.
+  - Author an editing workflow over the filled form. The analyst edit the VISION requires is the input to rel14.0's export, and this release renders the form rather than making it editable.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: The chat route renders as two columns with the form beside the tasking, the observability and provisioning routes are unchanged and reachable, any added panel is declared in the served interface configuration and mounted by the panel registry, and a narrow viewport collapses to one column with the form still reachable.
+    traces: [R1.1, R1.2, R1.3, R1.4]
+  - id: AC2
+    criterion: A versioned template artifact exists declaring the eight named sections and nothing else, it states its relationship to the markdown and LaTeX representations, and the form renders its sections from that artifact rather than from a list held in a component.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5]
+  - id: AC3
+    criterion: Every filled field traces to response data through a declared contract; a section with no data renders empty; a degraded, unattributed, or uncomposed turn renders section headings without content; the source-evaluation table carries the Admiralty values of the composed chunks with an undeclared rating shown as ungraded; the citation index lists each source once; and the banner marks the composed material rather than the reader.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5, R3.6]
+  - id: AC4
+    criterion: Keyword, source-type, and source-rating facets reach retrieval as pre-search metadata constraints, no facet raises clearance or widens the admitted set, a turn with no facet selected behaves as it does today, and the facet vocabularies come from the served corpus.
+    traces: [R4.1, R4.2, R4.3, R4.4, R4.5]
+  - id: AC5
+    criterion: The four read operations are served by the retrieval tier over the document collection and reached through the chatbot request boundary; the clearance is derived as the chat turn's is and cannot be named by the request; no document database is added and the browser never reaches the store; an inapplicable filter refuses the read; lineage arrives parsed; and an uncleared identifier is answered as absent rather than as refused.
+    traces: [R5.1, R5.2, R5.3, R5.4, R5.5, R5.6, R5.7]
+  - id: AC6
+    criterion: A citation resolves to its chunk, its parent document shown whole including unsearchable segments, and the other profile versions; the character span locates the chunk in the document; repeated citations of one chunk collapse to one node; a document above the viewer's level renders nothing; and cross-tier derivation is shown where the document carries it.
+    traces: [R6.1, R6.2, R6.3, R6.4, R6.5, R6.6]
+  - id: AC7
+    criterion: The enforced level is shown as the server reported it, no withheld count or identifier or content appears anywhere in the surface, and no pair of displayed figures yields a withheld count by subtraction.
+    traces: [R7.1, R7.2, R7.3]
+  - id: AC8
+    criterion: The browser tracer extends the existing interface integration target, runs one tasking at two clearance levels asserting reachability and unreachability of an over-clearance document across all four operations, asserts rendered content rather than request status, and the committed bundle reproduces from the committed sources in the same change.
+    traces: [R8.1, R8.2, R8.3, R8.4]
+
+depends_on:
+  # R5 serves the four operations srd017 R8.4 declares, over the document
+  # collection R8.1 places in the retrieval store, under the clearance parity
+  # R8.7 requires. R6.2 shows the unsearchable segments R1 preserves and R6.3
+  # locates a chunk by the span R5 records.
+  - srd_id: srd017-real-demo-corpus
+    symbols_used: [R1, R5, R8]
+  # R5.2 and R5.3 take the clearance origin from R3.1 and the fail-closed read
+  # from R4.2. R4.2 applies the pre-search filter mechanism R2 established, and
+  # R7.2 extends the suppressed-count bar R5.3 places on the audit record.
+  - srd_id: srd010-clearance-gated-retrieval
+    symbols_used: [R2, R3, R4, R5]
+  # R2 defines the interface representation of the template whose markdown
+  # representation srd012 validates. The two are separate by ARCHITECTURE
+  # decision 12 and R2.3 records that.
+  - srd_id: srd012-brief-markdown-conformance
+    symbols_used: [R1, R2]
+  # R3 fills the form from the response metadata srd002 R3 and R4 define, and
+  # R1 extends the panel shell and its route declarations from srd002 R5.
+  - srd_id: srd002-chatbot-agent
+    symbols_used: [R3, R4, R5]
+  # R5.1 adds the identifier-in boundary beside the vector-in query boundary
+  # srd001 R2 defines, inside the same read-only retrieval authority.
+  - srd_id: srd001-rag-server-agent
+    symbols_used: [R2]
+  # R3.4 reads the Admiralty ratings and R4.5 the facet vocabularies from the
+  # corpus manifest srd015 R6 declares.
+  - srd_id: srd015-corpus-build
+    symbols_used: [R6]
+
+platform_dependencies:
+  - dependency: A Chroma get operation reaching records by identifier and by metadata filter, declared as a REST operation on the retrieval profile the way the query operation is.
+    rationale: >-
+      R5.1 serves documents from the store without a vector. The operation is
+      declared in application YAML against a path the store already exposes, so
+      it needs no upstream change; the dependency is recorded because a runtime
+      that cannot bind a body of identifiers would move the boundary rather than
+      the requirement.
+  - dependency: The machine_request server binding that already serves the chat and query endpoints, for the document endpoints R5.1 and R5.2 add.
+    rationale: >-
+      The endpoints are additional declarations on profiles that already carry
+      servers. Nothing about the binding changes.
+
+implementation_status:
+  planned:
+    - >-
+      rel11.5, documentation: this document and the use case and test suite that
+      follow it.
+    - >-
+      rel11.5, template and contract: the versioned template artifact (R2) and
+      the declared mapping from a turn response onto its fields (R3).
+    - >-
+      rel11.5, serving: the identifier-in read boundary on the retrieval tier,
+      its proxy at the chatbot request boundary, and the clearance parity that
+      governs both (R5).
+    - >-
+      rel11.5, surface: the two-column layout (R1), the facets and their
+      transport (R4), the filled form (R3), the provenance walk (R6), and the
+      enforced-clearance line (R7).
+    - >-
+      rel11.5, evidence: the browser tracer at two clearance levels and the
+      bundle reproduction that rides with it (R8).
+  already_present:
+    - >-
+      The clearance selector, the request header that carries the level, and the
+      enforced-level line rel11.0 shipped. R4.1 adds facets beside the selector
+      and R7 states what the line may show; neither rebuilds what exists.
+    - >-
+      The citation chips that locate a cited span in the answer by rune offset.
+      R6 walks from a chip to its source rather than replacing it.
+    - >-
+      The four read operations and their clearance enforcement, proven against a
+      live store by the rel10.5 tracer. R5 serves them over HTTP and adds no
+      read semantics.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Problem["Problem: a cited brief is not a ministry form, a chunk id is not a source an analyst can read, and a document path that skips the clearance filter reads what retrieval withheld"] --> Goals["Goals: Two-Panel INTSUM Interface"]
+      Goals --> R1["R1: The surface inside the panel shell"]
+      Goals --> R2["R2: The ministry template artifact"]
+      Goals --> R3["R3: The form fills from the turn"]
+      Goals --> R4["R4: Retrieval facets"]
+      Goals --> R5["R5: The document read boundary"]
+      Goals --> R6["R6: The provenance walk"]
+      Goals --> R7["R7: The enforced-clearance line"]
+      Goals --> R8["R8: Evidence"]
+      R1 --> AC1["AC1: two columns on the chat route, other routes unchanged, routes declared twice, narrow viewport collapses"]
+      R2 --> AC2["AC2: versioned structure-only artifact, eight sections, form renders from it"]
+      R3 --> AC3["AC3: every field traced, empty rather than plausible, ratings carried, index deduplicated"]
+      R4 --> AC4["AC4: pre-search facets that narrow only, unfaceted turn unchanged, vocabulary from the corpus"]
+      R5 --> AC5["AC5: retrieval-tier reads through the chatbot boundary, clearance underivable from the request, absent rather than refused"]
+      R6 --> AC6["AC6: citation to chunk to whole document to versions, span located, duplicates collapsed, over-clearance renders nothing"]
+      R7 --> AC7["AC7: enforced level shown, no withheld count by display or by subtraction"]
+      R8 --> AC8["AC8: browser tracer at two levels asserting rendered content, bundle reproduces in the same change"]
+    ```
+  read_path: |
+    ```mermaid
+    flowchart TD
+      Browser["Analyst browser"] -->|"tasking, facets, clearance header"| Chatbot["chatbot request boundary"]
+      Browser -->|"chunk or document identifier"| Chatbot
+      Chatbot -->|"clearance from authenticated context (srd010 R3.1)"| RagQuery["rag-server vector-in boundary"]
+      Chatbot -->|"same clearance, identifier-in"| RagDocs["rag-server identifier-in boundary"]
+      RagQuery -->|"where filter ahead of the search"| Retrieval["retrieval collection"]
+      RagDocs -->|"get by ids or metadata, no vector"| Documents["document collection"]
+      Retrieval --> Store["one vector store (srd017 R8.1)"]
+      Documents --> Store
+    ```

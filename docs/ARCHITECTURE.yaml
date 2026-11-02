@@ -1,0 +1,753 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: architecture-cohere-demo
+title: "cohere-demo Architecture: Sovereign Intelligence Synthesis via an Additive Cohere Provider"
+
+capability_classification:
+  ownership: agent-owning
+  module_status: implemented
+  agents_contributed: 5
+  composition_wrappers: [corpus-ingest, applier]
+
+overview:
+  summary: |
+    The application is an on-premise intelligence-synthesis assistant (see
+    VISION): an analyst poses a tasking and receives a first-draft command-staff
+    brief in which every assertion cites the source document it came from. The
+    assistant is a program of declarative agents on the agent-core runtime. A
+    browser-facing chatbot agent runs a request-scoped turn: it embeds the tasking
+    once, routes it to a chat model, fans the embedding out to one or more RAG
+    server agents, composes the answer prompt from the surviving sources through
+    command-state selectors, and answers. Each RAG server agent serves a vector-in
+    query against a Chroma collection. A corpus-ingest agent seeds those
+    collections from a document directory under model control.
+
+    The Cohere provider is additive on this mesh. Rather than modifying the
+    running Ollama agents, it enters as a new REST client (Embed, Rerank, Chat), a
+    new model tier that composes the brief with Command, and a rerank-augmented,
+    clearance-gated retrieval path. The DefTech controls map onto four points of
+    that path: clearance is a hard metadata pre-filter before retrieval, so an
+    over-clearance document is never a candidate; retrieval reorders candidates
+    with Cohere Rerank and may augment them through an approved-domain-only OSINT
+    lookup; Command composes the brief with the retrieved documents as first-class
+    input and returns a citation span per assertion, which the turn surfaces as
+    structured source metadata rather than scraping brackets from the answer text;
+    and a structural conformance check confirms the brief matches the ministry
+    template before it reaches the analyst. The models deploy inside the customer
+    boundary in production; the demonstration runs the same API against the hosted
+    trial endpoint, and only the client base URL differs.
+
+    Runtime ownership stays with agent-core. That project provides the agent
+    binary, the state-machine engine, the REST client and server tools, the
+    machine_request binding, the monitor, the checkpoint store, and the container
+    image. The application provides the YAML programs, the user interface, the Helm
+    chart, and the documents. Operators run each agent as the agent-core image with
+    a mounted profile: `agent --profile /profiles/agents/<name>/profile.yaml`.
+
+    This architecture covers the data plane and the control plane. The control plane
+    -- the `provisioning-workflow-orchestrator` actor assuming Executor / Workflow Orchestrator, the
+    `creator` actor assuming Creator / Instance Manager and Agent Owner / Agent
+    Lifecycle Manager, and the provisioning surface -- is release rel05.0. Release
+    rel06.0 realizes the provisioning surface through the `applier` actor, which
+    assumes Executor / Actuation Agent (srd006).
+
+  turn_flow_diagram: |
+    ```mermaid
+    flowchart LR
+      U[Browser SPA] -->|tasking + analyst clearance| CB[Chatbot agent]
+      CB -->|embed tasking| EMB[Cohere Embed]
+      CB -->|tier selector -> chat-LLM word| TS[$tool tier selector]
+      CB -->|clearance-filtered, fan out embedding| R0[RAG server 0]
+      CB -->|clearance-filtered, fan out embedding| R1[RAG server 1]
+      R0 -->|query_embeddings + clearance filter| CH0[(Chroma collection 0)]
+      R1 -->|query_embeddings + clearance filter| CH1[(Chroma collection 1)]
+      R0 --> RR1[Cohere Rerank #1: RAG candidates]
+      R1 --> RR1
+      CB -->|allowlisted domains| WEB[OSINT search tool]
+      WEB --> RR2[Cohere Rerank #2: search results]
+      RR1 --> RRF[Cohere Rerank #3: fusion over union -> top-N]
+      RR2 --> RRF
+      RRF -->|documents=surviving chunks| CMD[Cohere Command compose]
+      CMD -->|citation span per assertion| CITE[Structured source metadata]
+      CITE --> TMPL{Template conformance check}
+      TMPL -->|conforms| MD[Ministry-template brief markdown]
+      MD -->|analyst edits in SPA| EXP[Exporter agent: md-to-tex -> LaTeX]
+      EXP --> PDF[Command-staff brief PDF]
+      ING[Corpus-ingest agent] -->|seed clearance-tagged docs| CH0
+      CB -.->|monitor SSE / traceparent| OBS[Observability + collector query]
+    ```
+    The Ollama tier remains available unchanged; the Cohere Embed, the three
+    Cohere Rerank passes, and the Cohere Command stage, the clearance filter, the
+    OSINT search tool, the conformance check, and the exporter are the additive
+    provider path. Retrieval runs two branches -- the clearance-filtered RAG
+    fan-out and the allowlisted OSINT search -- each reranked on its own, then a
+    fusion rerank reorders the union on one relevance scale before composition.
+
+demo_workflow:
+  summary: |
+    The demonstration runs one analyst tasking end to end. Each stage lands on a
+    Cohere model and proves one DefTech success criterion, so a claim in the
+    VISION becomes something the panel watches happen. The generation turn is one
+    request-scoped run on the chatbot state machine; retrieval and clearance
+    enforcement stay on the rag-server; document rendering is a separate exporter
+    agent the analyst triggers after editing the draft. The Cohere provider enters
+    as tools, REST references, and states on the existing machine, not as new
+    orchestrators -- the additive thesis the mesh is built to show.
+  component_rule: |
+    A request-scoped step that shares the turn's trust context and command state
+    is a tool on the chatbot machine. A capability is promoted to its own agent
+    only when it owns durable state (a corpus), must be independently deployed or
+    secured (retrieval, document rendering), or carries a heavyweight isolable
+    dependency. Embed, the three reranks, the OSINT search, Command composition,
+    citation surfacing, and the conformance check are tools on the chatbot.
+    Retrieval with clearance enforcement is the rag-server. Clearance tagging is
+    corpus-ingest at build time. PDF rendering is the exporter agent.
+  steps:
+    - step: 1
+      name: Embed the tasking
+      component: chatbot
+      tool: embed_query (rest_client_invoke)
+      rest_ref: cohere_embed (POST /v2/embed)
+      machine: reuse the Embedding state, repointed from the Ollama embedding to Cohere Embed.
+      criterion: Retrieval quality begins with the same embedding family that seeded the corpus.
+    - step: 2
+      name: Clearance pre-filter
+      component: rag-server
+      tool: rag_query extended with a Chroma where metadata filter
+      rest_ref: Chroma query
+      machine: The chatbot carries the analyst's maximum clearance from the authenticated request context into rag_query; the rag-server applies it as a hard metadata filter before the vector search, so an over-clearance document is never a candidate.
+      criterion: Zero unauthorized cross-clearance retrievals. Enforcement is on the serving agent, not the orchestrator, so it holds even if the orchestrator over-selects.
+    - step: 3
+      name: RAG fan-out and rerank one
+      component: chatbot
+      tool: cohere_rerank_rag (rest_client_invoke)
+      rest_ref: reranker.rerank, the Cohere provider library (POST /v2/rerank)
+      machine: New RerankingRag state after the fan-out join; reranks the clearance-filtered RAG candidates within the vector-retrieved set.
+      criterion: Recall. Rerank lifts relevant documents that embedding retrieval left below the cutoff.
+    - step: 4
+      name: OSINT search and rerank two
+      component: chatbot
+      tool: osint_search (rest_client_invoke, egress allowlist); cohere_rerank_search (rest_client_invoke)
+      rest_ref: allowlisted OSINT host; reranker.rerank, the Cohere provider library (POST /v2/rerank)
+      machine: New Searching state runs the allowlisted search tool; new RerankingSearch state reranks its results on their own, trimming the long noisy tail before the fusion pass.
+      criterion: External augmentation restricted to DefTech-approved domains; a request to any other host is dropped and logged.
+    - step: 5
+      name: Fusion rerank
+      component: chatbot
+      tool: cohere_rerank_fused (rest_client_invoke)
+      rest_ref: reranker.rerank, the Cohere provider library (POST /v2/rerank)
+      machine: New RerankingFused state reranks the union of the two reranked branches against the tasking, producing the cross-source top-N.
+      criterion: Vector distance, search rank, and rerank score are incomparable scales; a final rerank re-scores everything on one relevance scale, so the top-N passed to Command is a principled fusion rather than a score merge.
+    - step: 6
+      name: Compose the brief with Command
+      component: chatbot
+      tool: invoke_cohere_command added to the Answering tier vocabulary
+      rest_ref: cohere_chat (POST /v2/chat with a documents list)
+      machine: invoke_cohere_command joins invoke_llm_fast and invoke_llm_deep as a selectable chat-LLM word; Command composes the brief as ministry-template markdown with the top-N passed as documents and returns a citations array of assertion span to source id.
+      criterion: First-draft time and full attribution. Command becomes a third tier word, so the Ollama and Cohere paths are one selector flip apart -- the additive change made literal.
+    - step: 7
+      name: Surface citations and check conformance
+      component: chatbot
+      tool: parse_citations (parse_structured); check_conformance (parse_structured against the template schema)
+      rest_ref: none
+      machine: New SurfacingCitations state reads the citations array into structured source metadata, replacing the UI bracket-scraping heuristic; new CheckingConformance state validates the markdown structure against the ministry template, flagging a brief that fails rather than presenting it as final.
+      criterion: Full attribution and at least ninety-five percent template conformance without manual reformatting.
+    - step: 8
+      name: Export to PDF
+      component: exporter
+      tool: md_to_tex (exec), render_pdf (exec)
+      rest_ref: none
+      machine: Analyst-triggered after editing the reviewed markdown in the SPA. The exporter converts the approved markdown to a .tex document with md-to-tex, renders it to PDF with a LaTeX engine, and returns the PDF. Runs off the generation turn's latency and after the human edit the VISION requires.
+      criterion: A ministry-conformant PDF a reviewer approves, produced from the edited draft rather than the raw generation.
+  degrade_paths:
+    - condition: OSINT search disabled or the deployment is air-gapped.
+      behavior: The Searching and RerankingSearch states are skipped and the fusion rerank collapses to the RAG rerank result; the turn runs retrieval-only and degrades safely.
+    - condition: Search returns empty or a non-allowlisted host is requested.
+      behavior: The request is dropped and logged; the fusion collapses to the RAG branch.
+    - condition: A rerank pass errors on either branch.
+      behavior: That branch falls back to its pre-rerank order; the turn does not fail.
+    - condition: The exporter LaTeX render fails.
+      behavior: The exporter rolls back its temporary files and reports failure; the approved markdown brief remains available for re-export.
+  latency_tunable: |
+    The three-pass cascade (rerank each branch, then rerank the union) costs three
+    Rerank calls. Collapsing to a single fusion rerank over the raw union is a
+    supported simplification that trades the noisy-tail trim of the per-branch
+    passes for lower latency. The demonstration keeps the three-pass version to
+    show Rerank earning its place; production may tune it.
+
+interfaces:
+  - name: --profile
+    summary: |
+      agent-core CLI argument pointing at a profile.yaml under this application.
+      Each mesh agent runs as the agent-core image with a mounted profile path.
+  - name: chatbot chat REST endpoint
+    summary: |
+      The browser SPA posts a chat request to the chatbot's machine_request chat
+      endpoint; the turn machine runs one request-scoped sentence and maps the
+      terminal output to the HTTP response.
+  - name: RAG server query endpoint
+    summary: |
+      A vector-in machine_request endpoint that accepts query_embeddings and
+      returns chunks with embedding-model metadata. The chatbot is its client.
+  - name: monitor and trace surfaces
+    summary: |
+      Each agent exposes a monitor read-state and SSE stream (agent-core srd033);
+      the chatbot proxies them same-origin. Request-scoped spans propagate
+      W3C traceparent (agent-core srd016) and export to an OTel collector and
+      the collector query surface for the cross-agent waterfall.
+  - name: Cohere provider client
+    summary: |
+      A REST client the chatbot and the Cohere-backed retrieval path bind to reach
+      the Cohere API: embeddings (POST /v2/embed), reranking (POST /v2/rerank), and
+      grounded composition (POST /v2/chat with a documents list, returning a
+      citations array of assertion span to source id). The base URL is configurable
+      -- the hosted trial endpoint for the demonstration, a private in-boundary
+      deployment in production -- and the bearer credential is read from
+      COHERE_API_KEY. Egress is allowlisted to the configured Cohere host.
+  - name: OSINT search tool
+    summary: |
+      The retrieval-augmentation search client the chatbot invokes as the second
+      retrieval branch (demo_workflow step 4). Its egress allowlist is a fixed list
+      of DefTech-approved OSINT domains; a request to any other host is dropped and
+      logged. Its results are reranked on their own before the fusion rerank folds
+      them into the RAG branch. In an air-gapped deployment the tool is disabled and
+      the turn runs retrieval-only, degrading safely.
+  - name: exporter export endpoint
+    summary: |
+      A machine_request endpoint on the exporter agent that accepts an approved
+      brief markdown document and returns a rendered PDF. The exporter binds no
+      model, retrieval, or Cohere client, and a NetworkPolicy denies its egress; it
+      is reachable only from the chatbot or the SPA export action.
+
+role_realization_alignment:
+  authority: applications/docs/specs/semantic-models/agent-role-realizations.yaml
+  language_rule: |
+    Actors and profiles assume or realize canonical roles; they are not role
+    definitions. Helm names identify workloads and deployment instances and
+    inherit the mounted profile's bindings.
+  decisions:
+    - current_actor: chatbot
+      implemented_responsibility: Route, retrieve, compose, answer, and host the browser request boundary.
+      canonical_role_sub_role: Planner / Intent Handler; Executor / Workflow Orchestrator; Knowledge Manager / Recommendation Generator.
+      retained_or_proposed_name: Retain descriptive multi-role actor `chatbot`.
+      authority_boundary: Selects declared words and trusted topology only; no lifecycle or deployment authority.
+      evidence: [agents/chatbot/request-machine.yaml, docs/specs/software-requirements/srd002-chatbot-agent.yaml]
+      migration_impact: None.
+    - current_actor: rag-server
+      implemented_responsibility: Serve ranked chunks from one configured corpus through a vector-in query boundary.
+      canonical_role_sub_role: Knowledge Manager / Recommendation Generator.
+      retained_or_proposed_name: Retain descriptive serving actor `rag-server`.
+      authority_boundary: Read-only retrieval; no ingest, answer, lifecycle, or transport-authority decision.
+      evidence: [agents/rag-server/request-machine.yaml, docs/specs/software-requirements/srd001-rag-server-agent.yaml]
+      migration_impact: None; values-named RAG units are deployment instances.
+    - current_actor: corpus-ingest
+      implemented_responsibility: Parameterize and package the catalog corpus-ingest closure for the mesh.
+      canonical_role_sub_role: Inherited Knowledge Manager / Ontology Manager.
+      retained_or_proposed_name: Retain descriptive wrapper `corpus-ingest`.
+      authority_boundary: Mesh owns parameters and packaging; catalog owns the canonical implementation.
+      evidence: [agents/corpus-ingest/profile.yaml, agents/creator/request-declarations.yaml]
+      migration_impact: None; it runs as a creator-launched child and has no Helm workload.
+    - current_actor: provisioning-workflow-orchestrator
+      implemented_responsibility: Sequence optional ingestion and rollout requests and aggregate their terminal result.
+      canonical_role_sub_role: Executor / Workflow Orchestrator; not Coordinator.
+      retained_or_proposed_name: Use `provisioning-workflow-orchestrator`; implemented in GH-1077.
+      authority_boundary: No deployment, child-process, synchronization, conflict-resolution, negotiation, or consensus authority.
+      evidence: [agents/provisioning-workflow-orchestrator/request-machine.yaml, helm/templates/provisioning-workflow-orchestrator.yaml]
+      migration_impact: GH-1077 migrated profile, Helm, SRD, integration, packaging, release, and compatibility paths together.
+    - current_actor: creator
+      implemented_responsibility: Launch an ingest child, drive decided rollout operations, and verify health and state.
+      canonical_role_sub_role: Creator / Instance Manager and Agent Owner / Agent Lifecycle Manager.
+      retained_or_proposed_name: Retain `creator`; instance realization is an implemented primary responsibility.
+      authority_boundary: Sole deployment-API client; acts on decided values and does not orchestrate the end-to-end intent.
+      evidence: [agents/creator/request-machine.yaml, helm/templates/creator.yaml]
+      migration_impact: None.
+    - current_actor: applier
+      implemented_responsibility: Validate, actuate, verify, and roll back a decided deployment values document.
+      canonical_role_sub_role: Executor / Actuation Agent and Change Manager.
+      retained_or_proposed_name: Retain descriptive actor/workload `applier`; Applier is not a canonical role.
+      authority_boundary: Creator-only caller; authors no desired state and receives no runtime transport authority.
+      evidence: [../declarative-agents/applications/catalog/agents/applier/apply-machine.yaml, agents/applier/exec-declarations.yaml, helm/templates/applier.yaml]
+      migration_impact: Documentation alignment only.
+    - current_actor: collector
+      implemented_responsibility: Receive, inspect, spool, and optionally relay bounded OTLP trace batches.
+      canonical_role_sub_role: Monitor / Telemetry Collector.
+      retained_or_proposed_name: Retain compatible descriptive actor `collector`.
+      authority_boundary: Trace intake only; contrib retains metrics and Dolt scraping during migration.
+      evidence: [agents/collector/machine.yaml, helm/templates/collector.yaml]
+      migration_impact: None; distinguish profile-backed, contrib, and metrics workloads.
+    - current_actor: observer
+      implemented_responsibility: Discover mesh agents from the Kubernetes API and poll each agent's monitor surface to serve a fleet-level view.
+      canonical_role_sub_role: Monitor / Fleet Observer.
+      retained_or_proposed_name: Retain descriptive actor `observer`.
+      authority_boundary: Read-only over kube pod listing and agent monitor surfaces; no lifecycle, deployment, configuration, or trace-intake authority.
+      evidence: [agents/observer/machine.yaml, agents/observer/declarations.yaml, helm/templates/observer.yaml]
+      migration_impact: None.
+    - current_actor: chatbot (Cohere provider path)
+      implemented_responsibility: Embed with Cohere Embed, rerank with Cohere Rerank, compose the brief with Cohere Command, and surface its returned citations, as an additive tier within the existing turn.
+      canonical_role_sub_role: Planner / Intent Handler; Executor / Workflow Orchestrator; Knowledge Manager / Recommendation Generator -- the same bindings the chatbot already assumes.
+      retained_or_proposed_name: No new actor. The Cohere provider is a REST client and a model tier the chatbot binds; the clearance-gated, rerank-augmented retrieval is an additive path on the rag-server Knowledge Manager / Recommendation Generator.
+      authority_boundary: Selects declared words and trusted topology only; reaches only the allowlisted Cohere host and approved OSINT domains; holds no lifecycle or deployment authority.
+      evidence: [docs/VISION.yaml, docs/ARCHITECTURE.yaml]
+      migration_impact: Additive; the existing Ollama tier and retrieval agents are unchanged.
+    - current_actor: exporter
+      implemented_responsibility: Convert an approved brief markdown document to PDF through md-to-tex and a LaTeX engine, in a sandboxed, network-denied container.
+      canonical_role_sub_role: Executor / Actuation Agent -- a stateless transform actuated on a request, holding no desired state.
+      retained_or_proposed_name: New descriptive actor/workload exporter; Exporter is not a canonical role.
+      authority_boundary: Chatbot-or-SPA caller only; binds no model, retrieval, or Cohere client; a NetworkPolicy denies egress; binds md-to-tex and the LaTeX engine as sandboxed exec words.
+      evidence: [docs/ARCHITECTURE.yaml]
+      migration_impact: Additive; a new agent alongside the mesh, changing no existing agent.
+
+components:
+  - name: chatbot agent
+    path: agents/chatbot/
+    responsibility: |
+      Run the request-scoped turn: embed once, select a chat-LLM word
+      word through a $tool classifier, fan the embedding out to the configured RAG
+      servers, thread each source through command-state $from() selectors, compose
+      the answer prompt from the surviving chunks, and answer. Degrade to a
+      mapped 200 when a source fails or rejects the embedding.
+  - name: RAG server agent
+    path: agents/rag-server/
+    responsibility: |
+      Serve a persistent vector-in retrieval service. Accept a query_embeddings
+      request, query the configured Chroma collection, and return chunks with
+      embedding-model metadata. The Chroma REST config is owned inline here.
+  - name: Cohere provider client
+    path: agents/chatbot/ (additive REST client and tier)
+    responsibility: |
+      Reach the Cohere API for embeddings, reranking, and grounded composition.
+      Embed the tasking (/v2/embed); rerank candidates (/v2/rerank) in three passes
+      -- the RAG branch, the OSINT search branch, and a fusion over their union
+      (see demo_workflow steps 3 to 5), all against one cohere_rerank REST
+      reference with per-state inputs; and compose the brief (/v2/chat) with the
+      top-N passed as documents so Command returns a citation span per assertion.
+      Base URL configurable for the hosted trial versus a private in-boundary
+      deployment; bearer credential from COHERE_API_KEY; egress allowlisted. The
+      provider is additive and does not modify the existing Ollama tier.
+  - name: clearance pre-filter
+    path: agents/rag-server/ and agents/corpus-ingest/ (additive metadata path)
+    responsibility: |
+      Enforce per-clearance access before retrieval. The ingest agent tags each
+      document with a clearance level; the retrieval query carries the analyst's
+      maximum clearance and filters the collection to documents at or below it, so
+      an over-clearance document is never a retrieval candidate. This is a
+      structural pre-filter, not a post-hoc redaction of results.
+  - name: OSINT search tool
+    path: agents/chatbot/ (additive search-and-rerank branch)
+    responsibility: |
+      The second retrieval branch (demo_workflow step 4). Search external OSINT
+      restricted to a fixed allowlist of DefTech-approved domains; a request to any
+      other host is dropped and logged. Rerank the search results on their own
+      before the fusion rerank folds them into the RAG branch. Disabled in an
+      air-gapped deployment, where the fusion collapses to the RAG branch and the
+      turn runs retrieval-only.
+  - name: markdown export and template conformance
+    path: agents/chatbot/ (additive composition target and post-composition validation)
+    responsibility: |
+      Command composes the brief as ministry-template markdown, and a structural
+      conformance check confirms that markdown matches the ministry template before
+      it is surfaced, so briefs conform without manual reformatting. A brief that
+      fails the check is flagged rather than presented as final. The markdown is the
+      turn's output; the exporter renders the approved, edited markdown to PDF.
+  - name: structured citation surfacing
+    path: agents/chatbot/ and agents/chatbot/ui/
+    responsibility: |
+      Read the citation spans Command returns and expose them as structured source
+      metadata on the turn, replacing the UI's bracket-scraping extractSources
+      heuristic so every assertion links to the source document it came from.
+  - name: exporter agent
+    path: agents/exporter/
+    responsibility: |
+      Render an approved, analyst-edited brief markdown to PDF. A request-scoped
+      machine converts the markdown to a .tex document with md-to-tex, renders it to
+      PDF with a LaTeX engine, and returns the PDF, rolling back its temporary files
+      on failure. It binds md-to-tex and the LaTeX engine as sandboxed exec words,
+      binds no model, retrieval, or Cohere client, and a NetworkPolicy denies its
+      egress -- isolating a heavyweight rendering toolchain off the request hot path,
+      the same pattern the applier uses for its helm and kubectl exec words.
+  - name: scenario Critic realizations
+    path: agents/chatbot/tests/ and agents/rag-server/tests/
+    responsibility: |
+      Evaluate scenario outputs through the application-local
+      `chatbot-turn-critic` and `rag-query-critic` profiles. The single-turn and
+      degraded-RAG directories configure different scopes of the same chatbot
+      actor; they do not define separate roles. Both actors bind Critic / Output
+      Evaluator. Only the isolated single-turn topology also binds Sandbox
+      Validator because it proves an undeclared URL-shaped source cannot escape
+      the controlled mock boundary. The catalog `scenario-critic` discovers,
+      composes, and reduces these critics without becoming their implementation
+      owner.
+  - name: corpus-ingest agent
+    path: agents/corpus-ingest/ wrapper; <catalog_root>/agents/knowledge-manager/corpus-ingest/ canonical build input
+    responsibility: |
+      Seed a Chroma collection from a document directory: the canonical library
+      machine lists trusted paths, the model selects among them, and the machine
+      embeds each document and threads its vector into Chroma. The mesh owns only
+      the wrapper and corpus-rest endpoint/model/collection parameterization;
+      packaging embeds the resolved canonical closure for runtime use.
+  - name: provisioning-workflow-orchestrator actor
+    path: agents/provisioning-workflow-orchestrator/
+    responsibility: |
+      Assumes Executor / Workflow Orchestrator for the control plane (srd004). Bind a provisioning intent
+      the chatbot delegates to a request-scoped run, sequence the ingestion and
+      reconfiguration through declared requests to the creator, decide the values
+      patch, and aggregate status. Hold no deployment-API authority.
+  - name: creator actor
+    path: agents/creator/
+    responsibility: |
+      Assumes Creator / Instance Manager and Agent Owner / Agent Lifecycle Manager
+      for the control plane (srd005). Realize a decided
+      instance operation by driving the deployment API, verify the instance's health
+      through a rollout read, and report back. The only agent that declares a
+      deployment-API client; it alone holds that authority.
+  - name: applier actor
+    path: agents/applier/
+    responsibility: |
+      Assumes Executor / Actuation Agent for the deployment plane (srd006): the declarative agent that
+      realizes the deployment API (srd003 R4) the creator drives and the panel reads.
+      Its request-machine writes the decided values patch, validates it against the
+      chart schema with a helm dry-run, applies it as an atomic rollout, verifies the
+      rollout, and rolls back on failure -- binding the helm and kubectl CLIs in its
+      container as exec words. Authenticated apart from chat by a NetworkPolicy. It
+      replaces the standard-library Go provisioner.
+  - name: collector actor
+    path: agents/collector/
+    responsibility: |
+      Assumes Monitor / Telemetry Collector for the staged declarative OTLP trace
+      path (srd007). The persistent
+      machine receives bounded trace batches, spools them before optional relay,
+      preserves integration identity, and exports its own telemetry only to file.
+      The contrib collector remains for metrics and Dolt scraping. Profile, intake,
+      relay, self-loop, and Helm evidence are implemented; complete listener and
+      monitor lifecycle proof remains planned.
+  - name: observer actor
+    path: agents/observer/
+    responsibility: |
+      Assumes Monitor / Fleet Observer for the demo and operational plane
+      (srd008). The persistent machine discovers mesh agent pods from the
+      Kubernetes API by label selector, polls each agent's monitor endpoints
+      (machine spec, state, tools, events), and serves a fleet-level UX showing
+      the cast list and live state. Holds read-only authority; no lifecycle,
+      deployment, or configuration commands.
+  - name: user interface
+    path: agents/chatbot/ui/
+    responsibility: |
+      The single-page application (chat, observability, trace, and provisioning
+      panels) and its UX config. Rendered into the deployed agents from the Helm
+      chart. The provisioning panel delegates an intent to the provisioning-workflow-orchestrator.
+  - name: Helm chart
+    path: helm/
+    responsibility: |
+      Deploy the mesh as one chart: the chatbot Deployment and Service, a
+      values-driven list of RAG pairs each rendering a RAG server and a Chroma
+      store, an in-cluster Ollama model tier, a Dolt checkpoint backend, and an
+      the canonical catalog collector with a spool query surface. Co-generate the chatbot client config,
+      user interface, and N-RAG fan-out from the values.
+  - name: GCP deployment footprint
+    path: infra/gcp/
+    responsibility: |
+      Declare everything the mesh needs on Google Cloud as Terraform this
+      repository owns (#813). Modules hold resource shapes: an Autopilot
+      cluster with Secret Manager sync, Artifact Registry remote repositories
+      that pull ghcr.io and Docker Hub images through GCP, the telemetry
+      bucket and its Workload Identity binding, and Secret Manager secrets
+      readable by the application namespace alone. Environment roots
+      (envs/dev, envs/prod) compose the same modules and differ only in
+      lifecycle choices; a bootstrap root creates the state bucket they keep
+      their state in and the chatbot's reserved address. Each environment's
+      exposure root (envs/<env>/exposure) composes the exposure module after
+      the release applies: a Gateway on that address, a Certificate Manager
+      certificate, an HTTPRoute to the chatbot, IAP on the chatbot backend,
+      and who IAP admits (#885). The chart renders no ingress layer on GKE.
+      The load balancer cannot remove the x-goog-* headers the Google front
+      end and IAP add, so the GKE overlay names them and every public chatbot
+      route declares them (#883); no cloud-provider header reaches
+      agent-core's allowlist. No secret value ever enters Terraform. The Terraform
+      runner and GCP helpers that apply it live in magefiles/
+      (gcp_terraform_runner.go, gcp_cloud.go): no GCP code depends on
+      declarative-agents, which supplies only the apprig deploy machine.
+  - name: documentation
+    path: docs/
+    responsibility: |
+      Own the application's vision, architecture, road map, and specification corpus
+      (software requirements, use cases, test suites).
+
+design_decisions:
+  - id: 1
+    title: Application composition on a shared runtime
+    decision: |
+      The application runs on the published agent-core image. Agents are YAML
+      profiles the runtime loads. Corpus ingest references the canonical
+      applications/catalog program; other agents remain application-local.
+      Platform requirements are cited externally.
+    benefits:
+      - Reusable corpus-ingest fixes have one canonical home.
+      - The application demonstrates that agent behavior is configuration on a
+        reusable runtime.
+      - Runtime changes stay covered by agent-core's own gates.
+  - id: 2
+    title: The mesh owns its Chroma retrieval config
+    decision: |
+      The RAG server owns its Chroma REST config inline. The corpus-ingest
+      wrapper supplies application REST/model/collection values while selecting
+      the canonical library machine, tools, and declarations.
+    benefits:
+      - Application endpoints and collection identity stay mesh-owned.
+      - Trusted discovery and ingest behavior do not fork from the library.
+  - id: 3
+    title: A served UI lives under its serving agent
+    decision: |
+      Each user interface this mesh owns lives beneath the agent whose
+      `static_assets` binding serves it -- the single-page application at
+      `agents/chatbot/ui/` -- per the eng02-agent-ui-placement guideline
+      (GH-1316). The observer is the exception that proves the rule: its fleet
+      view is a platform UI, so its binding selects the bundle compiled into
+      agent-core by name and the mesh carries no observer UI files (GH-737).
+      The deployment chart stays top-level under `helm/`, rather than under
+      `deploy/`.
+    benefits:
+      - A reader finds an interface beside the agent that owns and serves it.
+      - The chart and the profiles it deploys live in one project.
+  - id: 4
+    title: Co-generation stays, for now
+    decision: |
+      The Helm chart renders the chatbot client config, user interface, and
+      N-RAG fan-out from the values. The packaged profile copies are the local
+      integration source; the render overrides them in the cluster. Inverting this
+      so the profile is the source is a separate follow-up.
+    benefits:
+      - The move is an extraction, not a redesign.
+      - One source (the values) drives the deployed topology and client config.
+  - id: 5
+    title: The Cohere provider enters additively
+    decision: |
+      The Cohere stack is added as a new REST client, a new model tier, and an
+      additive retrieval path, without editing the running Ollama agents. The
+      existing tier remains selectable and unchanged.
+    benefits:
+      - A new provider is a governed, reviewable change traceable to a requirement.
+      - The demonstration proves the additive-change thesis the mesh is built to show.
+      - The Ollama baseline stays available for comparison and offline runs.
+    alternatives_rejected:
+      - Replacing the Ollama tier in place, which would couple the provider change to the running agents and lose the additive property.
+  - id: 6
+    title: Clearance is a pre-retrieval gate, not a redaction
+    decision: |
+      Documents carry a clearance tag at ingest, and retrieval filters the corpus
+      to the analyst's authorization before the vector search runs. An
+      over-clearance document is never a candidate.
+    benefits:
+      - Cross-clearance isolation is structural, so access-control testing can prove zero unauthorized retrievals.
+      - No sensitive content is embedded in a prompt and then hidden after the fact.
+    alternatives_rejected:
+      - Retrieving unfiltered and redacting or reranking-out over-clearance results, which leaks their existence and depends on the model behaving.
+  - id: 7
+    title: Native Command citations replace bracket scraping
+    decision: |
+      The turn surfaces the citation spans Cohere Command returns as structured
+      source metadata, rather than scraping bracketed tokens out of the answer
+      text as the current SPA extractSources heuristic does.
+    benefits:
+      - Attribution is a property of the answer, not a regex over free text a small model may not emit.
+      - Every assertion links to a source document, satisfying full-attribution.
+    alternatives_rejected:
+      - Keeping the bracket-scraping heuristic, which mislabels correctly-cited turns as unattributed when the model omits inline brackets.
+  - id: 8
+    title: Rerank earns its place in the path
+    decision: |
+      Retrieval reorders the embedding-retrieved candidates with Cohere Rerank
+      before composition, trading a small added latency for a recall lift.
+    benefits:
+      - The top-N passed to Command surfaces the documents an analyst would have found, supporting the recall criterion.
+      - Composition reads a tighter, higher-precision document set.
+    alternatives_rejected:
+      - Embedding-only retrieval, which leaves relevant documents below the cutoff on multi-source taskings.
+  - id: 9
+    title: Hosted trial for the demonstration, private deployment in production
+    decision: |
+      The demonstration runs the Cohere API against the hosted trial endpoint; the
+      base URL is a configuration point that repoints to a private, in-boundary
+      deployment with no change to the application logic.
+    benefits:
+      - The proof of concept runs the real Cohere models without provisioning an enclave.
+      - The sovereignty requirement is met by a base-URL swap, stated openly rather than hidden.
+    alternatives_rejected:
+      - Claiming an on-premise deployment in the demonstration, which would misrepresent what the proof of concept runs.
+  - id: 10
+    title: Cascade rerank over two retrieval branches
+    decision: |
+      Retrieval runs two branches -- the clearance-filtered RAG fan-out and the
+      allowlisted OSINT search. Each branch is reranked on its own, then a third
+      fusion rerank reorders the union against the tasking to produce the top-N
+      passed to Command. All three passes call one cohere_rerank REST reference.
+    benefits:
+      - The fusion rerank re-scores incomparable sources on one relevance scale, so cross-source ordering is principled rather than a merge of vector distance against search rank.
+      - The per-branch rerank trims the noisy OSINT tail before it competes with the RAG candidates.
+      - Rerank appears three times in one turn, which makes its contribution legible in the demonstration.
+    alternatives_rejected:
+      - Merging the two branches by score, which compares incomparable scales and lets one source dominate for the wrong reason.
+      - A single fusion rerank over the raw union, which is a supported latency simplification but loses the per-branch tail trim; recorded as a tunable rather than the default.
+  - id: 11
+    title: PDF rendering is an isolated exporter agent
+    decision: |
+      PDF delivery is a dedicated exporter agent that converts approved markdown to
+      PDF through md-to-tex and a LaTeX engine, in a sandboxed, network-denied
+      container, triggered by the analyst after editing the draft.
+    benefits:
+      - The heavyweight LaTeX toolchain and its CVE surface stay out of the request-serving container and off the generation turn's latency.
+      - Export runs after the human edit the VISION requires, on the reviewed markdown rather than the raw generation.
+      - The isolation mirrors the applier precedent, so the mesh keeps one pattern for exec-bound, boundary-secured agents.
+    alternatives_rejected:
+      - An exec tool on the chatbot, which puts the LaTeX toolchain on the request hot path and widens the serving container's attack surface.
+  - id: 12
+    title: The ministry template is duplicated three ways for the demonstration
+    decision: |
+      The ministry template exists in three representations: the SPA layout the
+      analyst reads and edits, the markdown structure the conformance check
+      validates, and the LaTeX template md-to-tex renders. The demonstration accepts
+      this duplication.
+    benefits:
+      - Each representation serves a distinct consumer without a shared abstraction to build first, keeping the demonstration scope bounded.
+      - The tradeoff is stated openly, so a reviewer sees the drift risk rather than discovering it.
+    alternatives_rejected:
+      - Single-sourcing all three from one template definition, which is the correct end state but is recorded as a post-demonstration follow-up rather than a blocker for the workflow.
+
+technology_choices:
+  - component: Agent programs
+    technology: YAML profiles on agent-core
+    purpose: The runtime loads machines, tool selections, declarations, and REST
+      config; agent behavior stays configuration.
+  - component: Retrieval
+    technology: Chroma
+    purpose: Vector store the RAG servers query and the ingest agent seeds.
+  - component: Models
+    technology: Ollama
+    purpose: Embedding and chat models, external by default and promotable to an
+      in-cluster tier by the chart. The Ollama baseline tier.
+  - component: Provider models
+    technology: Cohere Command, Embed, and Rerank
+    purpose: The additive provider tier. Command composes the brief with documents
+      as first-class input and returns per-assertion citations; Embed produces
+      retrieval embeddings; Rerank lifts retrieval precision. Chosen because the
+      stack deploys inside the customer boundary (sovereign, air-gapped) and
+      returns model-native citations -- constraints a hosted-only provider cannot
+      meet architecturally.
+  - component: Brief rendering
+    technology: md-to-tex and a LaTeX engine (xelatex or tectonic)
+    purpose: The exporter agent converts approved brief markdown to a .tex document
+      and renders it to PDF. Run as sandboxed exec words in a network-denied
+      container so the rendering toolchain stays off the request path.
+  - component: Checkpoint backend
+    technology: Dolt
+    purpose: Versioned-SQL checkpoint persistence for resume across restarts.
+  - component: Observability
+    technology: Canonical collector agent with spool query surface
+    purpose: Per-agent monitor streams and the cross-agent trace waterfall.
+  - component: Deployment
+    technology: Helm
+    purpose: One chart deploys the mesh with values-driven RAG pairs and an
+      in-cluster model tier.
+
+project_structure:
+  configuration:
+    - path: agents/
+      role: The chatbot, RAG server, and corpus-ingest agent programs.
+    - path: agents/exporter/
+      role: The exporter agent program that renders approved brief markdown to PDF.
+    - path: agents/chatbot/ui/
+      role: The single-page application and UX config.
+    - path: helm/
+      role: The deployment chart.
+    - path: infra/gcp/
+      role: The GCP footprint as Terraform; modules, environment roots, and the state-bucket bootstrap.
+  documentation:
+    - path: docs/VISION.yaml
+      role: Goals, boundaries, and success criteria.
+    - path: docs/ARCHITECTURE.yaml
+      role: Components, interfaces, and decisions.
+    - path: docs/road-map.yaml
+      role: The application's own release plan.
+    - path: docs/specs/software-requirements/
+      role: srd001 rag-server, srd002 chatbot, srd003 deployment.
+    - path: docs/specs/use-cases/
+      role: The data-plane use cases the releases deliver.
+    - path: docs/specs/test-suites/
+      role: The test suites that validate the use cases.
+    - path: README.md
+      role: The decisions record and the standalone-program framing.
+
+implementation_status:
+  current_focus: The application is a self-governing, standalone program. The data
+    plane and the control plane are both implemented here, the control plane's
+    ingest-to-grounded-turn lifecycle proven against a real cluster by mage
+    integration:controlPlaneLive.
+    The additive Cohere provider is implemented through rel10.4: the Command
+    composition tier, structured citations, the rerank pass, the embedding tier,
+    and the corpus build with cached embeddings. Clearance-gated retrieval
+    (rel11.0), the approved-domain lookup, and template conformance (rel12.2) are
+    specified here and remain the active work.
+  progress:
+    - done: The data-plane mesh (RAG server, chat turn, routing, fan-out,
+        observability, Helm deployment, in-cluster model tier) is implemented, with
+        the agents, UX, chart, and specs in this directory.
+    - done: The application's own magefile audit and integration entries (chroma,
+        rag-server, chatbot, helm smoke/swap/llm-tier, control plane).
+    - done: The scenario-critic rig discovers application-local
+        chatbot-turn-critic and rag-query-critic realizations, retains scenario
+        scope in their paths/configuration, and records those identities in
+        runtime verdicts.
+    - done: The control-plane provisioning-workflow-orchestrator (srd004) and creator (srd005), realized
+        as mage integration:controlPlane (rel05.0, deterministic, driving a fake
+        deployment API).
+    - done: The creator corpus-ingest child endpoint and count-delta checks
+        (srd005 R3.1), covered independently from integration:controlPlane.
+    - done: One live integration that joins an ingest-carrying provisioning
+        intent, the request-draining rollout, and a grounded turn from the newly
+        added source, realized as mage integration:controlPlaneLive (rel05.0).
+    - done: The rel07.0 collector profile, bounded intake and spool rig, unchanged
+        relay identity, self-loop exclusion, staged Helm trace switch, and retained
+        contrib metrics evidence.
+    - planned: Collector lifecycle proof that exits a blocked await, releases and
+        rebinds receiver, control, and monitor listeners, and records final monitor
+        state.
+    - done: The applier deployment surface (srd006) that replaces the Go
+        provisioner. mage integration:applier drives every declared apply and
+        rollout terminal against recording helm and kubectl, while mage
+        integration:applierLive proves real on-cluster apply and rollback.
+    - planned: The Cohere provider client and model tier that compose a brief with
+        Command and surface its returned citations as structured source metadata,
+        with retrieval reranked by Cohere Rerank -- additive over the Ollama tier.
+    - planned: The clearance pre-filter that tags documents at ingest and filters
+        retrieval to the analyst's authorization, with an access-control proof
+        recording zero cross-clearance retrievals.
+    - planned: The OSINT search tool and the template-conformance check, and an
+        evaluation over labeled taskings for the recall and citation-coverage
+        numbers.
+    - planned: The cascade rerank over two retrieval branches -- the RAG fan-out and
+        the OSINT search each reranked, then a fusion rerank over their union
+        producing the top-N passed to Command.
+    - planned: The markdown-export composition target and the exporter agent that
+        renders approved, analyst-edited brief markdown to PDF through md-to-tex and a
+        LaTeX engine in a sandboxed, network-denied container.
+
+related_documents:
+  - doc: docs/VISION.yaml
+    purpose: The DefTech sovereign-synthesis goals, boundaries, and measurable
+      success criteria this architecture implements.
+  - doc: docs/road-map.yaml
+    purpose: The application's release plan.
+  - doc: docs/specs/software-requirements/srd001-rag-server-agent.yaml
+    purpose: The RAG server agent requirements (relocated, renumbered).
+  - doc: docs/specs/software-requirements/srd002-chatbot-agent.yaml
+    purpose: The chatbot agent requirements (relocated, renumbered).
+  - doc: docs/specs/software-requirements/srd003-chatbot-deployment.yaml
+    purpose: The deployment requirements (relocated, renumbered), including the
+      provisioning authority boundary (R4).
+  - doc: docs/specs/software-requirements/srd004-provisioning-workflow-orchestrator.yaml
+    purpose: The provisioning-workflow-orchestrator agent requirements (control plane).
+  - doc: docs/specs/software-requirements/srd005-creator.yaml
+    purpose: The creator agent requirements (control plane).
+  - doc: docs/specs/software-requirements/srd006-applier.yaml
+    purpose: The applier agent requirements (deployment plane) that replace the Go provisioner.
+  - doc: README.md
+    purpose: The decisions record and standalone-program framing.

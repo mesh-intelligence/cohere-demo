@@ -1,0 +1,38 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the Ollama provider, claiming these behaviors:
+# - POST /api/embeddings: the embed_query REST word maps $.embedding.
+# - POST /api/chat: adapter chatResp shape {message:{role,content},...}.
+# The chat route is a script, and order is what makes this scenario work: the
+# source selector calls it first, the tier selector second. The mock repeats its
+# last response, so a third call would also read as the tier selection.
+routes:
+  - method: POST
+    path: /api/embeddings
+    responses:
+      - status: 200
+        body:
+          embedding: [0.11, 0.22, 0.33, 0.44]
+
+  - method: POST
+    path: /api/chat
+    responses:
+      # First call: the source selector keeps both declared sources, so the
+      # documents list the Cohere word composes over carries two entries.
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: '{"names":["rag0","rag1"]}'
+          eval_count: 4
+          prompt_eval_count: 12
+      # Second call: the tier selector routes the tasking to the Cohere word.
+      # This is what puts the turn on the path under test; without it the turn
+      # answers on an Ollama word and the brief comparison fails.
+      - status: 200
+        body:
+          message:
+            role: assistant
+            content: "[tool_call]\n{\"tool\":\"invoke_cohere_command\",\"parameters\":{}}\n[/tool_call]"
+          eval_count: 6
+          prompt_eval_count: 14

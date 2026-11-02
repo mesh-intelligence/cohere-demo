@@ -1,0 +1,90 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The types of exec-declarations.yaml's tools (srd065).
+kind: tool-declaration
+schema_version: 1
+unit: applier-exec-declarations-types
+types:
+  - name: HelmDryRunOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: HelmGetValuesOutput
+    schema:
+      properties:
+        applier:
+          type: object
+        chatbot:
+          type: object
+        llm:
+          type: object
+        ollama:
+          type: object
+        ragUnits:
+          type: array
+      type: object
+  - name: HelmRollbackOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: HelmUpgradeOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: KubectlGetRolloutCountsOutput
+    schema:
+      properties:
+        desired:
+          type: integer
+        ready:
+          type: integer
+        revision:
+          type: integer
+      required:
+        - ready
+        - desired
+        - revision
+      type: object
+  - name: KubectlRolloutPollOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object
+  - name: VerifyRolloutOutput
+    schema:
+      properties:
+        exit_code:
+          type: integer
+        output:
+          type: string
+      required:
+        - exit_code
+        - output
+      type: object

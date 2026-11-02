@@ -1,0 +1,17 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# Mock for the first declared RAG server. embedding_model matches the query
+# model declare_query_model publishes, so the srd002 R3.3 exclusion does not
+# fire and this source reaches both the grounding and the documents list.
+routes:
+  - method: POST
+    path: /api/v1/rag/query
+    responses:
+      - status: 200
+        body:
+          ids: [["rag0-doc-1"]]
+          documents: [["rag0 chunk about the rig"]]
+          distances: [[0.1]]
+          embedding_model: "embed-v4.0"
+          # The level the rag-server reports the filter ran at (srd010 R2.5).
+          clearance_enforced_at: "unclassified"

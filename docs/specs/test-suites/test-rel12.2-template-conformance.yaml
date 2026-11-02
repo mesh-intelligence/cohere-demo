@@ -1,0 +1,175 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel12.2-template-conformance
+title: Test Suite for Release 12.2 Template Conformance
+release: "12.2"
+
+traces: [rel12.2-uc001-template-conformance]
+
+preconditions:
+  - A declared ministry template schema in data form, carrying a version and distinguishing required sections from optional ones. The suite reads it rather than embedding its own copy, because a suite carrying its own schema would confirm the check against the suite instead of against the template.
+  - A conforming brief fixture and a set of malformed fixtures, each malformed in one stated way -- a missing required section, sections out of order, a required section present but empty. One defect per fixture keeps a verdict attributable to the defect that caused it.
+  - The rel10.x Cohere tiers are standing, so composition produces ministry-template markdown and the citations travel alongside it as srd009 R4 surfaces them.
+  - The scenario tiers require no credential and no network. The conformance check is a structural parse, so every case except the live composition tier runs offline.
+
+test_cases:
+  - use_case: rel12.2-uc001-template-conformance
+    name: A conforming brief passes and the verdict names the template version
+    integration_target: mage integration:conformance
+    status: implemented
+    description: The conforming fixture validates against the declared schema, the verdict passes, and it names the version it was evaluated against. A verdict with no version cannot be read once the template changes, which is when an old verdict is most likely to be consulted.
+    expected:
+      verdict: pass
+      template_version_named_in_verdict: true
+      brief_surfaced_to_analyst: true
+    traces:
+      - rel12.2-uc001-template-conformance S1
+      - srd012-brief-markdown-conformance AC3
+      - srd012-brief-markdown-conformance AC2
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: A brief missing a required section fails and the verdict names the specific defects
+    integration_target: mage integration:conformance
+    status: implemented
+    description: Each malformed fixture fails, and the verdict names which required section is absent, which sections are out of order, or which is present but empty. A verdict reporting only that validation failed sends the analyst back to reading the whole document, which is the reformatting cost the release exists to remove.
+    expected:
+      verdict: fail
+      defect_list_names_missing_sections: true
+      defect_list_names_ordering_violations: true
+      defect_list_names_empty_required_sections: true
+      verdict_not_merely_boolean: true
+    traces:
+      - rel12.2-uc001-template-conformance S2
+      - srd012-brief-markdown-conformance AC4
+      - srd012-brief-markdown-conformance AC3
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: The failing brief is surfaced unmodified rather than repaired or presented as final
+    integration_target: mage integration:conformance
+    status: implemented
+    description: The brief the analyst receives is byte-identical to what composition produced. No section is inserted, reordered, or rewritten to make it conform, and the brief is not labelled final. This is the case that catches a well-meaning repair step, which produces a passing verdict and a document nobody wrote.
+    expected:
+      surfaced_brief_identical_to_composed_markdown: true
+      no_section_inserted_or_reordered_by_the_check: true
+      brief_not_presented_as_final: true
+      verdict_and_defects_surfaced_with_the_brief: true
+    traces:
+      - rel12.2-uc001-template-conformance S3
+      - srd012-brief-markdown-conformance AC4
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: A failed check keeps the turn and the draft, and the verdict reaches export approval
+    integration_target: mage integration:conformance
+    status: implemented
+    description: The turn answers, the analyst retains the composed draft to edit, and the verdict travels with the brief to the point where export is approved. Approving a flagged brief has to be a decision someone made with the verdict in front of them rather than one that happened because nothing blocked it.
+    expected:
+      http_status: 200
+      turn_answers: true
+      draft_retained_for_editing: true
+      verdict_travels_to_export_approval_point: true
+    traces:
+      - rel12.2-uc001-template-conformance S4
+      - srd012-brief-markdown-conformance AC4
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: The verdict is distinguishable from source and citation outcomes in response metadata
+    integration_target: mage integration:conformance
+    status: implemented
+    description: A turn carrying an excluded source, an unresolved citation, and a conformance failure reports three separable outcomes. Collapsing them into one failure field leaves an operator unable to tell a malformed brief from a retrieval problem, and the three have different remedies.
+    expected:
+      conformance_verdict_present_in_metadata: true
+      distinguishable_from_source_outcomes: true
+      distinguishable_from_citation_outcomes: true
+      three_outcomes_separable_in_one_turn: true
+    traces:
+      - rel12.2-uc001-template-conformance S5
+      - srd012-brief-markdown-conformance AC4
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: The check is deterministic and reaches no model
+    integration_target: mage integration:conformance
+    status: implemented
+    description: The same brief validated repeatedly yields the same verdict and the same defect list, and the check issues no provider call while running. Determinism is what makes a verdict reproducible for a reviewer and summable into a rate, and a model call would forfeit both while looking like it worked.
+    expected:
+      repeated_validation_yields_identical_verdict: true
+      repeated_validation_yields_identical_defect_list: true
+      no_provider_call_issued_by_the_check: true
+      check_declared_as_structural_parse: true
+    traces:
+      - rel12.2-uc001-template-conformance S6
+      - srd012-brief-markdown-conformance AC3
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: Every composed brief is checked and the conformance rate is computed from the verdicts
+    integration_target: mage integration:conformance
+    status: implemented
+    description: A run over a batch of briefs produces one verdict per brief with none skipped, and the reported rate is the fraction passing rather than a figure estimated from a sample. The briefs that fail are the ones a sample is most likely to miss, which is why the population measurement is the requirement.
+    expected:
+      verdict_count_equals_brief_count: true
+      no_brief_skipped: true
+      rate_computed_as_passing_fraction: true
+      rate_not_sampled_or_estimated: true
+    traces:
+      - rel12.2-uc001-template-conformance S7
+      - srd012-brief-markdown-conformance AC3
+      - srd012-brief-markdown-conformance AC5
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: The checked markdown is what composition produced against a configuration-supplied template
+    integration_target: mage integration:cohere
+    status: implemented
+    description: A live composition returns ministry-template markdown, the template structure reaches composition as declared configuration rather than as prose inside a machine, the structured citations travel alongside the markdown, and no state between composition and the check alters the section structure. This covers the composition target established at rel10.0 whose own suite left it unasserted.
+    expected:
+      http_status: 200
+      composed_output_is_ministry_template_markdown: true
+      template_supplied_as_declared_configuration: true
+      citations_travel_alongside_the_markdown: true
+      no_downstream_state_reconstructs_structure: true
+      skips_without_credential: true
+      skip_names_variable: COHERE_API_KEY
+    traces:
+      - rel12.2-uc001-template-conformance S8
+      - srd012-brief-markdown-conformance AC1
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: The schema is versioned data describing structure without rendering concerns
+    integration_target: mage integration:conformance
+    status: implemented
+    description: The declared schema carries a version, marks each section required or optional, and contains no font, spacing, or page-geometry field. A brief omitting an optional section passes, which is the assertion that separates a genuine optional marking from one the check ignores.
+    expected:
+      schema_is_data_not_code: true
+      schema_carries_a_version: true
+      required_and_optional_sections_distinguished: true
+      brief_omitting_optional_section_passes: true
+      no_rendering_fields_present_in_schema: true
+    traces:
+      - rel12.2-uc001-template-conformance S9
+      - srd012-brief-markdown-conformance AC2
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: A conformant brief is never described as approved, verified, or reviewed
+    integration_target: mage integration:conformance
+    status: implemented
+    description: No interface string and no metadata field renders a passing verdict as approval, verification, or review, and the conformance claim states what it does not assert. A brief with every section present and a false assertion in it passes, so a reader who hears "verified" has been told something the check cannot support.
+    expected:
+      no_approval_language_in_interface_strings: true
+      no_approval_language_in_response_metadata: true
+      claim_disclaims_accuracy_and_support: true
+      claim_disclaims_citation_resolution: true
+    traces:
+      - rel12.2-uc001-template-conformance S10
+      - srd012-brief-markdown-conformance AC5
+
+  - use_case: rel12.2-uc001-template-conformance
+    name: The markdown schema is the sole authority for conformance and the drift follow-up stays recorded
+    integration_target: mage integration:conformance
+    status: implemented
+    description: The verdict derives from the markdown schema alone, with neither the interface layout nor the export template consulted, and the architecture still records single-sourcing the three representations as an open follow-up. A follow-up quietly marked resolved is how three representations drift without anyone deciding to let them.
+    expected:
+      verdict_derives_from_markdown_schema_only: true
+      interface_layout_not_consulted: true
+      export_template_not_consulted: true
+      single_sourcing_recorded_as_open_follow_up: true
+    traces:
+      - rel12.2-uc001-template-conformance S11
+      - srd012-brief-markdown-conformance AC6

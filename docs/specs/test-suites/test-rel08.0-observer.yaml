@@ -1,0 +1,197 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel08.0-observer
+title: Test Suite for Release 08.0 Observer Agent
+release: "08.0"
+
+traces: [rel08.0-uc001-mesh-observer]
+
+preconditions:
+  - agent-core REST client get, REST server launch, await, and stop words are available.
+  - The observer profile mounts a ServiceAccount with namespace-scoped pod list/get RBAC.
+  - At least the chatbot and one RAG server are running in the demo cluster.
+
+test_cases:
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer profile validates
+    integration_target: mage audit
+    status: implemented
+    description: The observer profile loads and every action, signal, declaration, REST client, REST server route, and monitor route validates. Boot smoke passes.
+    expected:
+      profile_loads: true
+      machine_validates: true
+      rest_definitions_validate: true
+      boot_smoke_passes: true
+    traces: [rel08.0-uc001-mesh-observer S1, srd008-observer-agent AC1]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer discovers mesh agent pods on the demo cluster
+    integration_target: mage demo:up
+    status: done
+    description: |
+      On the running demo cluster the observer discovers its agent pods through
+      the kubectl-proxy sidecar, which holds the pod's service-account token. The
+      discovery result carries pod names, addresses, and each pod's monitor-port
+      label. Only agent pods are selected: the release selector is composed with
+      the monitor-port label so the Dolt and Chroma StatefulSets, which serve no
+      monitor surface, are excluded. Discovery follows membership, tracking pod
+      replacement and a Deployment scaled to zero and back.
+    expected:
+      chatbot_discovered: true
+      rag_server_discovered: true
+      discovery_by_label_selector: true
+      infrastructure_pods_excluded: true
+      membership_follows_pod_churn: true
+    traces: [rel08.0-uc001-mesh-observer S1, srd008-observer-agent AC1]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer serves four monitor fan-in joins and survives degraded discovery
+    integration_target: mage integration:observer
+    status: done
+    description: |
+      The observer's monitor fan-in is four MachineSpec for_each passes, one per
+      monitor endpoint, each expanding a single-request read word over the
+      discovered pods. The profile validates that grammar at load, and the served
+      /monitor/fleet view carries all four join labels beside the discovery
+      labels. With the kube client pointed at a non-routable address the pod list
+      never resolves, so the fan-in records nothing and the cycle still proceeds
+      to metrics, waits, and exits cleanly rather than failing.
+    expected:
+      four_join_labels_served: true
+      one_request_per_dispatch: true
+      degraded_discovery_does_not_fail_cycle: true
+      per_item_counts_consistent: true
+      clean_lifecycle_exit: true
+    traces: [rel08.0-uc001-mesh-observer S2, srd008-observer-agent AC2]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer polls agent monitor endpoints and aggregates fleet data
+    integration_target: mage integration:helmSmoke
+    status: implemented
+    description: |
+      Helm smoke reads the in-cluster observer and proves each of the four joins
+      contains every discovered agent exactly once with AgentMonitorRead, HTTP
+      200, and the pod's selected authority. It then gives only the observer an
+      authorized but unserved monitor port and proves every other member remains
+      reachable while a complete later cycle advances through metrics.
+    expected:
+      machine_spec_returned: true
+      current_state_returned: true
+      tools_returned: true
+      events_returned: true
+      unreachable_agent_degraded: true
+      one_item_per_discovered_pod: true
+      per_pod_monitor_port_resolved: true
+    traces: [rel08.0-uc001-mesh-observer S2, srd008-observer-agent AC2]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Fleet UX renders a card per pod from the four fan-in joins
+    integration_target: mage integration:helmSmoke
+    status: done
+    description: |
+      The observer's machine zips the four monitor fan-in joins into one card
+      per discovered pod, joining them on the pod name each item carries. A pod
+      whose state read failed renders unreachable while the others render
+      normally, even though the join counts every dispatched item as succeeded.
+      Absent or unavailable joins yield the empty fleet view rather than an
+      exception. Helm smoke proves the fan-in data live against the deployed
+      observer. The rendering itself is the ui-kit's fleet panel, whose own
+      suite covers it upstream: this mesh serves the bundle compiled into
+      agent-core and holds no copy to test (srd008 R3.6, GH-737).
+    expected:
+      card_per_pod: true
+      machine_tools_state_events_mapped: true
+      pod_name_keys_resource_lookup: true
+      failed_state_read_renders_unreachable: true
+      absent_joins_degrade_to_empty: true
+    traces: [rel08.0-uc001-mesh-observer S2, rel08.0-uc001-mesh-observer S3, srd008-observer-agent AC3]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Fleet UX serves and displays agent cards
+    integration_target: mage demo:up
+    status: done
+    description: |
+      The observer UX is reachable at http://observer.cohere-demo.localhost/, which redirects
+      to /ui/ and serves the Fleet Observer bundle from the externalized asset
+      ConfigMap. The fleet payload behind it carries the four fan-in joins the
+      cards read, one item per discovered agent. Rendering those joins into cards
+      is covered by the observer UI tests; this case covers the served surface.
+    expected:
+      ux_reachable: true
+      auto_refresh: true
+      served_from_external_asset_configmap: true
+    traces: [rel08.0-uc001-mesh-observer S2, rel08.0-uc001-mesh-observer S3, srd008-observer-agent AC3]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer RBAC is namespace-scoped and read-only
+    go_test: go test ./magefiles -run '^TestObserverRBACRender$'
+    status: implemented
+    description: The rendered Helm template creates a Role (not ClusterRole) with only get and list verbs on pods, services, deployments, and metrics.k8s.io pod metrics in the release namespace.
+    expected:
+      role_not_cluster_role: true
+      verbs_get_list_only: true
+      resources_pods_services_deployments_podmetrics: true
+      namespace_scoped: true
+    traces: [rel08.0-uc001-mesh-observer S5, srd008-observer-agent AC5]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer discovers topology and the UX groups pods by Deployment and Service
+    integration_target: mage demo:up
+    status: done
+    description: The retained demo observation proves the observer lists the release Deployments and Services alongside pods; the grouping of each pod under its owning Deployment and fronting Service is the ui-kit topology panel's, covered by its own suite upstream (GH-737). Configuration uses declarations and flags with no new environment variable. This case stays manual rather than attributing topology equality to Helm smoke, whose automated observer proof currently covers pods and fan-in.
+    expected:
+      deployments_discovered: true
+      services_discovered: true
+      pods_grouped_by_deployment: true
+      no_new_environment_variable: true
+    traces: [rel08.0-uc001-mesh-observer S6, srd008-observer-agent AC6]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer shows per-pod resource usage and degrades when metrics are absent
+    integration_target: mage integration:helmSmoke
+    status: implemented
+    description: |
+      Helm smoke installs pinned test-only metrics-server and proves every
+      discovered agent has populated CPU and memory. Summing container
+      quantities into pod totals and the absent-metrics state are the ui-kit
+      panel's, covered upstream; the persistent demo retains the degraded view
+      where topology and fan-in render while cards show "metrics unavailable".
+    expected:
+      cpu_and_memory_per_pod: true
+      metrics_unavailable_state_when_absent: true
+      discovery_unaffected_by_metrics_failure: true
+    traces: [rel08.0-uc001-mesh-observer S7, srd008-observer-agent AC7]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Observer lifecycle exit stops cleanly
+    integration_target: mage integration:observer
+    status: implemented
+    description: A lifecycle exit request stops the discovery loop, monitor, and control servers. The observer reaches terminal Done.
+    expected:
+      discovery_stopped: true
+      monitor_stopped: true
+      terminal_state_done: true
+    traces: [rel08.0-uc001-mesh-observer S4, srd008-observer-agent AC4]
+
+  - use_case: rel08.0-uc001-mesh-observer
+    name: Fleet updates during a deterministic live chat turn
+    integration_target: mage integration:helmSwap
+    status: implemented
+    description: |
+      Helm swap holds the actual answer-model request open and proves newer
+      in-cluster observer state and event entries before rollout, while the
+      chatbot and rag0 remain reachable. The chatbot answer-path tuple must
+      remain in its fleet entry. Rag activity accepts that query tuple when it
+      remains in the bounded recent-event window; after eviction, the shared
+      collector must retain a post-baseline chatbot trace carrying the completed
+      `execute_tool rag_query` span. The held answer boundary follows that tool,
+      so reaching both proves the selected RAG request returned.
+      The observer fan-in iteration and reachability still have to advance, so
+      durable trace evidence supplements rather than replaces the fleet proof.
+    expected:
+      chatbot_state_advanced: true
+      chatbot_answer_path_event: true
+      rag_query_proven: true
+      rag_query_event_or_trace_after_eviction: true
+      both_agents_reachable: true
+    traces: [rel08.0-uc001-mesh-observer S3, srd008-observer-agent AC3]

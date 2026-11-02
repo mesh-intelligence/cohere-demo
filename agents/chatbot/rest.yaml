@@ -1,0 +1,1212 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: rest-definition
+schema_version: 1
+rest:
+  version: v1
+  auth:
+    none:
+      type: none
+    # The Cohere credential is resolved at request time from the named environment variable and never appears in this profile, a machine, a prompt, a log line, or an exported span (srd009 R1.3).
+    cohere_bearer:
+      type: bearer
+      token_ref: COHERE_API_KEY
+  limits:
+    # The Cohere host, scheme, and port are deployment-supplied and move together with the client's base_url below (srd009 R1.2, R1.4).
+    cohere_provider:
+      # 60s, deliberately far under the 200s request budget: a provider that stalls rather than refusing must give the turn back while the invoke_llm_fast fallback (max_time 120) still fits inside the endpoint bound -- 60 + 120 = 180 < 200.
+      timeout: 60s
+      read_timeout: 60s
+      max_request_bytes: 1048576
+      max_response_bytes: 4194304
+      redirect:
+        mode: none
+      network:
+        schemes: ["${COHERE_SCHEME:-https}"]
+        hosts: ["${COHERE_HOST:-api.cohere.com}"]
+        # Block sequence, unquoted, and deliberately not a flow sequence: this file is also read unexpanded by the packaging and model-resolution tests, and a ${...} reference inside [ ] is not valid YAML.
+        ports:
+          - ${COHERE_PORT:-443}
+    cohere_agentic:
+      # The revision's agentic search (GH-611): the proposal call and the proposed-query embeds are supplementary, so a stalled provider gives the turn back after 20s rather than 60s and the turn composes over what it already holds.
+      timeout: 20s
+      read_timeout: 20s
+      max_request_bytes: 1048576
+      max_response_bytes: 4194304
+      redirect:
+        mode: none
+      network:
+        schemes: ["${COHERE_SCHEME:-https}"]
+        hosts: ["${COHERE_HOST:-api.cohere.com}"]
+        # Block sequence, unquoted, and deliberately not a flow sequence: this file is also read unexpanded by the packaging and model-resolution tests, and a ${...} reference inside [ ] is not valid YAML.
+        ports:
+          - ${COHERE_PORT:-443}
+    local_provider:
+      timeout: 130s
+      read_timeout: 130s
+      max_request_bytes: 1048576
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [11434, 18085, 18095]
+    # A document read is a store read behind a RAG unit, not a provider call.
+    local_rag_reads:
+      timeout: 15s
+      read_timeout: 15s
+      max_request_bytes: 1048576
+      max_response_bytes: 4194304
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18085, 18095]
+
+    # The OSINT search branch's egress budget (srd011 R1.2, R5.2).
+    osint_search:
+      timeout: 15s
+      read_timeout: 15s
+      max_request_bytes: 16384
+      max_response_bytes: 1048576
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [8090]
+
+    exporter_render:
+      # Above the exporter endpoint's own 120s bound (srd013 R5.4) and under the chat listener's 200s: a pathological document fails inside the exporter's machine, and the relay reports it.
+      timeout: 130s
+      read_timeout: 130s
+      max_request_bytes: 1048576
+      # The exporter's own response cap; the brief PDFs the demo renders are tens of kilobytes, and the chat listener's 4 MiB response bound above is the effective ceiling on what reaches the browser.
+      max_response_bytes: 8388608
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18120]
+
+    # The self search (GH-611): a revision pass runs its proposed query through
+    # the chatbot's own declared /search surface on loopback. The ceiling bounds
+    # one embed under the provider's 60s plus the fan's reads; a search past it
+    # costs its pass and nothing else.
+    local_self_search:
+      timeout: 60s
+      read_timeout: 60s
+      max_request_bytes: 65536
+      max_response_bytes: 4194304
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts:
+          - 127.0.0.1
+        ports:
+          - ${CHATBOT_CHAT_PORT:-18080}
+    local_chat_requests:
+      # Matches the chat endpoint's 290s machine_request bound below: the listener's limits must not close a request its endpoint still allows (the GH-196 shape).
+      timeout: 290s
+      read_timeout: 290s
+      max_request_bytes: 1048576
+      # Sized by the largest response this listener serves: the envelope listing behind the facet vocabulary merges every unit's read of every document's full text, about 2 MB on the committed corpus plus the join bookkeeping, and each 1 MiB bound between the store and the browser turned that read into an unmapped 502 in turn.
+      max_response_bytes: 4194304
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18080]
+    local_chatbot_control:
+      timeout: 30s
+      read_timeout: 5s
+      max_request_bytes: 16384
+      max_response_bytes: 65536
+      redirect:
+        mode: none
+      network:
+        schemes: [http]
+        hosts: [127.0.0.1, localhost]
+        ports: [18081]
+  clients:
+    # The export relay's one client (srd013 R4.1, GH-352): the SPA's export action reaches the exporter through this agent's origin, because the exporter's NetworkPolicy admits only chatbot-labelled callers.
+    exporter:
+      base_url: http://127.0.0.1:18120
+      auth_ref: none
+      limits_ref: exporter_render
+      operations:
+        render_pdf:
+          method: POST
+          path: /export/api/pdf
+          params:
+            body_schema:
+              type: object
+              required: [schema_version, content]
+              properties:
+                schema_version: {type: string}
+                content: {type: string}
+            body_source: previous_result
+            input_mapping:
+              schema_version: $.schema_version
+              content: $.content
+          body:
+            schema_version: "{{ params.schema_version }}"
+            content: "{{ params.content }}"
+          success: {status: [200], signal: ExportRendered}
+          failures:
+            # The exporter's own failure contract: 500 export_failed with the
+            # workspace rolled back and no partial PDF (srd013 R5.1, R5.2).
+            - {status: [500], signal: ExportFailed}
+          response:
+            output:
+              status: $.status
+              pdf_base64: $.pdf_base64
+          side_effects:
+            - kind: external_api
+              target: exporter.render_pdf
+              state: request_scoped_render
+          reversibility:
+            classification: reversible
+            undo: noop
+    # The read client is separate from the query client so the two carry different limits over the same tier: a retrieval query waits on the provider budget, a document read does not.
+    rag_documents:
+      base_url: http://127.0.0.1:18085
+      auth_ref: none
+      limits_ref: local_rag_reads
+      operations:
+        # The identifier-in read on a RAG unit (srd016 R5.2).
+        documents:
+          method: POST
+          path: /api/v1/rag/documents
+          base_url_source: command_state
+          base_url_selector: $from(rag_unit).body.base_url
+          params:
+            body_schema:
+              type: object
+              required: [record_ids, max_clearance]
+              properties:
+                record_ids: {type: array}
+                max_clearance: {type: string}
+            body_source: command_state
+            input_mapping:
+              record_ids: $from(declare_read_request).body.record_ids
+              # The same selector the query binds, reading the shared label the clearance words are dispatched under.
+              max_clearance: $from(analyst_clearance).body.level
+          body:
+            record_ids: "{{ params.record_ids }}"
+            max_clearance: "{{ params.max_clearance }}"
+          success: {status: [200], signal: DocumentsRead}
+          failures:
+            - {status: [400], signal: ReadRejected}
+            - {status: [403], signal: ClearanceRefused}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              metadatas: $.metadatas
+              clearance_enforced_at: $.clearance_enforced_at
+          side_effects:
+            - kind: external_api
+              target: rag_server.documents
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+        documents_query:
+          method: POST
+          path: /api/v1/rag/documents/query
+          base_url_source: command_state
+          base_url_selector: $from(rag_unit).body.base_url
+          params:
+            body_schema:
+              type: object
+              required: [document_filter, max_clearance]
+              properties:
+                document_filter: {type: object}
+                max_clearance: {type: string}
+            body_source: command_state
+            input_mapping:
+              document_filter: $from(declare_read_request).body.document_filter
+              max_clearance: $from(analyst_clearance).body.level
+          body:
+            # The token stands alone so the map reaches the unit as JSON rather
+            # than through Go's default map formatting.
+            document_filter: "{{ params.document_filter }}"
+            max_clearance: "{{ params.max_clearance }}"
+          success: {status: [200], signal: DocumentsRead}
+          failures:
+            - {status: [400], signal: ReadRejected}
+            - {status: [403], signal: ClearanceRefused}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              metadatas: $.metadatas
+              clearance_enforced_at: $.clearance_enforced_at
+          side_effects:
+            - kind: external_api
+              target: rag_server.documents
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+    rag:
+      base_url: http://127.0.0.1:18085
+      auth_ref: none
+      limits_ref: local_provider
+      operations:
+        # The harvest relay (GH-459): the marshalled batch goes to the retrieval tier's own ingest surface -- the chatbot never writes the store, and the floor metadata is the rag server's law, not this request's.
+        ingest:
+          method: POST
+          path: /api/v1/rag/ingest
+          base_url_source: command_state
+          base_url_selector: $from(rag_unit).body.base_url
+          params:
+            body_schema:
+              type: object
+              required: [rows]
+              properties:
+                rows: {type: array}
+            body_source: command_state
+            input_mapping:
+              rows: $from(marshal_harvest_rows).body.rows
+          body:
+            rows: "{{ params.rows }}"
+          success: {status: [200], signal: RowsIngested}
+          failures:
+            - {status: [500], signal: IngestFailed}
+          response:
+            output:
+              ingested_ids: $.ingested_ids
+          side_effects:
+            - kind: external_api
+              target: rag_server.ingest
+              state: records_added
+          # The relay's precedent is the export render: the remote effect belongs to the callee, whose own machine declares the write and its compensation.
+          reversibility:
+            classification: reversible
+            undo: noop
+        # The purge relay (GH-648): ask each declared unit to drop its harvested rows; the store owner declares the delete and its scope.
+        purge_harvest:
+          method: POST
+          path: /api/v1/rag/purge-harvest
+          base_url_source: command_state
+          base_url_selector: $from(rag_unit).body.base_url
+          params:
+            body_schema: {type: object, properties: {}}
+            body_source: command_state
+            input_mapping: {}
+          body:
+            reason: ui-reset
+          success: {status: [200], signal: UnitPurged}
+          failures:
+            - {status: [500], signal: UnitPurgeFailed}
+          side_effects:
+            - kind: external_api
+              target: rag_server.purge
+              state: records_deleted
+          reversibility:
+            classification: reversible
+            undo: noop
+        query:
+          method: POST
+          path: /api/v1/rag/query
+          # The operation, method, path, auth, and network policy remain trusted configuration.
+          base_url_source: command_state
+          base_url_selector: $from(rag_unit).body.base_url
+          params:
+            body_schema:
+              type: object
+              required: [query_embeddings, max_clearance]
+              properties:
+                query_embeddings: {type: array}
+                max_clearance: {type: string}
+            body_source: command_state
+            input_mapping:
+              query_embeddings: $from(parse_query_vector).body.embedding
+              # One selector for every item in the fan-out, so the level binds uniformly with no per-source variation (srd010 R3.2).
+              max_clearance: $from(analyst_clearance).body.level
+          body:
+            query_embeddings: "{{ params.query_embeddings }}"
+            # Retrieval breadth exceeds the composition budget (top_n 8), so the rerank trim bites and recall at composition measures the ordering rather than the breadth (srd014 R1.3, GH-336).
+            n_results: 20
+            max_clearance: "{{ params.max_clearance }}"
+          success: {status: [200], signal: QueryResponded}
+          failures:
+            # An embedding-space mismatch (srd001 R2.3) is a 400 the RAG server returns.
+            - {status: [400], signal: QueryRejected}
+            # The source refused the level (srd010 R4.2).
+            - {status: [403], signal: ClearanceRefused}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              distances: $.distances
+              # The chunks' declared metadata, projected into the composed source outcomes so the interface fills the source-evaluation table and the classification banner (srd016 R3.4).
+              metadatas: $.metadatas
+              embedding_model: $.embedding_model
+              clearance_enforced_at: $.clearance_enforced_at
+          side_effects:
+            - kind: external_api
+              target: rag_server.query
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        query_faceted:
+          method: POST
+          path: /api/v1/rag/query-faceted
+          # The operation, method, path, auth, and network policy remain trusted configuration, exactly as on query above.
+          base_url_source: command_state
+          base_url_selector: $from(rag_unit).body.base_url
+          params:
+            body_schema:
+              type: object
+              required: [query_embeddings, max_clearance, facet_where, keyword]
+              properties:
+                query_embeddings: {type: array}
+                max_clearance: {type: string}
+                facet_where: {type: object}
+                keyword: {type: string}
+            body_source: command_state
+            input_mapping:
+              query_embeddings: $from(parse_query_vector).body.embedding
+              # One selector for every item in the fan-out, so the level binds uniformly with no per-source variation (srd010 R3.2), exactly as on the plain query.
+              max_clearance: $from(analyst_clearance).body.level
+              # The facets ride from the request body through the embed carry.
+              # Both legs publish this label (GH-694): the analyst's facets when set, else the selection's proposed tiers rendered by the declared template.
+              facet_where: $from(retrieval_facets).body.facet_where
+              keyword: $from(retrieval_facets).body.keyword
+          body:
+            query_embeddings: "{{ params.query_embeddings }}"
+            n_results: 20
+            max_clearance: "{{ params.max_clearance }}"
+            facet_where: "{{ params.facet_where }}"
+            keyword: "{{ params.keyword }}"
+          success: {status: [200], signal: QueryResponded}
+          failures:
+            # The same outcome mapping as the plain query: a 400 excludes the source distinctly from a degraded one, and a 403 keeps a refusal apart from a failure (srd010 R4.2, R4.3, R5.1).
+            - {status: [400], signal: QueryRejected}
+            - {status: [403], signal: ClearanceRefused}
+          response:
+            output:
+              ids: $.ids
+              documents: $.documents
+              distances: $.distances
+              metadatas: $.metadatas
+              embedding_model: $.embedding_model
+              clearance_enforced_at: $.clearance_enforced_at
+          side_effects:
+            - kind: external_api
+              target: rag_server.query
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+    # The OSINT search client (srd011 R1, R2).
+    osint:
+      base_url: http://127.0.0.1:8090
+      auth_ref: none
+      limits_ref: osint_search
+      operations:
+        search:
+          method: GET
+          path: /search.json
+          params:
+            # The declared egress payload (srd011 R2.1-R2.4): the tasking, as the q parameter, and nothing else.
+            query:
+              q: ""
+            body_source: command_state
+            input_mapping:
+              # The Command model's distilled query, or the raw question on the fallback and Ollama legs -- whichever wrote the shared label (GH-457).
+              q: $from(search_terms).$
+          success: {status: [200], signal: SearchResponded}
+          response:
+            output:
+              # SerpAPI's response shape is the branch's one shape (GH-457): organic_results rows carrying title, link, snippet.
+              results: $.organic_results
+          side_effects:
+            - kind: external_api
+              target: osint.search
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+    cohere:
+      # The additive Cohere provider (srd009 R1).
+      base_url: ${COHERE_BASE_URL:-https://api.cohere.com}
+      auth_ref: cohere_bearer
+      limits_ref: cohere_provider
+      operations:
+        # Source selection as a native tool call (GH-607): the flagship model is forced to call the one declared tool, so the names array arrives schema-enforced by the API instead of parsed out of prose.
+        select_sources_tool:
+          method: POST
+          path: /v2/chat
+          params:
+            body_schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: {type: string}
+            body_source: command_state
+            input_mapping:
+              prompt: $from(wrap_source_selection_prompt).body.prompt
+          body:
+            model: ${COHERE_CHAT_MODEL:-command-a-03-2025}
+            messages:
+              - role: system
+                content: You select which declared RAG sources should be queried for a user's question. Call the select_sources tool exactly once, naming every source whose description directly covers the question. Use only names from the catalog; never add a source merely for general context. When the question names a collection discipline - HUMINT field reporting, OSINT assessments or news, SIGINT strike or loss records - also set source_types to those tiers; otherwise omit source_types so every tier is searched. When the question names a time period, also set date_from and date_to as YYYYMMDD integers bounding it and set source_types (all five tiers if no discipline is named); omit the dates otherwise.
+              - role: user
+                content: "{{ params.prompt }}"
+            tools:
+              - type: function
+                function:
+                  name: select_sources
+                  description: Report which declared RAG sources to query for the question.
+                  parameters:
+                    type: object
+                    properties:
+                      names:
+                        type: array
+                        items: {type: string}
+                        description: Declared source names to query.
+                      source_types:
+                        type: array
+                        items: {type: string, enum: [humint, osint_assessment, osint_news, sigint_event, sigint_series]}
+                        description: Collection tiers to narrow retrieval to; omit to search every tier.
+                      date_from:
+                        type: integer
+                        minimum: 19000101
+                        maximum: 21001231
+                        description: Start of the requested reporting window as a YYYYMMDD integer; omit when no period is named.
+                      date_to:
+                        type: integer
+                        minimum: 19000101
+                        maximum: 21001231
+                        description: End of the requested reporting window as a YYYYMMDD integer; omit when no period is named.
+                    required: [names]
+            tool_choice: REQUIRED
+          success: {status: [200], signal: LLMResponded}
+          failures:
+            - {status: [401, 403], signal: ProviderUnauthorized}
+            - {status: [429], signal: ProviderThrottled}
+            - {status: [500, 502, 503, 504], signal: ProviderUnavailable}
+          response:
+            output:
+              # Selector paths walk maps only, so the forced single tool call is captured as the whole array; project_tool_arguments unwraps it.
+              tool_calls: $.message.tool_calls
+          side_effects:
+            - kind: external_api
+              target: cohere.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+        # Web-search query proposals as a native tool call (GH-612): the flagship is forced to call the one declared tool, so the queries array arrives schema-enforced.
+        # The segment translator (GH-670): the flagship returns one translation per segment, same order, via a forced tool call.
+        translate_segments_tool:
+          method: POST
+          path: /v2/chat
+          params:
+            body_schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: {type: string}
+            body_source: command_state
+            input_mapping:
+              prompt: $from(compose_translate_prompt).$
+          body:
+            model: ${COHERE_CHAT_MODEL:-command-a-03-2025}
+            messages:
+              - role: system
+                content: Translate each segment of a military brief. Call deliver_translations exactly once with one translation per segment, same order and count. Keep markings, identifiers, numbers, and dates verbatim; never merge, split, drop, or add segments.
+              - role: user
+                content: "{{ params.prompt }}"
+            tools:
+              - type: function
+                function:
+                  name: deliver_translations
+                  description: Deliver the translated segments, one per input segment, same order.
+                  parameters:
+                    type: object
+                    properties:
+                      translations:
+                        type: array
+                        items: {type: string}
+                        description: One translation per input segment, same order and count.
+                    required: [translations]
+            tool_choice: REQUIRED
+          success: {status: [200], signal: LLMResponded}
+          failures:
+            - {status: [401, 403], signal: ProviderUnauthorized}
+            - {status: [429], signal: ProviderThrottled}
+            - {status: [500, 502, 503, 504], signal: ProviderUnavailable}
+          response:
+            output:
+              tool_calls: $.message.tool_calls
+          side_effects:
+            - kind: external_api
+              target: cohere.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+        derive_search_terms_tool:
+          method: POST
+          path: /v2/chat
+          params:
+            body_schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: {type: string}
+            body_source: command_state
+            input_mapping:
+              prompt: $from(compose_search_terms_prompt).$
+          body:
+            model: ${COHERE_CHAT_MODEL:-command-a-03-2025}
+            messages:
+              - role: system
+                content: You turn analyst taskings into web search queries. Call the report_search_terms tool exactly once with one to three short keyword queries that together cover the tasking. When the tasking names more than one subject, propose one query per subject; never restate the whole tasking as a single query when it has several subjects, and never propose near-duplicates.
+              - role: user
+                content: "{{ params.prompt }}"
+            tools:
+              - type: function
+                function:
+                  name: report_search_terms
+                  description: Report the web search queries the tasking implies.
+                  parameters:
+                    type: object
+                    properties:
+                      queries:
+                        type: array
+                        items: {type: string}
+                        description: One to three short keyword queries.
+                    required: [queries]
+            tool_choice: REQUIRED
+          success: {status: [200], signal: LLMResponded}
+          failures:
+            - {status: [401, 403], signal: ProviderUnauthorized}
+            - {status: [429], signal: ProviderThrottled}
+            - {status: [500, 502, 503, 504], signal: ProviderUnavailable}
+          response:
+            output:
+              tool_calls: $.message.tool_calls
+          side_effects:
+            - kind: external_api
+              target: cohere.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+        compose_brief:
+          method: POST
+          path: /v2/chat
+          params:
+            body_schema:
+              type: object
+              required: [message, documents]
+              properties:
+                message: {type: string}
+                documents: {type: array}
+            body_source: command_state
+            input_mapping:
+              # The original tasking, not the composed grounding prompt: the retrieved passages reach Command as documents, so sending the composed prompt as well would ground the turn twice and leave the citations pointing at text the model also read inline.
+              message: $from(chat_message).body.question
+              documents: $from(parse_documents).body.documents
+          body:
+            # The default stays a non-reasoning model as an output-stability choice, no longer a constraint: partition_brief_blocks selects text blocks by type before capture_brief joins them, so a reasoning model -- command-a-plus-05-2026, whose name carries no hint of it -- now composes correctly, its thinking blocks withheld from the response (GH-230.
+            model: ${COHERE_CHAT_MODEL:-command-a-03-2025}
+            messages:
+              - role: system
+                content: |
+                  You compose a command-staff intelligence brief from the
+                  documents supplied with the request.
+
+                  Rules:
+                  - Compose only from the supplied documents. Do not use outside
+                    knowledge, and do not speculate beyond what they state.
+                  - Where the documents do not answer the tasking, say so
+                    plainly under the heading it belongs to.
+                  - Structure the brief as markdown with the ministry headings:
+                    Assessment, Key Judgements, Supporting Reporting, and Gaps.
+                  - Attribute every assertion to the document it came from.
+              - role: user
+                content: "{{ params.message }}"
+            # One placeholder alone renders as the typed value, so the parsed
+            # array reaches the wire as an array rather than as its text.
+            documents: "{{ params.documents }}"
+            stream: false
+          success: {status: [200], signal: BriefComposed}
+          failures:
+            # A provider failure must be separable from an empty or unhelpful result (srd009 R1.6).
+            - {status: [401, 403], signal: ProviderUnauthorized}
+            - {status: [429], signal: ProviderThrottled}
+            # 422 rejects the request as invalid.
+            - {status: [400, 422], signal: ProviderRejected}
+            - {status: [500, 502, 503, 504], signal: ProviderUnavailable}
+          response:
+            output:
+              # content is the TYPED block array Command returns.
+              content: $.message.content
+              # Captured here and surfaced as structured source metadata by the
+              # citation chain that follows composition (srd009 R4).
+              citations: $.message.citations
+              finish_reason: $.finish_reason
+          side_effects:
+            - kind: external_api
+              target: cohere.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+
+    # The revision's agentic search (GH-611): the same provider, host, and
+    cohere_agentic:
+      base_url: ${COHERE_BASE_URL:-https://api.cohere.com}
+      auth_ref: cohere_bearer
+      limits_ref: cohere_agentic
+      operations:
+        # One forced tool call over the instruction and the prior brief; the
+        propose_searches_tool:
+          method: POST
+          path: /v2/chat
+          params:
+            body_schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt: {type: string}
+            body_source: command_state
+            input_mapping:
+              prompt: $from(compose_propose_searches_prompt).$
+          body:
+            model: ${COHERE_CHAT_MODEL:-command-a-03-2025}
+            messages:
+              - role: system
+                content: You plan retrieval for revising an intelligence brief. Call the propose_searches tool exactly once with one to three short queries for material the revision needs and the brief does not already hold -- what the instruction asks for, and what the brief refers to without the reporting behind it. Fill first, and second and third only when distinct subjects need their own query; never restate the instruction as a whole, never propose near-duplicates, and leave unused fields out.
+              - role: user
+                content: "{{ params.prompt }}"
+            tools:
+              - type: function
+                function:
+                  name: propose_searches
+                  description: Propose the retrieval queries the revision needs.
+                  # Named fields rather than an array: selectors path into maps
+                  # only, so each pass reads its own field (GH-611).
+                  parameters:
+                    type: object
+                    properties:
+                      first: {type: string, description: The one query the revision most needs.}
+                      second: {type: string, description: A second query for a distinct subject, when one exists.}
+                      third: {type: string, description: A third query for a distinct subject, when one exists.}
+                    required: [first]
+            tool_choice: REQUIRED
+          success: {status: [200], signal: LLMResponded}
+          failures:
+            - {status: [401, 403], signal: ProviderUnauthorized}
+            - {status: [429], signal: ProviderThrottled}
+            - {status: [500, 502, 503, 504], signal: ProviderUnavailable}
+          response:
+            output:
+              tool_calls: $.message.tool_calls
+          side_effects:
+            - kind: external_api
+              target: cohere.chat
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+    chatbot_self:
+      # The chatbot's own chat server on loopback (GH-611): the agentic passes
+      # read the mesh's declared /search surface rather than restating its
+      # embed-and-fan chain. The request machine serving /search runs in its own
+      # request scope, so a turn searching itself does not contend with itself.
+      base_url: ${CHATBOT_SELF_URL:-http://127.0.0.1:18080}
+      auth_ref: none
+      limits_ref: local_self_search
+      operations:
+        search_proposed:
+          method: POST
+          path: /api/v1/search
+          params:
+            headers:
+              # The requester's clearance, forwarded verbatim so the search sees
+              # exactly the caller's level (srd010 R3.2).
+              x-analyst-clearance: {type: string}
+            body_schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string}
+            body_source: command_state
+            input_mapping:
+              message: $from(proposal_query).$
+              # The same label the turn's own reads bind their level from.
+              x-analyst-clearance: $from(analyst_clearance).body.level
+          body:
+            message: "{{ params.message }}"
+          success: {status: [200], signal: ProposalSearched}
+          response:
+            output:
+              results: $.results
+          side_effects:
+            - kind: external_api
+              target: chatbot.search
+              state: read_only
+          reversibility:
+            classification: reversible
+            undo: noop
+  servers:
+    chatbot_chat:
+      address: 127.0.0.1:18080
+      limits_ref: local_chat_requests
+      endpoints:
+        chat:
+          method: POST
+          path: /api/v1/chat
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string}
+                history: {type: array}
+                # The retrieval facets, additive to the request contract: a turn with no facets omits the field entirely and behaves as it does today (srd016 R4.4).
+                facets:
+                  type: object
+                  required: [facet_where, keyword]
+                  properties:
+                    facet_where: {type: object}
+                    keyword: {type: string}
+                # The final reader's clearance, as its rank in the declared order (GH-378): optional, and when present the composed brief cites only sources at or below that level -- spans above it are reported under floor_dropped_citations rather than silently vanishing.
+                reader_clearance_rank: {type: integer, minimum: 0, maximum: 3}
+                # A revision turn (GH-446): the retained prior draft rides the body and its presence is the whole predicate -- the typed message is the revision instruction, which is what gets embedded so retrieval fetches the asked-for material.
+                prior_brief: {}
+                # The record ids the prior draft cited (GH-604).
+                prior_record_ids:
+                  type: array
+                  items: {type: string}
+                  maxItems: 100
+            # Declared so the request is accepted carrying it; an undeclared header is refused outright.
+            headers:
+              x-analyst-clearance: {type: string}
+          machine_request:
+            # The request-scoped profile, not the agent's own: its tools selection is the chat-LLM vocabulary a $tool transition dispatches, which the persistent agent must not register (GH-86).
+            profile: request-profile.yaml
+            machine: request-machine.yaml
+            # Contains one worst-case provider stall plus the fallback answer -- the Cohere client gives up at 60s and invoke_llm_fast is allowed 120s -- plus a revision's supplementary legs, each bounded by its own short limits: the re-grounding read (15s), the search proposal and the batched proposal embed (20s each), and one proposed-query read per proposal (15s each, at most three).
+            timeout: 290s
+            request:
+              body:
+                message: $.message
+                history: $.history
+                # A body field on purpose, unlike the clearance below: facets are constraints the client legitimately composes, and the retrieval tier conjoins them under the clearance window it derives itself, so nothing a client writes here can widen a turn (srd016 R4.3).
+                facets: $.facets
+                # The reader's clearance rides beside the facets for the same reason: a release constraint the client legitimately states, narrowing only (GH-378).
+                reader_clearance_rank: $.reader_clearance_rank
+                prior_brief: $.prior_brief
+                prior_record_ids: $.prior_record_ids
+              # The analyst's maximum clearance comes from the authenticated request context, which here is a header the deployment's auth layer sets (srd010 R3.1).
+              headers:
+                max_clearance: $.x-analyst-clearance
+            response:
+              # Keyed by terminal state, not signal: compose_response reports the unresolved selectors for every source outcome that did not happen, so the turn can reach LLMResponded on either ResponseComposed or CommandError and both must map to the same 200 (rest-tool-format machine_request_response_mapping, GH-615).
+              terminal_states:
+                LLMResponded:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    answer: $.answer
+                    metadata: $.metadata
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        # The analyst's export action (srd013 R4.1, R4.2, GH-352): triggered from the SPA after the human edit, off the generation turn's latency, and relayed to the exporter because its NetworkPolicy admits only this agent.
+        search:
+          method: POST
+          path: /api/v1/search
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string}
+            headers:
+              x-analyst-clearance: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: search-machine.yaml
+            # One embed under the provider's 60s ceiling plus a sequential
+            # fan-out whose per-unit read authority is 2m10s.
+            timeout: 200s
+            request:
+              body:
+                message: $.message
+              headers:
+                max_clearance: $.x-analyst-clearance
+            response:
+              terminal_states:
+                SearchServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    results: $.results
+                    query: $.query
+                    clearance_enforced_at: $.clearance_enforced_at
+                    failed_sources: $.failed_sources
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        # The /harvest command (GH-459): search, embed, and ingest into the scratch corpus through the canonical pipeline.
+        harvest:
+          method: POST
+          path: /api/v1/harvest
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: harvest-machine.yaml
+            # One search under the engine authority plus one embed per result
+            # and the unit relays; under the machine's own 3m budget.
+            timeout: 200s
+            request:
+              body:
+                message: $.message
+            response:
+              terminal_states:
+                HarvestServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    harvested: $.harvested
+                    failed_embeds: $.failed_embeds
+                    queries: $.queries
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        # The reset purge (GH-648): relay to every declared unit's purge surface; the store owner scopes the delete to its own web-harvest marker.
+        purge:
+          method: POST
+          path: /api/v1/harvest/purge
+          binding: machine_request
+          request:
+            body_schema: {type: object, properties: {reason: {type: string}}}
+          machine_request:
+            profile: request-profile.yaml
+            machine: harvest-purge-machine.yaml
+            timeout: 60s
+            request:
+              body:
+                reason: $.reason
+            response:
+              terminal_states:
+                PurgeServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    purged: $.purged
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        # The report language selector (GH-670): the approved brief's sentence segments translated as a rendition; the English record stays authoritative.
+        translate:
+          method: POST
+          path: /api/v1/translate
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [segments, language]
+              properties:
+                segments: {type: array}
+                language: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: translate-machine.yaml
+            timeout: 90s
+            request:
+              body:
+                segments: $.segments
+                language: $.language
+            response:
+              terminal_states:
+                TranslateServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    translations: $.translations
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        # The /audit command (GH-543): the classifier tier scores one cited claim against the chunk it cites.
+        audit:
+          method: POST
+          path: /api/v1/audit
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [summary, document]
+              properties:
+                summary: {type: string}
+                document: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: audit-machine.yaml
+            timeout: 60s
+            request:
+              body:
+                summary: $.summary
+                document: $.document
+            response:
+              terminal_states:
+                AuditServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    verdict: $.verdict
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        # The /summarize command (GH-448): the Command model isolated over the document the window holds.
+        summarize:
+          method: POST
+          path: /api/v1/summarize
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [document]
+              properties:
+                document: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: summarize-machine.yaml
+            timeout: 90s
+            request:
+              body:
+                document: $.document
+            response:
+              terminal_states:
+                SummaryServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    summary: $.summary
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: command_error
+                    message: $.message
+        export:
+          method: POST
+          path: /api/v1/export
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [schema_version, content]
+              properties:
+                schema_version: {type: string}
+                content: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: export-relay-machine.yaml
+            # Bounds one relay of one render; the exporter's own 120s budget
+            # fails a pathological document first (srd013 R5.4).
+            timeout: 140s
+            request:
+              body:
+                schema_version: $.schema_version
+                content: $.content
+            response:
+              terminal_states:
+                Rendered:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    schema_version: "1"
+                    status: rendered
+                    # The invoke word nests its response mapping under
+                    # mapped, the osint_search shape.
+                    pdf_base64: $.mapped.pdf_base64
+                RenderFailed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    schema_version: "1"
+                    status: failed
+                    error: export_failed
+                Failed:
+                  status: 502
+                  content_type: application/json
+                  body:
+                    schema_version: "1"
+                    status: failed
+                    error: exporter_unreachable
+        monitor_proxy:
+          method: GET
+          path: /monitor-proxy/{agent}/{path...}
+          binding: monitor_proxy
+          # Same-origin reverse proxy so the SPA reads every mesh agent's monitor state and SSE stream through this server (agent-core monitor_proxy, GH-358).
+          monitor_proxy:
+            upstreams:
+              chatbot: http://127.0.0.1:18082
+              rag0: http://127.0.0.1:18087
+              rag1: http://127.0.0.1:18097
+              collector: http://127.0.0.1:18193
+          request:
+            path:
+              agent: {type: string}
+              path: {type: string}
+        ui:
+          method: GET
+          path: /ui/{path...}
+          binding: static_assets
+          static_assets:
+            root: "${CHATBOT_UI_ROOT:-agents/chatbot/ui/app/dist}"
+            index: index.html
+            spa: true
+          request:
+            path:
+              path: {type: string}
+        root_redirect:
+          method: GET
+          path: /
+          binding: redirect
+          redirect:
+            location: /ui/
+            status: 302
+
+        # The read boundary the served interface calls (srd016 R5.2).
+        documents:
+          method: POST
+          path: /api/v1/documents
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [record_ids]
+              properties:
+                record_ids: {type: array}
+            # Declared so the request is accepted carrying it; an undeclared header is refused outright.
+            headers:
+              x-analyst-clearance: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: document-machine.yaml
+            # One clearance resolution and a sequential read of every declared
+            # unit, each bounded by the rag client's own limits.
+            timeout: 60s
+            request:
+              body:
+                record_ids: $.record_ids
+              headers:
+                max_clearance: $.x-analyst-clearance
+            response:
+              terminal_states:
+                ReadServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    records: $.records
+                    # The level the read ran at, reported so a reader confirms enforcement rather than assuming it.
+                    clearance_enforced_at: $.clearance_enforced_at
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: read_failed
+                    detail: a boundary word failed before the read was dispatched
+
+        documents_query:
+          method: POST
+          path: /api/v1/documents/query
+          binding: machine_request
+          request:
+            body_schema:
+              type: object
+              required: [document_filter]
+              properties:
+                document_filter: {type: object, minProperties: 1}
+            headers:
+              x-analyst-clearance: {type: string}
+          machine_request:
+            profile: request-profile.yaml
+            machine: document-filter-machine.yaml
+            timeout: 60s
+            request:
+              body:
+                document_filter: $.document_filter
+              headers:
+                max_clearance: $.x-analyst-clearance
+            response:
+              terminal_states:
+                ReadServed:
+                  status: 200
+                  content_type: application/json
+                  body:
+                    records: $.records
+                    clearance_enforced_at: $.clearance_enforced_at
+                Failed:
+                  status: 500
+                  content_type: application/json
+                  body:
+                    error: read_failed
+                    detail: a boundary word failed before the read was dispatched
+
+    chatbot_control:
+      address: 127.0.0.1:18081
+      limits_ref: local_chatbot_control
+      queue:
+        name: chatbot_control
+        capacity: 8
+        timeout: 30s
+      shutdown:
+        timeout: 5s
+        drain_policy: drain_then_stop
+      endpoints:
+        health:
+          method: GET
+          path: /api/lifecycle/health
+          binding: health
+

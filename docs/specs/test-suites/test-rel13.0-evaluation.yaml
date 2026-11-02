@@ -1,0 +1,193 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel13.0-evaluation
+title: Test Suite for Release 13.0 Evaluation and First-Draft-Time Proof
+release: "13.0"
+
+traces: [rel13.0-uc001-evaluation]
+
+preconditions:
+  - A versioned labeled-tasking corpus whose relevant sets were labeled before any evaluation run. Its content depends on the synthetic intelligence corpus rel10.4 builds, so the corpus is populated when those documents exist; these cases assert the properties it must hold.
+  - Taskings spanning the conditions the metrics depend on -- relevant documents across multiple sources, more than one clearance level, and relevant sets containing documents embedding retrieval ranks below the cutoff. Without the below-cutoff taskings the with-and-without-Rerank pair has nothing to separate.
+  - A recorded half-day baseline for current practice, carried as a stated assumption rather than a figure this harness produced.
+  - The rel10.x, rel11.0, and rel12.x releases are standing, so the turn the harness drives is the shipped turn with both retrieval branches, the clearance gate, and the cascade available.
+  - The live tiers require COHERE_API_KEY exported by the operator. A run without it is skipped rather than reported, because a partial run would produce metrics over a subset the corpus version does not describe.
+
+test_cases:
+  - use_case: rel13.0-uc001-evaluation
+    name: First-draft time reports the system and edit segments against the half-day baseline
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: The measurement runs from tasking submission to a draft a reviewer accepts, and the report carries the system segment, the analyst edit segment, and the total. Export time is excluded because export runs after approval and off the drafting path, so including it would charge the drafting claim for work that happens afterwards.
+    expected:
+      total_measured_submission_to_accepted_draft: true
+      system_segment_reported: true
+      analyst_edit_segment_reported: true
+      export_time_excluded: true
+      baseline_recorded_as_stated_assumption: true
+      pass_or_fail_reported_against_ninety_minutes: true
+    traces:
+      - rel13.0-uc001-evaluation S1
+      - rel13.0-uc001-evaluation S2
+      - srd014-evaluation AC4
+
+  - use_case: rel13.0-uc001-evaluation
+    name: Recall is measured at the top-N Command composes from
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: For each tasking the recall numerator counts labeled relevant documents present in the document set passed to Command, not in the fan-out candidate set. A document retrieved and then dropped before composition is not recalled, because the brief could not draw on it.
+    expected:
+      recall_computed_at_composition_top_n: true
+      earlier_candidate_set_not_used_as_denominator_basis: true
+      document_dropped_before_composition_not_counted_as_recalled: true
+      recall_averaged_over_the_corpus: true
+    traces:
+      - rel13.0-uc001-evaluation S3
+      - srd014-evaluation AC2
+
+  - use_case: rel13.0-uc001-evaluation
+    name: Recall is reported under the rerank order and the cosine order at the same N
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: Two runs over one tasking set at one N -- the rerank order and the retrieval (cosine) order truncated to the same N -- both reported, so the pair isolates ordering (GH-576). The untrimmed figure is reported separately as the retrieval boundary; a superset always out-recalls its own cut, so comparing across cutoffs measures the trim rather than the rerank.
+    expected:
+      both_configurations_run_over_the_same_taskings: true
+      both_figures_carry_the_same_n: true
+      recall_with_rerank_reported: true
+      recall_cosine_order_at_n_reported: true
+      retrieval_boundary_reported_separately: true
+      ceiling_normalised_recall_reported: true
+      ordering_delta_expressed_as_the_same_n_difference: true
+    traces:
+      - rel13.0-uc001-evaluation S4
+      - srd014-evaluation AC2
+
+  - use_case: rel13.0-uc001-evaluation
+    name: Each recall figure names N, the branches, and the clearance level, and reports pass or fail
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: A recall number without its configuration is uninterpretable and two such numbers are not comparable. The report names N, which retrieval branches were enabled, and the clearance level the run executed at, and states pass or fail against the ninety percent threshold rather than leaving the reader to apply it.
+    expected:
+      n_named_in_report: true
+      enabled_branches_named_in_report: true
+      clearance_level_named_in_report: true
+      pass_or_fail_reported_against_ninety_percent: true
+    traces:
+      - rel13.0-uc001-evaluation S5
+      - srd014-evaluation AC2
+
+  - use_case: rel13.0-uc001-evaluation
+    name: Coverage is computed from structured citation metadata over a declared deterministic segmentation
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: The denominator comes from a declared segmentation rule that produces the same assertion count on the same brief every time, and the numerator reads the structured citation metadata rather than scraping the answer text. Re-running the segmentation must not move the number, which is the property a model-chosen segmentation would forfeit.
+    expected:
+      coverage_computed_from_structured_metadata: true
+      answer_text_not_scraped: true
+      segmentation_rule_declared: true
+      repeated_segmentation_yields_identical_denominator: true
+    traces:
+      - rel13.0-uc001-evaluation S6
+      - srd014-evaluation AC3
+
+  - use_case: rel13.0-uc001-evaluation
+    name: An unresolvable citation counts against coverage and short briefs are reported individually
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: A brief containing a citation that resolves to nothing in the composition set scores lower rather than having that assertion removed from the denominator. Excluding unresolvable citations would make coverage rise as citation quality fell. Any brief short of complete coverage is named in the report rather than absorbed into an average.
+    expected:
+      unresolvable_citation_counts_against_coverage: true
+      unresolvable_citation_not_dropped_from_denominator: true
+      short_brief_reported_individually: true
+      threshold_is_complete_coverage: true
+    traces:
+      - rel13.0-uc001-evaluation S7
+      - srd014-evaluation AC3
+
+  - use_case: rel13.0-uc001-evaluation
+    name: Relevant sets are labeled independently and never adjusted toward what the system retrieved
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: The corpus records that each relevant set was labeled before any run, and a label is not modified after a run reveals what the system found. An adjusted relevant set measures the system's agreement with itself, and the temptation to adjust is strongest on exactly the taskings the system handled worst. The corpus at testdata/evaluation/taskings.yaml records its labeling provenance and its amendment rule, and go test ./magefiles -run '^TestEvaluationCorpus' asserts that the provenance is present and that no label carries a rank, a score, or a retrieved field. What no check over a static file can establish is that labels stayed unchanged across runs, which needs runs, so the case stays planned and declares no go_test pointer until the harness exists.
+    expected:
+      relevant_sets_labeled_before_any_run: true
+      labels_not_derived_from_retrieval_output: true
+      labels_unchanged_across_runs: true
+      labeling_provenance_recorded_in_corpus: true
+    traces:
+      - rel13.0-uc001-evaluation S8
+      - srd014-evaluation AC1
+
+  - use_case: rel13.0-uc001-evaluation
+    name: The corpus spans multi-source, multi-clearance, and below-cutoff conditions and is versioned and fictional
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: The corpus contains taskings whose relevant documents sit across multiple sources, taskings at more than one clearance level, and taskings whose relevant set includes documents embedding retrieval ranks below the cutoff. Without the last of these the with-and-without-Rerank comparison has nothing to separate. The corpus carries a version, and its content is clearly fictional by construction. go test ./magefiles -run '^TestEvaluationCorpus' asserts the multi-source and multi-clearance spread, the version against the retrieval corpus the labels were authored over, and the fictional marker; and the below-cutoff condition is measured by the probe in mage integration:corpusBuild, which seeds a collection from the chunk store, embeds each labeled tasking at the identity the store was seeded under, queries at the declared top-N, and reports which labeled relevant documents did not come back. What remains is the last expectation, that a reported number names the corpus version it was measured over, which needs a report to name it; the case stays planned and declares no go_test pointer until the harness produces one.
+    expected:
+      multi_source_taskings_present: true
+      multi_clearance_taskings_present: true
+      below_cutoff_relevant_documents_present: true
+      corpus_versioned: true
+      corpus_clearly_fictional: true
+      reported_numbers_name_the_corpus_version: true
+    traces:
+      - rel13.0-uc001-evaluation S9
+      - srd014-evaluation AC1
+
+  - use_case: rel13.0-uc001-evaluation
+    name: The harness drives the shipped turn and modifies nothing
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: The harness reaches the turn through its ordinary request boundary and reads ordinary responses, and no agent, profile, machine, or prompt differs between an evaluation run and a normal turn. A measurement that alters the path it measures reports on something other than the shipped system.
+    expected:
+      turn_driven_through_ordinary_request_boundary: true
+      no_agent_profile_machine_or_prompt_modified: true
+      release_introduces_no_turn_change: true
+      harness_is_the_only_go_contributed: true
+    traces:
+      - rel13.0-uc001-evaluation S10
+      - srd014-evaluation AC5
+
+  - use_case: rel13.0-uc001-evaluation
+    name: Per-tasking results are emitted, the run is reproducible, and failures are not dropped
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: The report carries a result per tasking alongside the aggregates, records the corpus version, the run configuration, and the model identities, and names any tasking that failed or errored. A run that drops its failures inflates every metric computed over the remainder, and the failures are part of the population the thresholds constrain.
+    expected:
+      per_tasking_results_emitted: true
+      corpus_version_recorded: true
+      run_configuration_recorded: true
+      model_identities_recorded: true
+      failed_taskings_reported_not_dropped: true
+      failed_taskings_remain_in_denominator: true
+    traces:
+      - rel13.0-uc001-evaluation S11
+      - srd014-evaluation AC5
+
+  - use_case: rel13.0-uc001-evaluation
+    name: Every figure is labeled synthetic in the output and framed as method evidence
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: The synthetic-corpus label appears in the evaluation output beside the numbers rather than only in accompanying prose, because a caveat in prose separates from the number the first time someone copies it. The result is described as evidence that the method measures what it claims, and a met threshold is stated as met over this corpus.
+    expected:
+      synthetic_label_present_in_output_beside_figures: true
+      caveat_not_left_to_accompanying_prose: true
+      described_as_method_evidence: true
+      not_described_as_operational_performance: true
+      met_threshold_stated_as_met_over_this_corpus: true
+    traces:
+      - rel13.0-uc001-evaluation S12
+      - srd014-evaluation AC6
+
+  - use_case: rel13.0-uc001-evaluation
+    name: The evaluation does not carry the clearance-isolation or template-conformance criteria
+    integration_target: mage integration:evaluation
+    status: implemented
+    description: Neither criterion appears among the evaluation's claims, and the report points at the access-control test and the conformance check instead. Both are population properties, and a sampled run that happened to observe no violation is not evidence that none can occur.
+    expected:
+      clearance_isolation_not_claimed_by_the_evaluation: true
+      template_conformance_not_claimed_by_the_evaluation: true
+      report_attributes_both_to_their_population_checks: true
+    traces:
+      - rel13.0-uc001-evaluation S13
+      - srd014-evaluation AC6

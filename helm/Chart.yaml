@@ -1,0 +1,25 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+apiVersion: v2
+name: chatbot-mesh
+description: The declarative-agents chatbot mesh — chatbot, N values-driven RAG (agent + Chroma) pairs, an LLM, a Dolt checkpoint backend, and the canonical catalog collector with a spool query surface, over the rel06.0 mounted-profile runtime image (srd015).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - declarative-agents
+  - rag
+  - chatbot
+maintainers:
+  - name: Mesh Intelligence Inc.
+sources:
+  - https://github.com/mesh-intelligence/declarative-agents
+annotations:
+  declarative-agents.meshintelligence.ca/catalog-compatible-release: v0.20260804.0
+# The shared agent-services library chart, vendored untracked into
+# charts/agent-services by chart preparation (vendorAgentServices) from the
+# copy the pinned declarative-agents magefiles module embeds; never fetched.
+dependencies:
+  - name: agent-services
+    version: 0.1.0
+    repository: file://charts/agent-services

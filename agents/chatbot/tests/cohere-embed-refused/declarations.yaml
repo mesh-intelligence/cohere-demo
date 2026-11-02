@@ -1,0 +1,93 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: cohere-embed-refused-declarations
+imports:
+  - declarations-types.yaml
+tools:
+  - name: drive_chat_turn
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Post one tasking to a chatbot whose embedding provider refuses the call.
+    problem: A provider refusal must stop the turn rather than carry on into the fan-out.
+    goals:
+      - Post a tasking and report whether the turn broke or answered.
+    requirements:
+      input:
+        - Tool config fixes the operation; the tasking is literal fixture data.
+      output:
+        - Output reports the turn outcome.
+      errors:
+        - An unreachable subject emits CommandError, which is distinct from the subject reporting a command error.
+    non_goals:
+      - Does not establish why the turn stopped; the probe does that.
+    output:
+      description: The chatbot's turn response.
+    side_effects:
+      - kind: external_api
+        target: chatbot.chat
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A chat turn against mocks changes nothing durable.
+    errors:
+      - signal: CommandError
+        condition: The chatbot is unreachable or returns an unmapped status.
+        state_after_failure: No state changes.
+    config:
+      rest_ref: subject
+      operation: chat_turn
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SubjectAnswered, message: builtin.Message<cohere-embed-refused-declarations-types.DriveChatTurnOutput>}
+        - {signal: SubjectBroke, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: probe_cohere_embed
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Ask the embedding mock whether the turn consumed its scripted refusal.
+    problem: A turn that stopped before reaching the provider fails identically to one the provider refused, so the outcome alone does not prove which happened.
+    goals:
+      - Read the mock's next scripted response and map it to a signal.
+      - Distinguish a provider that was called from one that was not.
+    requirements:
+      input:
+        - Tool config fixes the operation; the probe body is literal.
+      output:
+        - A success maps to RefusalConsumed; the refusal still being served maps to RefusalUntouched.
+      errors:
+        - An unreachable mock emits CommandError, distinct from either verdict.
+    non_goals:
+      - Does not drive a turn, and does not read the vector the provider would have returned.
+    output:
+      description: The mock's next scripted response.
+    side_effects:
+      - kind: external_api
+        target: cohere.embed
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: Reading a mock's next scripted response changes nothing durable.
+    errors:
+      - signal: CommandError
+        condition: The embedding mock is unreachable or returns an unmapped status.
+        state_after_failure: No state changes.
+    config:
+      rest_ref: cohere_probe
+      operation: probe
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: RefusalConsumed, message: builtin.Message<cohere-embed-refused-declarations-types.ProbeOutput>}
+        - {signal: RefusalUntouched, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}

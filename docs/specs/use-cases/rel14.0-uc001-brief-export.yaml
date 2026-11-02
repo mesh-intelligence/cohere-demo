@@ -1,0 +1,168 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel14.0-uc001-brief-export
+title: The Analyst Edits the Brief and Exports It to a Ministry-Conformant PDF a Reviewer Approves
+
+summary: |
+  The turn ends at markdown. The analyst reads the composed brief, edits it,
+  approves it, and asks for a PDF. A separate exporter agent converts that
+  approved markdown to .tex and renders it through a LaTeX engine, returning a
+  ministry-conformant document a reviewer signs off. This is the last step of
+  the road map and the first one a person triggers.
+
+  Export is analyst-triggered rather than turn-triggered, and the distinction is
+  the human-in-the-loop the VISION requires rather than a scheduling preference.
+  An export that fires at the end of generation renders the draft nobody has
+  reviewed. Running it on the edited document also takes it off the turn's
+  latency budget, so a slow render delays nobody's brief.
+
+  The exporter renders and nothing else. It does not re-derive the section
+  structure, does not re-run the conformance check, and does not alter content,
+  citations, or wording. The conformance verdict reached the analyst with the
+  brief, and the analyst decided; an exporter that gated on that verdict would
+  take a judgment the specification assigns to a person.
+
+  The isolation is the part that matters most, and it is not defensive
+  decoration. The markdown being rendered was composed by a language model from
+  documents that, once the OSINT branch lands, include text retrieved from the
+  open internet. That text becomes a .tex document handed to a LaTeX engine, and
+  a LaTeX engine is a programmable system -- it will run commands written into
+  its input if shell escape is enabled, and read any path its input names if its
+  file access is unrestricted. Either turns rendering a document into an
+  execution primitive reachable by anyone who can influence a retrieved page. So
+  shell escape is off, file access is confined to the request's working directory
+  and the declared template assets, both binaries take fixed argv with document
+  content arriving as a file rather than through a shell, and a NetworkPolicy
+  denies egress so that even a successful compromise has nowhere to send
+  anything.
+
+  Failure is clean or it is not export. A LaTeX run that dies partway leaves
+  auxiliary files and can leave a truncated PDF, and a ministry brief that looks
+  complete and is not is worse than a reported failure. The run rolls back,
+  returns diagnostics rather than a document, and leaves the approved markdown
+  intact so a failure costs a retry rather than the analyst's edited work.
+
+actor: Intelligence analyst who has reviewed and edited a composed brief
+trigger: The analyst approves the edited brief and requests an export.
+
+flow:
+  - F1: The analyst reads the composed brief in the interface, edits it, and approves it, with the conformance verdict visible alongside it.
+  - F2: The analyst triggers the export; nothing about the completion of the generation turn triggers it.
+  - F3: The chatbot or the interface export action calls the exporter's machine_request export endpoint, which binds the request to one request-scoped run.
+  - F4: The export machine sequences AwaitingExport, ConvertingTex, RenderingPdf, and Reporting.
+  - F5: The md_to_tex exec word converts the approved markdown to a .tex document, receiving it as a file with fixed argv and no shell between the content and the command line.
+  - F6: The render_pdf exec word renders that .tex through the LaTeX engine, with shell escape disabled and file access confined to the request's working directory and the declared template assets.
+  - F7: The exporter reaches no model, no retrieval client, and no provider, and its NetworkPolicy denies egress, so the rendering toolchain has no outbound path whatever its input contains.
+  - F8: The machine terminates in Done and the endpoint returns the rendered PDF, which corresponds to the approved markdown in content, citations, and wording.
+  - F9: The exporter retains nothing after the request completes -- no brief, no .tex, no auxiliary files, no cached output.
+  - F10: A reviewer receives the PDF in the ministry template's shape and approves it.
+  - F11: On a conversion or render failure the machine terminates in Failed, rolls back the request's temporary files, returns diagnostics identifying the failing stage rather than a document, and leaves the approved markdown available for re-export.
+
+touchpoints:
+  - id: T1
+    target: srd013-exporter-agent AC4
+    reason: The release is this acceptance criterion -- export takes the approved, analyst-edited markdown, is triggered by the analyst rather than by a completed turn, runs off the turn's latency, and renders without re-deriving structure, re-running the conformance check, or altering content.
+  - id: T2
+    target: srd013-exporter-agent AC2
+    reason: The exec bindings are what make rendering model-composed content safe -- fixed argv, content as a file rather than through a shell, shell escape disabled so a command written into the .tex does not execute, and file access confined to the working directory and declared assets.
+  - id: T3
+    target: srd013-exporter-agent AC3
+    reason: The agent binds no model, retrieval, or provider client, its egress is denied by NetworkPolicy, its endpoint has one caller, it holds no lifecycle authority, and it receives no clearance or identity and makes no access-control decision.
+  - id: T4
+    target: srd013-exporter-agent AC1
+    reason: The export surface is a request-scoped machine_request endpoint over the declared state sequence terminating in Done or Failed, with monitor and control servers, no retained state, and a PDF returned only on success.
+  - id: T5
+    target: srd013-exporter-agent AC5
+    reason: A failure rolls back every temporary file, returns no partial PDF, reports the failing stage without retaining brief content elsewhere, is bounded by declared time and resource limits, and leaves the markdown re-exportable.
+  - id: T6
+    target: srd013-exporter-agent AC6
+    reason: The exporter deploys as its own Helm workload with its own Service, NetworkPolicy, and limits, on an image whose rendering binaries are a recorded sanctioned divergence, and it is deployable independently of the Cohere provider path.
+  - id: T7
+    target: srd012-brief-markdown-conformance AC4
+    reason: The conformance verdict travels with the brief to this approval decision, and the exporter consumes the approved markdown rather than re-validating it, so the analyst's decision is what authorizes the export.
+  - id: T8
+    target: srd011-osint-search-cascade-rerank AC7
+    reason: The untrusted-content boundary the search branch sets is what the shell-escape and file-access restrictions enforce at the rendering stage, since external text reaching the composition set can reach the .tex document.
+
+success_criteria:
+  - id: S1
+    criterion: An analyst edits a composed brief, approves it, and exports it, and the returned PDF is in the ministry template's shape and corresponds to the approved markdown in content, citations, and wording. A PDF rendered from the pre-edit generation is not this, however conformant it looks.
+    traces:
+      - srd013-exporter-agent AC4
+  - id: S2
+    criterion: Export is triggered by the analyst rather than by the completion of a generation turn, and its duration does not count against that turn's latency. A slow render delays no brief reaching an analyst.
+    traces:
+      - srd013-exporter-agent AC4
+  - id: S3
+    criterion: The exporter renders the markdown it is given without re-deriving or repairing the section structure, without re-running the conformance check, and without gating export on that verdict. The verdict reached the analyst and the analyst decided; an exporter that gated on it would take a judgment assigned to a person.
+    traces:
+      - srd013-exporter-agent AC4
+      - srd012-brief-markdown-conformance AC4
+  - id: S4
+    criterion: The export endpoint binds one inbound request to one request-scoped run over the declared state sequence, terminating in Done or Failed, with monitor and control servers present, no state retained between requests, and a PDF returned only on success.
+    traces:
+      - srd013-exporter-agent AC1
+  - id: S5
+    criterion: Both exec words use fixed argv declared in configuration, and no part of the brief content, the request body, or any model output becomes an argument, a flag, or a shell string. Document content reaches each binary as a file, so no interpolation path exists between the document and the command line.
+    traces:
+      - srd013-exporter-agent AC2
+  - id: S6
+    criterion: The LaTeX engine runs with shell escape disabled, so a command written into the .tex document -- by the composing model, or by external text that reached the composition set through the search branch -- does not execute. This is the property that keeps rendering untrusted-derived content from being an execution primitive.
+    traces:
+      - srd013-exporter-agent AC2
+  - id: S7
+    criterion: The engine's file access is restricted to the request's working directory and the declared template assets, so an input directive naming a path outside them does not read it.
+    traces:
+      - srd013-exporter-agent AC2
+  - id: S8
+    criterion: The exporter binds no LLM, retrieval, or provider client, its NetworkPolicy denies egress so the toolchain has no outbound path whatever its input contains, its endpoint is reachable only from the chatbot or the interface export action, it holds no lifecycle or deployment authority, and it receives no clearance level or identity and makes no access-control decision.
+    traces:
+      - srd013-exporter-agent AC3
+  - id: S9
+    criterion: A failed conversion or render terminates in Failed, rolls back the request's temporary files leaving no .tex, auxiliary files, or partial output, returns no truncated PDF, reports the failing stage and cause without embedding brief content in a separately retained error surface, is bounded by declared time and resource limits, and leaves the approved markdown available for re-export.
+    traces:
+      - srd013-exporter-agent AC5
+  - id: S10
+    criterion: The exporter deploys as its own Helm workload with its own Service, NetworkPolicy, and resource limits, on an image whose added rendering binaries are recorded as a sanctioned divergence matching the applier's exemption, with binaries and template assets as image packaging rather than machine YAML, and it renders a brief on a mesh running the Ollama tier as readily as on the Cohere path.
+    traces:
+      - srd013-exporter-agent AC6
+
+failure_scenarios:
+  - id: E1
+    scenario: The export runs automatically when the turn completes, so the PDF is ready when the analyst opens the brief.
+    expected: Rejected; R4.1 makes export analyst-triggered. The automatic export renders the raw generation, which is the draft nobody reviewed, and the VISION requires a human edit before the document is delivered. Readiness is not the property being optimized; provenance of the approved document is.
+  - id: E2
+    scenario: The LaTeX engine runs with shell escape enabled because the ministry template uses a package that wants it.
+    expected: Rejected; R2.4 requires it disabled. The .tex being rendered derives from model-composed text over documents that may include retrieved external content, so shell escape makes rendering an execution primitive reachable by anyone who can influence a retrieved page. A template needing it is a template to change.
+  - id: E3
+    scenario: The brief's title is passed to md-to-tex as a command-line argument so the output filename is meaningful.
+    expected: Rejected; R2.2 and R2.3 keep every part of the document off the command line. A title is document content, it is model-composed, and a filename is not worth an interpolation path between untrusted text and an argv. Content reaches the binaries as files.
+  - id: E4
+    scenario: The exporter re-runs the conformance check and refuses to export a non-conformant brief, since a malformed PDF should not reach a reviewer.
+    expected: Rejected; R4.4 forbids gating on the verdict. The verdict travelled to the analyst with the brief, and the analyst may knowingly export a flagged draft for a reason the system does not model. Re-running the check also creates a second authority for conformance, which srd012 R6.2 gives to one.
+  - id: E5
+    scenario: A render that fails at the last stage returns the PDF produced so far, since a partial document is more useful than none.
+    expected: Rejected; R5.2 forbids returning it. A truncated ministry brief that appears complete is worse than a reported failure, because the reader has no way to see what is missing. The failure is reported and the markdown stays available for a retry.
+  - id: E6
+    scenario: Failure diagnostics include the .tex content so the failing construct can be diagnosed.
+    expected: Rejected as specified; R5.3 excludes brief content from an error surface retained differently from the brief. The diagnostics name the failing stage and cause. Embedding the document in a log moves it into a store with its own retention, which for a classified brief is a disclosure the export path was not authorized to make.
+  - id: E7
+    scenario: The exporter is given the analyst's clearance so it can watermark the PDF with the appropriate classification.
+    expected: Rejected; R3.5 keeps clearance off this agent. The classification banner is part of the ministry template's structure, composed into the markdown, so the information is already in the document. Passing clearance here would give an access-control input to an agent that makes no access-control decision.
+  - id: E8
+    scenario: The rendering binaries are added to the chatbot's container so no second workload is needed.
+    expected: Rejected; R6.1 and the architecture put them in a separate workload. The LaTeX toolchain is heavy and carries its own vulnerability surface, and placing it in the process serving the browser puts it on the request hot path and widens that process's attack surface. The applier established the separate exec-bound workload pattern for the same reason.
+  - id: E9
+    scenario: A document that sends the LaTeX engine into a non-terminating run is allowed to finish, since interrupting it might truncate valid output.
+    expected: Rejected; R5.4 bounds the render by declared time and resource limits. A non-terminating run occupies the workload indefinitely, which is a denial of service reachable through document content, and the bounded failure is exactly the outcome R5.2 already prefers over partial output.
+
+out_of_scope:
+  - Composing, editing, summarizing, or correcting the brief; the exporter renders what it is given.
+  - Validating template conformance, which srd012 owns and this agent does not re-run.
+  - The LaTeX template's typography, layout, and page geometry, which are template assets a deployment supplies.
+  - Single-sourcing the LaTeX template against the markdown structure and the interface layout, which is the recorded srd012 follow-up.
+  - Storing, indexing, versioning, or serving exported PDFs; the agent is request-scoped and stateless.
+  - Export formats other than PDF.
+
+test_suite_trace: test-rel14.0-brief-export
+status: implemented

@@ -1,0 +1,40 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The profile the chat endpoint's machine_request binding loads, distinct from
+# the agent's own profile.yaml in exactly one respect: its tools selection is
+# the chat-LLM vocabulary rather than the lifecycle words.
+#
+# Two machines share these declarations and this REST definition, and they must
+# not share a tools selection: what a request machine needs to register is the
+# vocabulary a $tool transition dispatches, and what a persistent agent needs is
+# the lifecycle words that launch and stop its listeners. Registering the first
+# set in the second machine gives that agent an invoke_llm word's max_time as
+# its own run budget (GH-86).
+kind: agent-profile
+schema_version: 1
+name: chatbot-request
+machine: request-machine.yaml
+tools:
+  - request-tools.yaml
+tool_declarations:
+  - declarations.yaml
+  - request-declarations.yaml
+  - request-topology-declarations.yaml
+  - request-fanout-declarations.yaml
+  - request-osint-declarations.yaml
+  - request-conformance-declarations.yaml
+  - export-relay-declarations.yaml
+  - /opt/agent-core/tools/builtin/lifecycle/exit-agent.yaml
+rest_definitions:
+  - rest.yaml
+  - embed-rest.yaml
+  - provider-rest.yaml
+# The provider libraries the invoke_llm words read their chat dialects from
+# (srd058 R1.1). providers carries the words the release tier switches: the chart
+# rebinds it to the Ollama library with --library when the Cohere provider is
+# off. local carries the words that run on the host model in either tier, and
+# cohere the ones that run at Cohere in either tier.
+libraries:
+  providers: /opt/agent-core/tools/providers/cohere
+  local: /opt/agent-core/tools/providers/ollama
+  cohere: /opt/agent-core/tools/providers/cohere

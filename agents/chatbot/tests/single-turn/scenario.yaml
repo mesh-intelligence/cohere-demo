@@ -1,0 +1,28 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+# The chatbot-turn-critic keeps single-turn scope in this scenario path and
+# configuration rather than in its reusable Critic identity.
+# The chatbot ships fixed listeners: chat on 18080, lifecycle control and
+# health on 18081. Its client limits and its chat words' provider_url allow
+# only the real dependency ports, so every mock is pinned to stand exactly
+# where the real service stands: the LLM provider at 11434, the RAG servers
+# at 18085 and 18095.
+subject_address: 127.0.0.1:18080
+subject_health_path: http://127.0.0.1:18081/api/lifecycle/health
+fixture_address:
+  llm: 127.0.0.1:11434
+  rag0: 127.0.0.1:18085
+  rag1: 127.0.0.1:18095
+  cohere: 127.0.0.1:18120
+fixture_env:
+  cohere: COHERE_BASE_URL
+env:
+  - COHERE_HOST=127.0.0.1
+  - COHERE_SCHEME=http
+  - COHERE_PORT=18120
+  # Read by both the embed request body and declare_query_model, so the identity
+  # each source is compared against is the identity the turn asked for. The RAG
+  # mocks report the same value; anything else excludes them and the turn
+  # composes from nothing while still answering 200.
+  - COHERE_EMBED_MODEL=embed-v4.0
+  - COHERE_API_KEY=scenario-not-a-real-key

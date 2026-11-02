@@ -1,0 +1,196 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+kind: tool-declaration
+schema_version: 1
+unit: cohere-citations-uncited-declarations
+imports:
+  - /opt/agent-core/tools/units/types-collections.yaml
+  - declarations-types.yaml
+tools:
+  - name: drive_chat_turn
+    type: builtin
+    init: rest_client_invoke
+    visibility: internal
+    category: boundary
+    description: Post one tasking to the chatbot the rig started and map its answer.
+    problem: The Cohere composition tier must be proven against controlled dependencies rather than the live provider.
+    goals:
+      - Post a tasking to the chatbot at the address the rig published.
+      - Map the answer so the assertion can compare it.
+    requirements:
+      input:
+        - Tool config fixes the operation; the tasking is literal fixture data.
+      output:
+        - Output reports the answer field of the turn response.
+      errors:
+        - Unreachable or unmapped responses emit CommandError.
+    non_goals:
+      - Does not start or stop the chatbot; the rig owns that.
+      - Does not inspect which word answered; the assertion does that by comparison.
+    output:
+      description: The chatbot's turn response.
+    side_effects:
+      - kind: external_api
+        target: chatbot.chat
+        state: read_only
+    reversibility:
+      classification: reversible
+    undo:
+      strategy: noop
+      description: A chat turn against mocks changes nothing durable.
+    errors:
+      - signal: CommandError
+        condition: The chatbot is unreachable or returns an unmapped status.
+        state_after_failure: No state changes.
+    config:
+      rest_ref: subject
+      operation: chat_turn
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SubjectAnswered, message: builtin.Message<cohere-citations-uncited-declarations-types.DriveChatTurnOutput>}
+        - {signal: SubjectBroke, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_surfaced_ids
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the record ids of the citations the turn surfaced.
+    problem: A selector walks maps, so an array is compared by rendering it rather than by indexing it.
+    goals:
+      - Emit the surfaced record ids in response order.
+      - Produce an empty string when nothing was surfaced.
+    requirements:
+      input:
+        - The surfaced citations are selected from the driven turn.
+      output:
+        - Output is the comma-joined record ids.
+      errors:
+        - A citation without a record id emits CommandError.
+    non_goals:
+      - Does not judge whether an id should have been surfaced.
+    output: {description: Comma-joined surfaced record ids.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(drive_chat_turn).body.mapped.citations
+      item_template: "{{ record_id }}"
+      separator: ","
+      signal: SurfacedRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: SurfacedRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: render_dropped_reasons
+    type: builtin
+    init: render_each
+    visibility: internal
+    category: response
+    description: Render the reasons reported for the citations the turn dropped.
+    problem: A drop that is not reported is indistinguishable from a citation the provider never returned.
+    goals:
+      - Emit the reported drop reasons in response order.
+      - Produce an empty string when nothing was dropped.
+    requirements:
+      input:
+        - The dropped citations are selected from the driven turn.
+      output:
+        - Output is the comma-joined drop reasons.
+      errors:
+        - A dropped entry without a reason emits CommandError.
+    non_goals:
+      - Does not judge whether a citation should have been dropped.
+    output: {description: Comma-joined drop reasons.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Rendering changes no external state.}
+    config:
+      items: $from(drive_chat_turn).body.mapped.dropped
+      item_template: "{{ reason }}"
+      separator: ","
+      signal: DroppedRendered
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: DroppedRendered, message: builtin.Message<builtin.Text>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
+  - name: compose_citation_report
+    type: builtin
+    init: compose
+    visibility: internal
+    category: response
+    description: Compose the surfaced ids and the reported drops into one comparable line.
+    problem: |
+      Both lists are empty in the uncited case, and an empty rendered string is
+      not a value a comparison can distinguish from an unresolved one. Wrapping
+      them in a fixed envelope makes every outcome a non-empty string, and
+      comparing the two together means a turn cannot pass by getting one half
+      right.
+    goals:
+      - Render both lists into one line in a fixed shape.
+    requirements:
+      input:
+        - The rendered surfaced ids and drop reasons are selected from command state.
+      output:
+        - Output is the composed report line.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not judge either list; the comparison does that.
+    output: {description: Composed citation report line.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Composition changes no external state.}
+    config:
+      signal: ReportComposed
+      inputs:
+        surfaced: $from(render_surfaced_ids).$
+        dropped: $from(render_dropped_reasons).$
+      template: |-
+        surfaced=[{{ surfaced }}] dropped=[{{ dropped }}]
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReportComposed, message: builtin.Message<builtin.Text>}
+  - name: assert_citation_report
+    type: builtin
+    init: value_predicate
+    visibility: internal
+    category: response
+    description: Require that nothing was surfaced and nothing was reported as dropped.
+    problem: |
+      A surfaced citation is a promise the reader can open it, and a drop that
+      goes unreported leaves an uncited answer and an all-dropped answer looking
+      the same. Comparing both lists in one line fails a turn that gets either
+      wrong (srd009 R4.4, R4.5).
+    goals:
+      - Compare the composed report against the outcome this scenario scripts.
+    requirements:
+      input:
+        - The composed report is selected from command state.
+      output:
+        - Output is the comparison outcome.
+      errors:
+        - An unresolved selector emits CommandError.
+    non_goals:
+      - Does not inspect spans.
+    output: {description: Citation report comparison outcome.}
+    side_effects: []
+    reversibility: {classification: reversible}
+    undo: {strategy: noop, description: Comparison changes no external state.}
+    config:
+      left: $from(compose_citation_report).$
+      op: eq
+      right: "surfaced=[] dropped=[]"
+      operand_type: string
+      satisfied: ReportMatched
+      unsatisfied: ReportMismatched
+    signature:
+      input: builtin.Message
+      emits:
+        - {signal: ReportMatched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: ReportMismatched, message: builtin.Message<builtin-types-collections.Comparison>}
+        - {signal: CommandError, message: builtin.Message<builtin.Text>}
