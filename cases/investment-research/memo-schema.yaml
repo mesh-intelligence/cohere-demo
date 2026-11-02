@@ -1,0 +1,50 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The investment-committee memo, markdown structural representation (srd018 R6). It has
+# the shape of agents/chatbot/ui/intsum-markdown-schema.yaml, and the same deterministic
+# check reads it through helm/ci/investment-research-values.yaml. A test holds the two
+# in step. It describes structure only.
+id: investment-committee-memo-markdown
+version: "1"
+source_owner: cases/investment-research
+
+what_conformance_asserts: >-
+  The required sections are present, in order, and populated. Conformance does not
+  assert that any statement in the memo is accurate or supported, that citations
+  resolve, or that the memo is fit for an investment decision. It is a demonstration
+  artifact and it is not investment advice.
+
+sections:
+  - id: summary
+    label: Investment Thesis
+    order: 0
+    required: true
+    headings:
+      - Investment Thesis
+      - Thesis
+      - Summary
+    content: >-
+      What the documents support about the question, stated up front. It describes the
+      evidence and makes no recommendation.
+
+  - id: body
+    label: Analysis
+    order: 1
+    required: true
+    headings:
+      - Analysis
+      - Sector Analysis
+    content: >-
+      The argument from the composed documents, with each assertion cited.
+
+  - id: gaps
+    label: Risks and Gaps
+    order: 2
+    required: true
+    headings:
+      - Risks and Gaps
+      - Risks
+      - Gaps
+    content: >-
+      What could undercut the thesis, and what the documents do not establish.

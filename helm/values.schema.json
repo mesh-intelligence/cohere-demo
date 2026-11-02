@@ -264,6 +264,47 @@
         "retrievalBreadth": {
           "type": "integer",
           "minimum": 1
+        },
+        "report": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "instruction": {"type": "string"},
+            "templateVersion": {"type": "string"},
+            "sections": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "summary": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["headings", "label"],
+                  "properties": {
+                    "headings": {"type": "string"},
+                    "label": {"type": "string"}
+                  }
+                },
+                "body": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["headings", "label"],
+                  "properties": {
+                    "headings": {"type": "string"},
+                    "label": {"type": "string"}
+                  }
+                },
+                "gaps": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["headings", "label"],
+                  "properties": {
+                    "headings": {"type": "string"},
+                    "label": {"type": "string"}
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

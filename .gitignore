@@ -96,3 +96,6 @@ gcp.yaml
 # Terraform working directories and the bootstrap root's local state (infra/gcp).
 infra/gcp/**/.terraform/
 infra/gcp/bootstrap/terraform.tfstate*
+
+# The operator contact a case's fetch declares to the SEC (srd018 R2.6).
+cases/*/fetch.local.yaml

@@ -727,6 +727,9 @@ rest:
             messages:
               - role: system
                 content: |
+                  {{- if .Values.chatbot.report.instruction }}
+                  {{- .Values.chatbot.report.instruction | nindent 18 }}
+                  {{- else }}
                   You compose a command-staff intelligence brief from the
                   documents supplied with the request.
 
@@ -738,6 +741,7 @@ rest:
                   - Structure the brief as markdown with the ministry headings:
                     Assessment, Key Judgements, Supporting Reporting, and Gaps.
                   - Attribute every assertion to the document it came from.
+                  {{- end }}
               - role: user
                 content: "{{`{{ params.message }}`}}"
             documents: "{{`{{ params.documents }}`}}"

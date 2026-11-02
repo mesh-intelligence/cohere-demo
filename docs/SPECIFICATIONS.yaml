@@ -4,6 +4,11 @@ id: cohere-demo-specifications
 title: cohere-demo Specification Index
 
 overview: |
+  The mesh is domain-neutral and the specifications keep the defense profile's
+  vocabulary: clearance is its access level, Admiralty its source rating, and the
+  INTSUM its report template. srd018 (rel15.0, implemented) binds the same mesh to
+  investment research by configuration.
+
   Specification index for the standalone chatbot mesh example. Fifteen SRDs define
   the program: three data-plane -- the RAG server agent (srd001), the chatbot agent
   (srd002), and the Helm deployment model (srd003) -- two control-plane -- the
@@ -255,6 +260,11 @@ roadmap_summary:
     use_cases_done: 1
     use_cases_total: 1
     status: implemented
+  - version: "15.0"
+    name: Investment research case
+    use_cases_done: 1
+    use_cases_total: 1
+    status: implemented
 
 srd_index:
   - id: srd001-rag-server-agent
@@ -321,6 +331,10 @@ srd_index:
     title: Two-Panel INTSUM Interface
     summary: The analyst surface over the corpus -- the chat route rendered as the tasking and its keyword, source-type, source-rating, and clearance facets beside the live ministry INTSUM form, the versioned template artifact that form renders from and rel12.2 later validates markdown against, the walk from a citation to its chunk to the whole parent report and its other chunk-size versions, and the identifier-in read boundary that serves those documents through the request boundary where the analyst's clearance is established so the presentation path withholds exactly what retrieval withholds.
     path: docs/specs/software-requirements/srd016-intsum-ui.yaml
+  - id: srd018-investment-research-case
+    title: Investment Research Case
+    summary: A second regulated domain bound by configuration -- US energy-sector research over numeric issuer facts, government energy analysis, macro releases, and an invented gated tier that cannot name a real issuer, with tiers admitted only after their terms are read, access levels modeling information barriers through a declared mapping onto the existing ordered set, the investment-committee memo as data the existing check reads, and every surface that could not be bound listed.
+    path: docs/specs/software-requirements/srd018-investment-research-case.yaml
   - id: srd017-real-demo-corpus
     title: Real Multi-Source Demo Corpus
     summary: The real corpus that replaces the synthetic one -- five Ukraine source tiers read through a single normalized envelope with clearance declared per tier rather than inferred per document, a declared window converted whole and chunked at three coexisting profiles, parent-document and cross-tier lineage on every chunk so a retrieved fragment reconstructs to a citable source, a paid embedding step bounded to a declared selection whose ceiling is checked before the first request, and a second collection in the same vector store that serves documents and their versions to the interface behind the clearance filter that governs retrieval.
@@ -495,6 +509,13 @@ use_case_index:
     test_suite: test-rel14.0-brief-export
     path: docs/specs/use-cases/rel14.0-uc001-brief-export.yaml
 
+  - id: rel15.0-uc001-investment-research-case
+    title: The Mesh Serves a Second Regulated Domain from Configuration
+    release: "15.0"
+    status: implemented
+    test_suite: test-rel15.0-investment-research-case
+    path: docs/specs/use-cases/rel15.0-uc001-investment-research-case.yaml
+
 test_suite_index:
   - id: test-rel00.0-chatbot-mesh
     title: Test Suite for Release 00.0 RAG Server and Single-RAG Chatbot Turn
@@ -632,6 +653,12 @@ test_suite_index:
     release: "14.0"
     traces: [rel14.0-uc001-brief-export]
     path: docs/specs/test-suites/test-rel14.0-brief-export.yaml
+
+  - id: test-rel15.0-investment-research-case
+    title: Test Suite for Release 15.0 Investment Research Case
+    release: "15.0"
+    traces: [rel15.0-uc001-investment-research-case]
+    path: docs/specs/test-suites/test-rel15.0-investment-research-case.yaml
 
 foundation_document_index:
   - id: cohere-demo

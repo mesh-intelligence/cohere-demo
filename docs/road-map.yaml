@@ -858,3 +858,26 @@ releases:
       - id: test-rel14.0-brief-export
         summary: The edit-then-export tracer, the analyst trigger off the turn's latency, rendering without re-deriving structure or re-running conformance, the request-scoped machine, fixed argv with content as a file, the shell-escape and file-access boundary against hostile fixtures, the isolation and single-caller render, clean failure with no partial PDF, and the separate workload on a sanctioned-divergence image.
         status: implemented
+
+  - version: "15.0"
+    name: Investment research case
+    lineage: plan
+    description: |
+      A second regulated domain on the same mesh. US energy-sector research with
+      numeric issuer facts, government energy analysis, macro releases, and an
+      invented gated tier of analyst notes, where access levels model information
+      barriers and the report is an investment-committee memo. Tiers enter only after
+      their terms are read, no filing prose or news text is carried, and invented
+      notes cannot name a real issuer. Binds by corpus, values file, and template data;
+      what could not be bound is listed. A demonstration, not investment advice.
+    status: implemented
+    srds:
+      - srd018-investment-research-case
+    use_cases:
+      - id: rel15.0-uc001-investment-research-case
+        summary: An operator selects and deploys the case, and an analyst receives a cited, memo-conformant, access-gated first draft from the same turn, filter, and check the defense profile runs.
+        status: implemented
+    test_suites:
+      - id: test-rel15.0-investment-research-case
+        summary: The case root and selection, recorded terms, the declared access mapping failing closed, the real-issuer guard and retrieval conditions, declared ratings, the memo schema and values binding, and the deployed cited, conformant, gated turn.
+        status: implemented

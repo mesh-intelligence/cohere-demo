@@ -140,10 +140,34 @@ type corpusSliceReport struct {
 	SIGINTSeries      int
 	TelegramCandidate int
 	TelegramSampled   int
+	// What a case's tiers converted, which the defense counters do not name.
+	CaseDocuments int
 }
 
 func (r corpusSliceReport) total() int {
-	return r.Humint + r.OSINTAssessment + r.OSINTNews + r.SIGINTEvent + r.SIGINTSeries
+	return r.Humint + r.OSINTAssessment + r.OSINTNews + r.SIGINTEvent + r.SIGINTSeries + r.CaseDocuments
+}
+
+// loadCorpusSliceFor reads the tiers of whichever corpus a root holds.
+func loadCorpusSliceFor(
+	root, dataRoot string, params corpusSliceParameters, mapping clearanceMapping, manifest corpusManifest,
+) ([]corpusEnvelope, corpusSliceReport, error) {
+	definition, known := corpusCaseDefinitionFor(root)
+	if !known {
+		if corpusRootIsCase(root) {
+			return nil, corpusSliceReport{}, fmt.Errorf("%s is a case root no definition describes", root)
+		}
+		return loadCorpusSlice(dataRoot, params, mapping, manifest)
+	}
+	envelopes, err := definition.Load(dataRoot, params, manifest)
+	if err != nil {
+		return nil, corpusSliceReport{}, err
+	}
+	sortCorpusEnvelopes(envelopes)
+	if err := assertUniqueDocumentIDs(envelopes); err != nil {
+		return nil, corpusSliceReport{}, err
+	}
+	return envelopes, corpusSliceReport{CaseDocuments: len(envelopes)}, nil
 }
 
 // loadCorpusSlice reads every tier and returns the converted window in a

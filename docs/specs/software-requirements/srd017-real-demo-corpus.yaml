@@ -24,6 +24,12 @@ role_realization_decision:
     or the point at which clearance is enforced.
 
 context: |
+  Vocabulary. The mechanism here is domain-neutral and the words are the defense
+  profile's. "Clearance" is that profile's access level, the Admiralty scale its
+  source rating, and the INTSUM or brief its report template. srd018 binds the same
+  mechanism to another domain, and the wire values of the ordered set stay as written
+  (srd018 R3.5).
+
   rel10.4 built the corpus pipeline against a synthetic corpus written for it.
   Every document declared its own front matter -- source identifier, source
   type, clearance level, Admiralty rating, keywords -- because the corpus and

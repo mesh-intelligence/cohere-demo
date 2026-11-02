@@ -431,7 +431,7 @@ func buildUkraineCorpusStore(
 		Markings: manifest.ClearanceMarkings,
 		Caveats:  manifest.ClearanceCaveats,
 	}
-	envelopes, sliceReport, err := loadCorpusSlice(dataRoot, slice, mapping, manifest)
+	envelopes, sliceReport, err := loadCorpusSliceFor(root, dataRoot, slice, mapping, manifest)
 	if err != nil {
 		return report, sliceReport, err
 	}

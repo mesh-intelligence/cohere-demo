@@ -178,7 +178,7 @@ func cohereApplicationBinding(root, platform string) apprig.PlatformBinding {
 		BucketURLTemplate: "gs://%s-telemetry",
 		ChartName:         "chatbot-mesh",
 		ChartPath:         filepath.Join(root, "helm"),
-		ValuesPath:        filepath.Join(root, "helm", "ci", chatbotDemoValuesFile),
+		ValuesPath:        filepath.Join(root, "helm", "ci", corpusCaseValuesFile()),
 		Timeout:           helmLLMInstallTimeout.String(),
 		ApplicationRoot:   root,
 	}

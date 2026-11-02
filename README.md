@@ -88,6 +88,11 @@ but not built, because its Go modules, runtime image, and npm kit are private;
 [docs/guides/going-public.md](docs/guides/going-public.md) records the split
 and what publishing this repository requires.
 
+The mesh is not specific to defense. [cases/investment-research](cases/investment-research/README.md)
+binds the same turn, filter, citation path, and check to US energy-sector research over
+public material and invented notes, and lists what could not be bound. It is a
+demonstration, not investment advice.
+
 List every target:
 
 ```bash

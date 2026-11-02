@@ -82,7 +82,7 @@ func (d corpusStoredDocument) profiles() []string {
 // private checkout present is an error rather than a fallback, because the
 // fallback would stage copyrighted text for `git add -A` to commit.
 func corpusDocumentDir(root, documentID string) (string, error) {
-	if corpusDocumentKeepPrivate(documentID) {
+	if !corpusRootIsCase(root) && corpusDocumentKeepPrivate(documentID) {
 		private := corpusPrivateStoreDocumentsDir(root)
 		if private == "" {
 			return "", fmt.Errorf("document %s belongs to a keep-private tier: %w",
@@ -98,7 +98,7 @@ func corpusDocumentDir(root, documentID string) (string, error) {
 // encoded form differs from what is on disk, so a rebuild over unchanged inputs
 // writes nothing (R7.4).
 func writeCorpusEnvelopeIfChanged(root string, envelope corpusEnvelope) (bool, error) {
-	encoded, err := encodeCorpusYAML(envelope)
+	encoded, err := encodeCorpusYAMLFor(root, envelope)
 	if err != nil {
 		return false, fmt.Errorf("encode envelope %s: %w", envelope.DocumentID, err)
 	}
@@ -128,7 +128,7 @@ func writeCorpusDocumentChunkIfChanged(
 		return false, fmt.Errorf("chunk %s names no parent document, so the store"+
 			" has nowhere to co-locate it (srd017 R5.1, R7.1)", record.ChunkID)
 	}
-	encoded, err := encodeCorpusYAML(record)
+	encoded, err := encodeCorpusYAMLFor(root, record)
 	if err != nil {
 		return false, fmt.Errorf("encode chunk %s: %w", record.ChunkID, err)
 	}

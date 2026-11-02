@@ -224,16 +224,9 @@ func (e corpusEnvelope) validate() error {
 			" the issued date is the one the source itself carries and is not"+
 			" defaulted (srd017 R1.5)", e.DocumentID, e.Issued, corpusEnvelopeDateLayout)
 	}
-	declared := false
-	for _, name := range corpusSourceTypes() {
-		if e.SourceType == name {
-			declared = true
-			break
-		}
-	}
-	if !declared {
+	if !corpusRecognizedSourceType(e.SourceType) {
 		return fmt.Errorf("envelope %q declares source type %q, which is not one of"+
-			" the five declared tiers %v (srd017 R1.1)",
+			" the five declared tiers %v (srd017 R1.1) or a tier a case declares",
 			e.DocumentID, e.SourceType, corpusSourceTypes())
 	}
 	if strings.TrimSpace(e.searchableText()) == "" {

@@ -53,6 +53,9 @@ func corpusDocumentKeepPrivate(documentID string) bool {
 // private checkout is present, which is the publishable-tiers-only mode a
 // public clone runs in.
 func corpusPrivateRoot(root string) string {
+	if corpusRootIsCase(root) {
+		return ""
+	}
 	//nolint:forbidigo // the private checkout is operator-supplied, like the datasets.
 	if value := strings.TrimSpace(os.Getenv(corpusPrivateRootEnv)); value != "" {
 		return value
@@ -89,6 +92,9 @@ func corpusMissingPrivateStore(root string) error {
 // is missing, or "" when all are present. Seeding over the publishable tiers
 // alone is allowed and says so rather than being silent about it.
 func corpusStoreMissingTiersNote(root string, documents map[string]corpusStoredDocument) string {
+	if corpusRootIsCase(root) {
+		return ""
+	}
 	missing := corpusMissingKeepPrivateTiers(documents)
 	if len(missing) == 0 {
 		return ""

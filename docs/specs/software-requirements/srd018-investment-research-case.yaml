@@ -1,0 +1,226 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: srd018-investment-research-case
+title: Investment Research Case
+
+role_realization_decision:
+  current_actor: corpus build, chart values
+  implemented_responsibility: Bind the existing mesh to a second regulated domain by supplying a corpus, an access-level mapping, a source-rating declaration, and a report template, without a new agent or a new machine.
+  canonical_role_sub_role: Knowledge Manager / Ontology Manager, the same role srd015 and srd017 realize. The case widens what the build reads and what the chart binds.
+  retained_or_proposed_name: >-
+    No new agent. The build remains an offline target, and the chatbot, rag-server,
+    and corpus-ingest profiles stay the ones the defense profile runs.
+  authority_boundary: The case supplies data and configuration. It holds no authority over a running agent, and it does not alter where access is enforced, which stays the rag-server filter srd010 R2 places ahead of the vector search.
+  evidence: [docs/road-map.yaml rel15.0, srd018 R1-R8]
+  migration_impact: >-
+    None for the defense profile. The Ukraine corpus, its store, its keep-private
+    tiers, and its seed path stay byte-stable, and a build with no case selected
+    is the build that existed before this release.
+
+context: |
+  The mesh has five mechanisms that say nothing about defense: a multi-tier corpus
+  whose provenance and source ratings are declared rather than inferred, an access
+  level enforced before retrieval from metadata no model reads, assertions that
+  cite a source a reader can open, output checked against a mandated template by a
+  deterministic check, and measurement against a human baseline. The repository
+  presents them through one case, a defense ministry's intelligence brief. A reader
+  cannot tell which parts are the mesh and which parts are that case.
+
+  A second case answers that by example. It also tests the claim the VISION makes,
+  that a domain is configuration, against a domain the mesh was not written for.
+
+  This release binds the mesh to US energy-sector investment research. An analyst
+  asks a research question and receives a first-draft investment-committee memo
+  citing issuer facts, government energy analysis, macro releases, and internal
+  analyst notes. Access levels model material non-public information barriers, which
+  is the civilian setting where a wall between a reader and a document is a legal
+  requirement rather than a metaphor.
+
+  The corpus is chosen so its text can be published. The Ukraine corpus ended up in
+  a private repository because its tiers were harvested first and licensed later.
+  This one reads each source's terms before the source enters.
+
+problem: |
+  The source that looks obvious is not the clean one. Filings on EDGAR are public,
+  and the SEC states that what it presents may be copied and redistributed without
+  its permission, but a filing's text is written by the company that filed it, and
+  that statement does not settle the filer's copyright. News text is worse. The
+  clean material is narrower: numeric facts, which are not expression, and
+  publications of federal agencies that state their own material is in the public
+  domain.
+
+  Synthetic gated material carries a different risk. The defense case's invented
+  reports concern a war. Invented "non-public" analyst notes about a real listed
+  company would be a fabricated claim about a real issuer, published under a real
+  company's name, in a domain where such claims have consequences. The gated tier
+  cannot use real issuers at all.
+
+  Generalization also has a limit that has to be stated. The ordered access set is
+  trusted profile configuration in the chatbot and the interface, and its wire
+  values carry defense vocabulary. Rewriting them is an agent change, which is what
+  this release claims not to need. The case binds labels over those values and
+  records where the seam shows.
+
+goals:
+  - G1: Keep the case's corpus, data, and store in its own root, so the defense corpus stays byte-stable and a case is added rather than edited in.
+  - G2: Admit a source only after reading its own reuse terms, and record the terms, the reading date, and the verdict beside the data.
+  - G3: Carry no filing prose and no news text, so every tier's verdict is publishable on the source's own statement or because the tier is facts or invented material.
+  - G4: Model access levels as information barriers through a declared mapping onto the mesh's ordered set, enforced by the existing filter.
+  - G5: Keep invented gated material away from real issuers, mechanically rather than by review.
+  - G6: Express the investment-committee memo as data the existing conformance check reads.
+  - G7: Bind the case by configuration, and list every place it could not be.
+  - G8: State who can run the case and what its figures support.
+
+requirements:
+  R1:
+    title: The case as a corpus root
+    items:
+      - R1.1: The case SHALL live under cases/investment-research with its own corpus manifest, source data, and chunk store, in the layout the defense corpus uses under the repository root, so the build and the seed operate on it through the same code.
+      - R1.2: A case SHALL be selected by an explicit declaration. With none, every corpus target SHALL behave as it did before this release, and a rebuild of the defense corpus SHALL write nothing.
+      - R1.3: A case root SHALL NOT read the private data checkout, so a keep-private tier cannot enter a case's store and a document of a case cannot be written to the private repository.
+      - R1.4: The case SHALL declare its own conversion window and embed selection, with the ceiling check srd017 R6.3 applies to the defense corpus.
+  R2:
+    title: Source tiers and their terms
+    items:
+      - R2.1: The corpus SHALL be built from four declared tiers. filing_facts holds numeric XBRL facts from EDGAR. energy_analysis holds U.S. Energy Information Administration articles. macro_release holds Federal Reserve Board and Bureau of Labor Statistics releases. analyst_note holds invented notes.
+      - R2.2: Each tier SHALL carry a README recording its source, the terms as read with the date they were read, the attribution the source asks for, and a publish or keep-private verdict with its reasoning (srd017 R9.2, R9.7).
+      - R2.3: A source whose terms have not been read SHALL NOT enter the corpus. A statement that a source is public SHALL NOT stand in for reading what the source says about reuse.
+      - R2.4: No tier SHALL carry the prose of a filing or the text of a news article. filing_facts SHALL hold reported values and their identifying metadata, rendered into text by this build.
+      - R2.5: Source data SHALL be tracked in the case root, so a rebuild needs no network access and a reader can check a document against what it was built from.
+      - R2.6: Fetching SHALL stay within the source's published access rules. Requests to SEC hosts SHALL stay under the published rate limit and SHALL declare a user agent with an operator contact, and that contact SHALL be read from a gitignored file and SHALL NOT appear in any tracked file.
+      - R2.7: Each document SHALL carry the attribution its source asks for in its provenance, so a citation names the publisher.
+  R3:
+    title: Access levels as information barriers
+    items:
+      - R3.1: The case SHALL declare a mapping from its four barrier labels onto the mesh's ordered set, lowest first. Public maps to unclassified, Internal to restricted, Restricted list to confidential, and Wall-crossed to secret.
+      - R3.2: Access SHALL be enforced by the filter srd010 R2 defines, with no new enforcement path, so what is proven of the defense profile's isolation is proven of the same code here.
+      - R3.3: Every real tier SHALL sit at the lowest level, because its material is published. Only analyst_note SHALL carry a higher level.
+      - R3.4: A note declaring a label outside the mapping SHALL be written at the highest level, under the fail-closed rule srd015 R2.5 states.
+      - R3.5: The wire values SHALL remain the defense vocabulary in this release, and the case SHALL record this as a limit. A reader of a store record or a request header sees the wire value rather than the label.
+  R4:
+    title: The invented gated tier
+    items:
+      - R4.1: Every issuer an analyst note names SHALL be invented. A note SHALL NOT attribute a non-public fact, plan, or view to a real company or a real person.
+      - R4.2: A build SHALL fail when an analyst note contains the name or ticker of an issuer in filing_facts or a name on the case's declared real-entity list, naming the note and the match.
+      - R4.3: A note SHALL identify itself as invented in the artifact (srd017 R9.3), and the corpus notice SHALL state which tiers are real and which is invented.
+      - R4.4: The corpus SHALL hold material above the lower level of every access pair, and enough material relevant to a declared tasking that some falls below the composition cutoff (srd017 R9.5, srd015 R1.3, R1.5).
+  R5:
+    title: Source ratings
+    items:
+      - R5.1: Each real tier SHALL declare its rating in the manifest as a property of the tier (srd017 R2.6), on the scale the mesh already carries, and the manifest SHALL state the reasoning.
+      - R5.2: An analyst note SHALL declare its own rating, and a note declaring none SHALL take the scale's cannot-be-judged rating.
+  R6:
+    title: The investment-committee memo
+    items:
+      - R6.1: The memo's structure SHALL be declared as versioned data in the shape of the defense template's markdown schema (srd012 R2), read by the existing conformance check.
+      - R6.2: The composition instruction SHALL name the memo's sections through configuration, with no change to the machine that runs the turn.
+      - R6.3: A verdict SHALL name the memo schema's identity and version, so a verdict over this case cannot be read as one over the defense template.
+  R7:
+    title: Binding by configuration
+    items:
+      - R7.1: The case SHALL be deployed by a values file, with no change to an agent's machine definition.
+      - R7.2: The case SHALL record, in its README, each surface it could not bind by configuration and what a reader sees there as a result.
+      - R7.3: The defense profile's suites SHALL pass unchanged.
+  R8:
+    title: Evidence and qualification
+    items:
+      - R8.1: An integration target SHALL prove, over this corpus, a turn that returns citations resolving to case documents, passes the memo conformance check, and withholds a note above the requester's level.
+      - R8.2: A figure measured over this corpus SHALL state that three tiers are real public material and one is invented, and SHALL state that it says nothing about investment performance.
+      - R8.3: The repository SHALL state who can run the case. The runtime modules and image are private, so the case runs with organization access until that changes.
+      - R8.4: The memo SHALL be presented as a demonstration artifact, and no output of this case SHALL be presented as investment advice.
+
+non_goals:
+  - Investment advice, recommendations, price targets, or any measure of investment performance.
+  - Replacing the defense case, which stays as the profile that carries the sovereign, in-boundary argument for the Cohere stack.
+  - Renaming the wire values of the ordered access set or the code identifiers built on them.
+  - A second interface. The case reuses the interface the mesh has, and R7.2 records what shows through.
+  - Filing prose, earnings-call transcripts, or news text, for the reasons the problem statement gives. A later tier needs its own terms read and its own verdict.
+  - Opening the private runtime dependencies, which is a separate decision (GH-928).
+  - A labeled evaluation corpus over this case. The measurements srd014 specifies are not repeated here.
+
+acceptance_criteria:
+  - id: AC1
+    criterion: The case builds and seeds from its own root through the existing corpus code when explicitly selected, a build with no case selected writes nothing over the defense corpus, and a case root never reads the private checkout.
+    traces: [R1.1, R1.2, R1.3, R1.4]
+  - id: AC2
+    criterion: Four tiers exist, each with a README recording terms as read, attribution, and a verdict; no filing prose or news text is present; source data is tracked; fetching holds to the source's rules; the operator contact is in no tracked file; and each document's provenance names its publisher.
+    traces: [R2.1, R2.2, R2.3, R2.4, R2.5, R2.6, R2.7]
+  - id: AC3
+    criterion: The declared mapping places four barrier labels on the ordered set, real tiers sit at the lowest level, a note with an unmapped label is written at the highest, enforcement is the existing filter, and the wire-value limit is recorded.
+    traces: [R3.1, R3.2, R3.3, R3.4, R3.5]
+  - id: AC4
+    criterion: A build fails on an analyst note naming a real issuer, notes identify themselves as invented, and the access-pair and below-cutoff conditions hold over the built store.
+    traces: [R4.1, R4.2, R4.3, R4.4]
+  - id: AC5
+    criterion: Real tiers declare ratings with reasoning in the manifest, and a note declaring no rating takes the cannot-be-judged rating.
+    traces: [R5.1, R5.2]
+  - id: AC6
+    criterion: The memo's structure is versioned data, the existing conformance check reads it, the composition instruction is configuration, and a verdict names the memo schema.
+    traces: [R6.1, R6.2, R6.3]
+  - id: AC7
+    criterion: A values file deploys the case with no machine definition changed, the README lists each surface that could not be bound, and the defense suites pass unchanged.
+    traces: [R7.1, R7.2, R7.3]
+  - id: AC8
+    criterion: An integration target proves a cited, memo-conformant, access-gated turn over this corpus; figures carry the mixed qualification and the no-performance statement; the repository says who can run the case; and no output is presented as advice.
+    traces: [R8.1, R8.2, R8.3, R8.4]
+
+depends_on:
+  # R3.2 reuses the filter ahead of the vector search, and R3.4 the fail-closed rule.
+  - srd_id: srd010-clearance-gated-retrieval
+    symbols_used: [R1, R2]
+  # R6.1 reuses the versioned schema and the deterministic check.
+  - srd_id: srd012-brief-markdown-conformance
+    symbols_used: [R2]
+  # R1.1 reuses the build and seed; R3.4 and R4.4 reuse the rules R2.5 and R1.3 state.
+  - srd_id: srd015-corpus-build
+    symbols_used: [R1, R2, R5, R6]
+  # R2.2 extends the licence record and verdict, and R1.4 the ceiling check.
+  - srd_id: srd017-real-demo-corpus
+    symbols_used: [R2, R6, R9]
+
+implementation_status:
+  implemented:
+    - >-
+      rel15.0, proven live on 2026-11-02 against a kind deployment with the pinned
+      runtime and Cohere: mage integration:investmentCase passed. A Public requester
+      received a conformant memo with citations resolving to case documents, the same
+      gated question composed invented notes at Wall-crossed and none at Public, and the
+      document read path withheld a Wall-crossed note at every lower level.
+  measured_limits:
+    - >-
+      A turn's composition follows the question and rarely mixes real tiers. Broad
+      questions composed EIA chunks, a question naming issuers composed filing facts, and
+      a question naming the Committee composed macro releases. No tuning was attempted.
+    - >-
+      Long memos intermittently exceeded the chatbot's request budget for Cohere chat,
+      while the provider itself answered a 20-document request in 21 seconds. The budget is
+      shared by every profile and was left alone; the tracer retries and prints each timeout.
+    - >-
+      Conformance depends on Command honoring the instruction. It nested subheadings under
+      required sections until the instruction forbade them, and the check's verdicts were
+      true throughout.
+    - >-
+      Deployed runs need the runtime source at the pinned commit, and the sibling checkout
+      has moved past that pin, so the live run used a temporary worktree at the pin.
+
+diagrams:
+  requirements_trace: |
+    ```mermaid
+    flowchart LR
+      Goals --> R1["R1: The case as a corpus root"]
+      Goals --> R2["R2: Source tiers and their terms"]
+      Goals --> R3["R3: Access levels as information barriers"]
+      Goals --> R4["R4: The invented gated tier"]
+      Goals --> R5["R5: Source ratings"]
+      Goals --> R6["R6: The investment-committee memo"]
+      Goals --> R7["R7: Binding by configuration"]
+      Goals --> R8["R8: Evidence and qualification"]
+      R1 --> AC1
+      R2 --> AC2
+      R3 --> AC3
+      R4 --> AC4
+      R5 --> AC5
+      R6 --> AC6
+      R7 --> AC7
+      R8 --> AC8
+    ```

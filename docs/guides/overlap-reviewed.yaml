@@ -333,3 +333,115 @@ reviewed:
     fingerprint: dfdd7aad6e8c0da6
     words: 10
     reason: "Adapter test fixture: a short boilerplate string, column list, or citation-URL fragment exercising parsing, not reproducing an article."
+  - file: cases/investment-research/data/energy_analysis/articles.jsonl
+    fingerprint: 727219a4b4d4d6f3
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/data/energy_analysis/articles.jsonl
+    fingerprint: d51ba7748b950716
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/data/energy_analysis/articles.jsonl
+    fingerprint: 5942a2ae238d6253
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/data/energy_analysis/articles.jsonl
+    fingerprint: bd867e023635ca7a
+    words: 9
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/data/energy_analysis/articles.jsonl
+    fingerprint: 7c8e64a2dadc21b7
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/data/energy_analysis/articles.jsonl
+    fingerprint: cbb5f9a32ce9a1cc
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61142/00-envelope.yaml
+    fingerprint: 5942a2ae238d6253
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61142/eia-61142-atomic-0001.yaml
+    fingerprint: 5942a2ae238d6253
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61142/eia-61142-large-1800-0001.yaml
+    fingerprint: 5942a2ae238d6253
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61142/eia-61142-medium-900-0002.yaml
+    fingerprint: 5942a2ae238d6253
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/00-envelope.yaml
+    fingerprint: 727219a4b4d4d6f3
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/00-envelope.yaml
+    fingerprint: d51ba7748b950716
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/eia-61584-atomic-0001.yaml
+    fingerprint: 727219a4b4d4d6f3
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/eia-61584-atomic-0001.yaml
+    fingerprint: d51ba7748b950716
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/eia-61584-large-1800-0001.yaml
+    fingerprint: 727219a4b4d4d6f3
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/eia-61584-large-1800-0001.yaml
+    fingerprint: d51ba7748b950716
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/eia-61584-medium-900-0002.yaml
+    fingerprint: 727219a4b4d4d6f3
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61584/eia-61584-medium-900-0002.yaml
+    fingerprint: d51ba7748b950716
+    words: 10
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61545/00-envelope.yaml
+    fingerprint: bd867e023635ca7a
+    words: 9
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61545/eia-61545-atomic-0001.yaml
+    fingerprint: bd867e023635ca7a
+    words: 9
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61545/eia-61545-large-1800-0002.yaml
+    fingerprint: bd867e023635ca7a
+    words: 9
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61545/eia-61545-medium-900-0004.yaml
+    fingerprint: bd867e023635ca7a
+    words: 9
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61843/00-envelope.yaml
+    fingerprint: cbb5f9a32ce9a1cc
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-61843/eia-61843-atomic-0001.yaml
+    fingerprint: cbb5f9a32ce9a1cc
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-62044/00-envelope.yaml
+    fingerprint: 7c8e64a2dadc21b7
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-62044/eia-62044-atomic-0001.yaml
+    fingerprint: 7c8e64a2dadc21b7
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-62044/eia-62044-large-1800-0002.yaml
+    fingerprint: 7c8e64a2dadc21b7
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."
+  - file: cases/investment-research/corpus/store/documents/eia-62044/eia-62044-medium-900-0003.yaml
+    fingerprint: 7c8e64a2dadc21b7
+    words: 8
+    reason: "EIA's own public-domain sentence, sharing a short generic phrase or an organization's name with keep-private news text. Not copied from it."

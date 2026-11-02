@@ -26,6 +26,12 @@ role_realization_decision:
     unchanged, which is the boundary R5.5 draws.
 
 context: |
+  Vocabulary. The mechanism here is domain-neutral and the words are the defense
+  profile's. "Clearance" is that profile's access level, the Admiralty scale its
+  source rating, and the INTSUM or brief its report template. srd018 binds the same
+  mechanism to another domain, and the wire values of the ordered set stay as written
+  (srd018 R3.5).
+
   Before this release the mesh embedded its corpus every time it seeded.
   corpus-ingest lists the documents, calls the configured embedding operation on
   each one, and threads the returned vector into the Chroma add. That is the

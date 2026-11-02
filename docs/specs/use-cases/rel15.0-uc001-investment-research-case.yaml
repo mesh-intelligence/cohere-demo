@@ -1,0 +1,118 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: rel15.0-uc001-investment-research-case
+title: The Mesh Serves a Second Regulated Domain from Configuration
+
+summary: |
+  An operator selects the investment-research case, builds or reuses its store,
+  deploys the mesh with the case's values file, and seeds it. An analyst asks a
+  research question about the US energy sector at a stated access level and receives
+  a first-draft investment-committee memo whose assertions cite issuer facts,
+  government analysis, macro releases, and internal notes the analyst may read.
+
+  The point of the release is what does not change. The turn, the filter, the
+  citation path, and the conformance check are the ones the defense profile runs.
+  What differs is data and configuration, and where that is not fully true the case
+  says so in its README.
+
+  The memo is a demonstration artifact over a small corpus. It is not investment
+  advice and says nothing about investment performance.
+
+actor: An analyst asking a research question, and the operator who deploys the case.
+
+trigger: The operator selects the case and an analyst submits a research question at an access level.
+
+flow:
+  - F1: The operator selects the case, and the build reads the tiers tracked in the case root, refusing an analyst note that names a real issuer.
+  - F2: The operator deploys with the case's values file and seeds from the case's store, with no embedding request.
+  - F3: The analyst submits a research question at an access level.
+  - F4: The filter limits candidates to the documents at or below that level before the vector search runs.
+  - F5: Retrieval and rerank run as they do for every profile, and Command composes the memo under the case's configured instruction.
+  - F6: The conformance check validates the memo against the memo schema and names the schema in its verdict.
+  - F7: The analyst opens a cited document, and the serving path applies the same access level.
+
+touchpoints:
+  - id: T1
+    target: srd018-investment-research-case AC1
+    reason: The case is a root the existing build and seed operate on, and the defense corpus is untouched.
+  - id: T2
+    target: srd018-investment-research-case AC2
+    reason: Each tier's terms were read and recorded before it entered, and no filing prose or news text is present.
+  - id: T3
+    target: srd018-investment-research-case AC3
+    reason: Barriers are a declared mapping onto the existing ordered set, enforced by the existing filter.
+  - id: T4
+    target: srd018-investment-research-case AC4
+    reason: Invented gated material cannot name a real issuer, and the retrieval conditions hold.
+  - id: T5
+    target: srd018-investment-research-case AC5
+    reason: Ratings are declared rather than inferred.
+  - id: T6
+    target: srd018-investment-research-case AC6
+    reason: The memo is data the existing check reads.
+  - id: T7
+    target: srd018-investment-research-case AC7
+    reason: The case deploys by values file and its README lists what could not be bound.
+  - id: T8
+    target: srd018-investment-research-case AC8
+    reason: The tracer proves the turn, and the repository states who can run it and what it does not claim.
+
+success_criteria:
+  - id: S1
+    criterion: With the case selected the build and seed use the case root, with none selected a build of the defense corpus writes nothing, and a case root never reads the private checkout.
+    traces:
+      - srd018-investment-research-case AC1
+  - id: S2
+    criterion: Each of the four tiers has a README with terms as read, attribution, and a verdict, the tree holds no filing prose or news text, and the operator contact appears in no tracked file.
+    traces:
+      - srd018-investment-research-case AC2
+  - id: S3
+    criterion: Real tiers sit at the lowest level, a note with an unmapped label is written at the highest, and the mapping and the wire-value limit are recorded.
+    traces:
+      - srd018-investment-research-case AC3
+  - id: S4
+    criterion: A build over a note naming a real issuer fails naming the note and the match, and the access-pair and below-cutoff conditions hold over the built store.
+    traces:
+      - srd018-investment-research-case AC4
+  - id: S5
+    criterion: Real tiers declare ratings with reasoning, and a note with no rating takes the cannot-be-judged rating.
+    traces:
+      - srd018-investment-research-case AC5
+  - id: S6
+    criterion: The memo schema is versioned data read by the existing check, and a verdict names it.
+    traces:
+      - srd018-investment-research-case AC6
+  - id: S7
+    criterion: A values file deploys the case with no machine definition changed, and the defense suites pass unchanged.
+    traces:
+      - srd018-investment-research-case AC7
+  - id: S8
+    criterion: A served turn over this corpus returns citations resolving to case documents, passes the memo check, and withholds a note above the requester's level, and the output carries the qualification and no advice.
+    traces:
+      - srd018-investment-research-case AC8
+
+failure_scenarios:
+  - id: E1
+    scenario: A 10-K's risk-factor text is added because EDGAR is public and the text would make a stronger demo.
+    expected: Rejected; R2.4 keeps filing prose out. The SEC's statement that what it presents may be redistributed does not settle a filer's copyright in what it wrote.
+  - id: E2
+    scenario: An analyst note says a named real company is preparing an undisclosed acquisition, because the retrieval condition needs material a real tier cannot supply.
+    expected: Rejected; R4.1 and R4.2 fail the build. The condition is met with invented issuers.
+  - id: E3
+    scenario: A case build runs on a machine with the private data checkout beside the repository.
+    expected: R1.3 holds. The case reads its own root, so no keep-private document enters its store.
+  - id: E4
+    scenario: The wire values are renamed to the barrier labels to make the store read cleanly.
+    expected: Rejected in this release; R3.5 records the limit. The rename changes trusted profile configuration every profile runs, which is what this release claims not to need.
+  - id: E5
+    scenario: The memo is presented with a buy or sell recommendation because that is what an investment committee expects.
+    expected: Rejected; R8.4 and the non-goals keep the case a demonstration.
+
+out_of_scope:
+  - Investment advice or any measure of investment performance.
+  - A labeled evaluation corpus over this case.
+  - Opening the private runtime dependencies (GH-928).
+  - Renaming the wire values of the ordered access set.
+
+test_suite_trace: test-rel15.0-investment-research-case
+status: implemented

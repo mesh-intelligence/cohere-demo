@@ -21,6 +21,7 @@ var chatbotChartSourceFiles = []string{
 	".helmignore",
 	"Chart.yaml",
 	"ci/gcp-values.yaml",
+	"ci/investment-research-values.yaml",
 	"ci/kind-applier-values.yaml",
 	"ci/kind-control-plane-values.yaml",
 	"ci/kind-llm-values.yaml",

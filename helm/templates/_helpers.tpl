@@ -167,13 +167,15 @@ from a rewritten packaged file rather than verbatim: the applier's exec
 declarations, whose placeholder coordinates become the installed release's
 (GH-484), the chatbot's query embedding, whose model and endpoint follow the
 tier (srd002 R3.3, srd058 R1.6), and the corpus-ingest document embedding,
-whose endpoint follows the child's embedder. They are packaged files, so they
+whose endpoint follows the child's embedder, and the conformance declarations,
+whose headings and template identity follow the report a deployment binds
+(srd018 R6). They are packaged files, so they
 are not co-generated, and they are not the file's own bytes, so they cannot
 travel out of release with the verbatim profiles (GH-785). Both readers of that split -- this chart and the
 deployment tooling that decides what to externalize -- read this list.
 */}}
 {{- define "chatbot-mesh.renderedProfileKeys" -}}
-applications__chatbot-mesh__applier__exec-declarations.yaml agents__chatbot__embed-rest.yaml agents__corpus-ingest__embed-rest.yaml
+applications__chatbot-mesh__applier__exec-declarations.yaml agents__chatbot__embed-rest.yaml agents__corpus-ingest__embed-rest.yaml agents__chatbot__request-conformance-declarations.yaml
 {{- end -}}
 
 {{- define "chatbot-mesh.integrationResourceAttributes" -}}

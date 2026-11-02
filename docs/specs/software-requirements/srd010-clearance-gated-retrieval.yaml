@@ -17,6 +17,12 @@ role_realization_decision:
   migration_impact: None. Enforcement is an additive query-contract parameter and an additive ingest metadata field; the one-agent-one-corpus rule and the vector-in fan-out are unchanged.
 
 context: |
+  Vocabulary. The mechanism here is domain-neutral and the words are the defense
+  profile's. "Clearance" is that profile's access level, the Admiralty scale its
+  source rating, and the INTSUM or brief its report template. srd018 binds the same
+  mechanism to another domain, and the wire values of the ordered set stay as written
+  (srd018 R3.5).
+
   Retrieval in the mesh is a vector-in query against one Chroma collection
   (srd001 R2): the chatbot embeds the tasking once and fans that vector out to
   the selected rag-server agents, each of which returns chunks with embedding

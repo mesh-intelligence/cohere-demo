@@ -48,6 +48,17 @@ profiles:
 
 chatbot:
   replicas: 1
+  # The report template a deployment binds (srd018 R6). Empty keeps the defense
+  # profile's brief, byte for byte. A case supplies the composition instruction,
+  # the headings each required section accepts as regular-expression alternatives,
+  # the labels defects name, and the schema identity a verdict names.
+  report:
+    instruction: ""
+    templateVersion: ""
+    sections:
+      summary: {headings: "", label: ""}
+      body: {headings: "", label: ""}
+      gaps: {headings: "", label: ""}
   # Optional immutable UI archive provisioned outside Helm release storage.
   # When set, the chatbot verifies and unpacks assets.tgz from this ConfigMap
   # instead of rendering the built SPA bundle into the release.

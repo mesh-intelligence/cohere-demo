@@ -96,7 +96,11 @@ func (Corpus) Build() error {
 	if err != nil {
 		return err
 	}
-	dataRoot := corpusDataRoot(root)
+	corpusRoot, err := corpusCaseRoot(root)
+	if err != nil {
+		return err
+	}
+	dataRoot := corpusBuildDataRoot(corpusRoot)
 	if _, err := os.Stat(dataRoot); err != nil {
 		return fmt.Errorf("corpus:build: the source datasets are not at %s."+
 			" They are held outside the repository; point %s at them"+
@@ -105,15 +109,19 @@ func (Corpus) Build() error {
 	}
 	fmt.Printf("corpus:build: embedding through %s as identity %q\n",
 		identity.provider, identity.identity)
-	report, slice, err := buildUkraineCorpusStore(root, dataRoot, identity,
-		defaultCorpusSliceParameters(), defaultChunkProfiles(), defaultCorpusEmbedSelection())
+	report, slice, err := buildUkraineCorpusStore(corpusRoot, dataRoot, identity,
+		corpusSliceFor(corpusRoot), defaultChunkProfiles(), corpusEmbedSelectionFor(corpusRoot))
 	if err != nil {
 		return err
 	}
-	fmt.Printf("corpus:build: converted %d documents (humint %d, assessments %d,"+
-		" news %d of %d, strikes %d, losses %d)\n",
-		slice.total(), slice.Humint, slice.OSINTAssessment, slice.OSINTNews,
-		slice.TelegramCandidate, slice.SIGINTEvent, slice.SIGINTSeries)
+	if corpusRootIsCase(corpusRoot) {
+		fmt.Printf("corpus:build: converted %d documents in %s\n", slice.total(), corpusRoot)
+	} else {
+		fmt.Printf("corpus:build: converted %d documents (humint %d, assessments %d,"+
+			" news %d of %d, strikes %d, losses %d)\n",
+			slice.total(), slice.Humint, slice.OSINTAssessment, slice.OSINTNews,
+			slice.TelegramCandidate, slice.SIGINTEvent, slice.SIGINTSeries)
+	}
 	fmt.Printf("corpus:build: %d chunks, %d embedded, %d already held, %d served"+
 		" from the passage cache, %d records written, dimension %d\n",
 		report.Chunks, report.Embedded, report.Reused, report.Deduplicated,

@@ -1,0 +1,61 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# Real companies an invented analyst note may not name (srd018 R4.2). The build adds
+# the filing_facts issuers and their tickers to this list. It is a guard against the
+# likely names rather than a list of every company.
+entities:
+  - Shell
+  - BP
+  - TotalEnergies
+  - Equinor
+  - Eni
+  - Saudi Aramco
+  - Aramco
+  - Petrobras
+  - Pioneer Natural Resources
+  - Diamondback
+  - Devon
+  - Hess
+  - APA
+  - Apache
+  - Coterra
+  - Marathon Oil
+  - Permian Resources
+  - Ovintiv
+  - Chesapeake
+  - Southwestern Energy
+  - Expand Energy
+  - EQT
+  - Antero
+  - Range Resources
+  - CNX
+  - Kinder Morgan
+  - Enterprise Products
+  - Energy Transfer
+  - Williams Companies
+  - Targa
+  - ONEOK
+  - MPLX
+  - Cheniere
+  - Valero
+  - Phillips 66
+  - HF Sinclair
+  - Schlumberger
+  - SLB
+  - Halliburton
+  - Baker Hughes
+  - Patterson-UTI
+  - Helmerich
+  - NextEra
+  - Duke Energy
+  - Southern Company
+  - Berkshire Hathaway
+  - BlackRock
+  - Goldman Sachs
+  - JPMorgan
+  - Morgan Stanley
+  - Exxon
+  - Chevron
+  - Marathon Petroleum
+  - Occidental

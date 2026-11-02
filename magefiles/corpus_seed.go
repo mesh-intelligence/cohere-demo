@@ -68,7 +68,7 @@ func seedCollectionFromCorpusStore(root, collection, identity string) (corpusSee
 			Envelope: document.Envelope, Records: document.Chunks,
 		})
 	}
-	plan, err := planCorpusEmbedding(candidates, defaultCorpusEmbedSelection())
+	plan, err := planCorpusEmbedding(candidates, corpusEmbedSelectionFor(root))
 	if err != nil {
 		return report, err
 	}

@@ -1,0 +1,109 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+id: test-rel15.0-investment-research-case
+title: Test Suite for Release 15.0 Investment Research Case
+release: "15.0"
+
+traces: [rel15.0-uc001-investment-research-case]
+
+preconditions:
+  - The case root at cases/investment-research with its manifest, tracked source data, and built store.
+  - Organization access to the private runtime modules and image for the deployed cases; the store and guard cases read files and need neither.
+  - A running cluster and a Cohere credential for the deployed turn only.
+
+test_cases:
+  - use_case: rel15.0-uc001-investment-research-case
+    name: A case builds from its own root and leaves the defense corpus alone
+    go_test: go test ./magefiles -run '^TestCase'
+    status: implemented
+    description: Selecting the case points the build and the seed at the case root. With no case selected, resolution returns the repository root. A case root never resolves the private checkout, even with the override set or a sibling present.
+    expected:
+      case_selection_resolves_the_case_root: true
+      no_selection_resolves_the_repository_root: true
+      case_root_never_reads_the_private_checkout: true
+    traces:
+      - rel15.0-uc001-investment-research-case S1
+      - srd018-investment-research-case AC1
+
+  - use_case: rel15.0-uc001-investment-research-case
+    name: Every tier records its terms and no prose or contact is tracked
+    go_test: go test ./magefiles -run '^TestInvestmentCaseTiers'
+    status: implemented
+    description: Each tier README names its source, terms as read, attribution, and verdict. filing_facts records hold values and metadata only. The operator contact file is ignored by git.
+    expected:
+      tier_readmes_record_terms_and_verdict: true
+      filing_facts_carries_no_prose_fields: true
+      operator_contact_file_is_ignored: true
+    traces:
+      - rel15.0-uc001-investment-research-case S2
+      - srd018-investment-research-case AC2
+
+  - use_case: rel15.0-uc001-investment-research-case
+    name: Access levels follow the declared mapping and fail closed
+    go_test: go test ./magefiles -run '^TestInvestmentCaseAccess'
+    status: implemented
+    description: Real tiers are written at the lowest level. Each barrier label maps to its declared level. An unmapped label is written at the highest level.
+    expected:
+      real_tiers_at_the_lowest_level: true
+      barrier_labels_map_as_declared: true
+      unmapped_label_written_at_the_highest: true
+    traces:
+      - rel15.0-uc001-investment-research-case S3
+      - srd018-investment-research-case AC3
+
+  - use_case: rel15.0-uc001-investment-research-case
+    name: A note naming a real issuer fails the build, and the retrieval conditions hold
+    go_test: go test ./magefiles -run '^TestInvestmentCaseGuard|^TestInvestmentCaseConditions'
+    status: implemented
+    description: A note naming a filing_facts issuer, its ticker, or a declared real entity fails naming the note and the match. Over the built store, material exists above the lower level of every access pair and a declared tasking's relevant material exceeds the composition cutoff.
+    expected:
+      note_naming_a_real_issuer_fails_the_build: true
+      failure_names_the_note_and_the_match: true
+      notes_identify_themselves_as_invented: true
+      access_pair_condition_holds: true
+      below_cutoff_condition_holds: true
+    traces:
+      - rel15.0-uc001-investment-research-case S4
+      - srd018-investment-research-case AC4
+
+  - use_case: rel15.0-uc001-investment-research-case
+    name: Ratings are declared, and an unrated note cannot be judged
+    go_test: go test ./magefiles -run '^TestInvestmentCaseRatings'
+    status: implemented
+    description: Each real tier's rating comes from the manifest. A note declaring none takes the cannot-be-judged rating.
+    expected:
+      real_tier_ratings_from_the_manifest: true
+      unrated_note_takes_cannot_be_judged: true
+    traces:
+      - rel15.0-uc001-investment-research-case S5
+      - srd018-investment-research-case AC5
+
+  - use_case: rel15.0-uc001-investment-research-case
+    name: The memo schema is versioned data and a values file binds the case
+    go_test: go test ./magefiles -run '^TestInvestmentCaseMemo|^TestInvestmentCaseValues'
+    status: implemented
+    description: The memo schema parses in the markdown schema's shape and declares identity and version. The case values file renders through the chart with the schema's values, and no machine definition differs from the defense profile's.
+    expected:
+      memo_schema_is_versioned_data: true
+      values_file_renders: true
+      no_machine_definition_changed: true
+    traces:
+      - rel15.0-uc001-investment-research-case S6
+      - rel15.0-uc001-investment-research-case S7
+      - srd018-investment-research-case AC6
+      - srd018-investment-research-case AC7
+
+  - use_case: rel15.0-uc001-investment-research-case
+    name: A deployed turn is cited, memo-conformant, and access-gated
+    integration_target: mage integration:investmentCase
+    status: implemented
+    description: Against a mesh deployed with the case's values file and seeded from its store, a research question at the lowest level returns citations resolving to case documents, a memo the check passes under the memo schema, and no gated note. The same question at the highest level may cite a gated note.
+    expected:
+      citations_resolve_to_case_documents: true
+      conformance_verdict_names_the_memo_schema: true
+      gated_note_withheld_at_the_lowest_level: true
+      gated_note_retrievable_at_the_highest_level: true
+      output_carries_the_qualification_and_no_advice: true
+    traces:
+      - rel15.0-uc001-investment-research-case S8
+      - srd018-investment-research-case AC8

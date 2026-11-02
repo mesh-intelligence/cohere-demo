@@ -98,6 +98,25 @@ data:
     {{- $allow := include "chatbot-mesh.chatbotEmbedAllowArgs" $ | replace ", " "\n      " }}
     {{- $embedRest = $embedRest | replace "      body_source: command_state\n" (printf "      body_source: command_state\n      %s\n" $allow) }}
     {{- $embedRest | nindent 4 }}
+  {{- else if eq $key "agents__chatbot__request-conformance-declarations.yaml" }}
+    {{- /* The check is the same chain for every report; a deployment that binds one
+          supplies the headings each required section accepts, the labels its defects
+          name, and the schema identity a verdict names (srd018 R6). Unset leaves the
+          packaged file's own bytes. */}}
+    {{- $declarations := $.Files.Get $path }}
+    {{- with $.Values.chatbot.report }}
+    {{- if .templateVersion }}
+    {{- $declarations = $declarations | replace "(?:Bottom Line Up Front|BLUF|Key Judgements|Key Judgments)" (printf "(?:%s)" .sections.summary.headings) }}
+    {{- $declarations = $declarations | replace "(?:Threat Activity|Assessment|Supporting Reporting)" (printf "(?:%s)" .sections.body.headings) }}
+    {{- $declarations = $declarations | replace "(?:Gaps|Intelligence Gaps)" (printf "(?:%s)" .sections.gaps.headings) }}
+    {{- $declarations = $declarations | replace "required section Bottom Line Up Front" (printf "required section %s" .sections.summary.label) }}
+    {{- $declarations = $declarations | replace "required section Threat Activity" (printf "required section %s" .sections.body.label) }}
+    {{- $declarations = $declarations | replace "required section Gaps" (printf "required section %s" .sections.gaps.label) }}
+    {{- $declarations = $declarations | replace "template order: Bottom Line Up Front, then Threat Activity, then Gaps" (printf "template order: %s, then %s, then %s" .sections.summary.label .sections.body.label .sections.gaps.label) }}
+    {{- $declarations = $declarations | replace "\"template_version\": \"1\"" (printf "\"template_version\": \"%s\"" .templateVersion) }}
+    {{- end }}
+    {{- end }}
+    {{- $declarations | nindent 4 }}
   {{- else if eq $key "agents__corpus-ingest__embed-rest.yaml" }}
     {{- /* The document embedding's endpoint follows the child's embedder
           library, as literal allow arguments (srd058 R1.6, _embed-rest.tpl). */}}

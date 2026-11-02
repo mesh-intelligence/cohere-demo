@@ -1,7 +1,25 @@
 # Copyright (c) 2026 Mesh Intelligence Inc.
 # SPDX-License-Identifier: MIT-0
 id: cohere-demo
-title: "cohere-demo: Sovereign Multi-Source Intelligence Synthesis on a Declarative Cohere Mesh"
+title: "cohere-demo: Regulated Knowledge Synthesis on a Declarative Cohere Mesh"
+
+general_thesis: |
+  The mesh turns scattered, unevenly sensitive material into a first draft a
+  reviewer can check. It rests on five mechanisms that belong to no one domain: a
+  multi-tier corpus whose provenance and source ratings are declared rather than
+  inferred; an access level enforced before retrieval from metadata no model reads;
+  assertions that cite a source a reader can open; output checked against a mandated
+  report template by a deterministic check; and measurement against a human baseline.
+  A domain binds those mechanisms by configuration.
+
+  Two profiles exercise this. The defense profile below is the original case and
+  carries the sovereign, in-boundary argument for the Cohere stack: clearance is its
+  access level, the Admiralty scale its source rating, and the INTSUM its report
+  template. The investment-research profile (srd018) binds the same mesh to US
+  energy-sector research: information barriers are its access levels and the
+  investment-committee memo its template. It is a demonstration over a small corpus,
+  and it is not investment advice. The rest of this document describes the defense
+  profile, whose vocabulary the specifications keep.
 
 executive_summary: |
   We build an on-premise assistant that turns scattered intelligence into a
@@ -121,6 +139,11 @@ success_criteria:
     new model tier, and a clearance-gated retrieval path, added without modifying
     the existing retrieval and answering agents, and traceable through the
     application's own specification corpus.
+
+  second_domain_by_configuration: |
+    A second regulated domain runs on the same turn, filter, citation path, and
+    conformance check, bound by a corpus, a values file, and a template declared as
+    data, and every surface that could not be bound is listed rather than hidden.
 
 implementation_phases:
   - phase: Cohere provider on the mesh

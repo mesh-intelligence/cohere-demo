@@ -195,7 +195,13 @@ func seedDemoRagUnitCorpus(root, unit string) error {
 	if err != nil {
 		return fmt.Errorf("app:seed: %s: %w", unit, err)
 	}
-	report, err := seedCollectionFromCorpusStore(root, collection, identity)
+	// The chart decides the collection and the identity; the selected case decides
+	// which store fills it (srd018 R1.1).
+	corpusRoot, err := corpusCaseRoot(root)
+	if err != nil {
+		return fmt.Errorf("app:seed: %s: %w", unit, err)
+	}
+	report, err := seedCollectionFromCorpusStore(corpusRoot, collection, identity)
 	if err != nil {
 		return fmt.Errorf("app:seed: seed %s from the chunk store: %w", unit, err)
 	}
@@ -207,7 +213,7 @@ func seedDemoRagUnitCorpus(root, unit string) error {
 	// each document's envelope and every chunk version, addressed by identifier
 	// so a citation resolves to its source, and it is never queried by
 	// similarity -- so this costs no embedding request either (srd017 R8.2).
-	served, err := seedDocumentsCollection(root, corpusDocumentsCollection)
+	served, err := seedDocumentsCollection(corpusRoot, corpusDocumentsCollection)
 	if err != nil {
 		return fmt.Errorf("app:seed: seed the document collection: %w", err)
 	}

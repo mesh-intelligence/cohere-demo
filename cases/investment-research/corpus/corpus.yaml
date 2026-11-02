@@ -1,0 +1,117 @@
+# Copyright (c) 2026 Mesh Intelligence Inc.
+# SPDX-License-Identifier: MIT-0
+#
+# The investment-research case's corpus manifest (srd018). It has the shape of the
+# defense corpus's manifest because the same build reads it. The ordered set and the
+# rating scale keep the mesh's wire values; srd018 R3 maps this domain onto them.
+id: investment-research-energy-2024
+version: "1.0"
+title: US Energy Sector Research Corpus, 2024
+
+synthetic: false
+synthetic_notice: |
+  This corpus mixes real and invented material and a figure measured over it must
+  say so. Three tiers are real public material: reported values from issuers' XBRL
+  facts on EDGAR, articles from the U.S. Energy Information Administration, and
+  releases from the Federal Reserve Board and the Bureau of Labor Statistics.
+
+  The analyst_note tier is entirely invented. Its issuers, deals, people, and views
+  are fictional, written so access-gated retrieval has something to gate. No note
+  makes a claim about a real company. This corpus is a demonstration and is not
+  investment advice, and a figure measured over it says nothing about investment
+  performance.
+
+# The mesh's ordered set, lowest first. The wire values stay the defense vocabulary
+# (srd018 R3.5); access_level_labels says what each means in this domain.
+clearance_levels:
+  - unclassified
+  - restricted
+  - confidential
+  - secret
+
+# What each wire value means here: information barriers, lowest first (srd018 R3.1).
+access_level_labels:
+  unclassified: Public
+  restricted: Internal
+  confidential: Restricted list
+  secret: Wall-crossed
+
+# The barrier labels a note declares. A label absent from this table is written at
+# the highest level, so an omission withholds a note (srd018 R3.4). Matching is on
+# the upper-cased label.
+clearance_markings:
+  PUBLIC: unclassified
+  INTERNAL: restricted
+  RESTRICTED LIST: confidential
+  WALL-CROSSED: secret
+
+# Every real tier is published material, so its level is a fact about where it came
+# from. analyst_note is absent because each note declares its own label (srd018 R3.3).
+tier_clearance:
+  filing_facts: unclassified
+  energy_analysis: unclassified
+  macro_release: unclassified
+
+# Each tier's rating, source reliability then information credibility, as a property
+# of the tier and as this case's own evaluation (srd018 R5.1).
+tier_admiralty:
+  # Audited or reviewed periodic reports, as tagged by the filer.
+  filing_facts: A2
+  # A statistical agency's analysis, some of it over third-party data it credits.
+  energy_analysis: A2
+  # Official statements of the institution that made the decision or the measure.
+  macro_release: A1
+  # The fallback for a note declaring no rating: the scale's cannot-be-judged (R5.2).
+  analyst_note: F6
+
+source_types:
+  filing_facts: Reported values from issuers' periodic reports, rendered into text by this build.
+  energy_analysis: Today in Energy articles from the U.S. Energy Information Administration.
+  macro_release: Federal Open Market Committee statements and Consumer Price Index releases.
+  analyst_note: Internal research notes on invented issuers. Invented.
+
+admiralty:
+  source_reliability:
+    A: Completely reliable
+    B: Usually reliable
+    C: Fairly reliable
+    D: Not usually reliable
+    E: Unreliable
+    F: Reliability cannot be judged
+  information_credibility:
+    1: Confirmed by other sources
+    2: Probably true
+    3: Possibly true
+    4: Doubtful
+    5: Improbable
+    6: Truth cannot be judged
+
+retrieval_conditions:
+  primary_tasking: |
+    Capital discipline among US oil and gas producers in 2024 against natural gas
+    prices, Permian production growth, and the macro rate backdrop. Documents bear on
+    it across all four tiers, and more are relevant than the five a turn passes to
+    composition, so the cutoff bites.
+  relevant_to_primary_tasking:
+    - eia-61183
+    - eia-61223
+    - eia-61484
+    - eia-61523
+    - eia-61646
+    - eia-62884
+    - eia-63204
+    - eia-63704
+    - eia-63984
+    - macro-fomc-2024-12-18
+    - note-001
+    - note-002
+    - note-004
+    - note-005
+    - note-009
+    - note-013
+    - note-017
+    - note-023
+    - note-026
+  distractors: |
+    The window also carries EIA articles on refining, shipping, and regions outside
+    the US, and macro releases with little to say about energy.

@@ -612,6 +612,21 @@ design_decisions:
     alternatives_rejected:
       - Single-sourcing all three from one template definition, which is the correct end state but is recorded as a post-demonstration follow-up rather than a blocker for the workflow.
 
+  - id: 13
+    title: A domain is a corpus root and a values file
+    decision: |
+      A second domain lives under cases/<name> with its own manifest, data, and store,
+      in the layout the defense corpus uses at the repository root, and the build and
+      seed run on it unchanged because they already take a root. Access levels map onto
+      the existing ordered set through a declared table, and display labels sit over the
+      existing wire values (srd018).
+    benefits:
+      - The defense corpus stays byte-stable and keep-private routing cannot touch a case.
+      - No agent's machine changes, so the isolation proven for one profile is the same code in the other.
+    alternatives_rejected:
+      - Renaming the wire values, which edits trusted profile configuration every profile runs.
+      - Parameterizing every corpus path, which touches far more code for no behavior a root does not give.
+
 technology_choices:
   - component: Agent programs
     technology: YAML profiles on agent-core
