@@ -39,8 +39,8 @@ purpose: |-
   entirely healthy.
 initial_state: AwaitingRequest
 budget:
-  # Above the 290s chat endpoint bound, which itself contains a 60s provider stall plus the 120s fallback answer (GH-225); the envelope rule needs every authority a word dispatches under strictly below this.
-  command_timeout: 5m
+  # Above the 320s chat endpoint bound, which itself contains a 90s provider stall (GH-931) plus the 120s fallback answer (GH-225); the envelope rule needs every authority a word dispatches under strictly below this.
+  command_timeout: 6m
   # Fixed pipeline plus one iteration per declared source. This source-independent
   # ceiling supports substantially more than the shipped two-source topology.
   max_iterations: 100

@@ -88,7 +88,7 @@ func TestPublishExporterBuildsBothPlatformsOverTheRelease(t *testing.T) {
 	}
 	for _, want := range []string{
 		"--platform linux/amd64,linux/arm64", "--push", "-t " + image,
-		"RUNTIME_IMAGE=ghcr.io/mesh-intelligence/declarative-agents/agent-core:v0.20261003.0",
+		"RUNTIME_IMAGE=ghcr.io/mesh-intelligence/cohere-demo/agent-core:v0.20261003.0",
 		"--builder " + exporterPublishBuilder,
 	} {
 		if !strings.Contains(build, want) {

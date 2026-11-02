@@ -14,9 +14,9 @@ rest:
   limits:
     # The Cohere host, scheme, and port are deployment-supplied and move together with the client's base_url below (srd009 R1.2, R1.4).
     cohere_provider:
-      # 60s, deliberately far under the 200s request budget: a provider that stalls rather than refusing must give the turn back while the invoke_llm_fast fallback (max_time 120) still fits inside the endpoint bound -- 60 + 120 = 180 < 200.
-      timeout: 60s
-      read_timeout: 60s
+      # 90s, under the chat request budget: a provider that stalls rather than refusing must give the turn back while the invoke_llm_fast fallback (max_time 120) still fits inside the endpoint bound -- 90 + 120 + the revision legs' 100 = 310 < 320 (GH-931: at 60s one long memo composition in six timed out while the provider answered healthy turns in 17-42s).
+      timeout: 90s
+      read_timeout: 90s
       max_request_bytes: 1048576
       max_response_bytes: 4194304
       redirect:
@@ -110,9 +110,9 @@ rest:
         ports:
           - ${CHATBOT_CHAT_PORT:-18080}
     local_chat_requests:
-      # Matches the chat endpoint's 290s machine_request bound below: the listener's limits must not close a request its endpoint still allows (the GH-196 shape).
-      timeout: 290s
-      read_timeout: 290s
+      # Matches the chat endpoint's 320s machine_request bound below: the listener's limits must not close a request its endpoint still allows (the GH-196 shape).
+      timeout: 320s
+      read_timeout: 320s
       max_request_bytes: 1048576
       # Sized by the largest response this listener serves: the envelope listing behind the facet vocabulary merges every unit's read of every document's full text, about 2 MB on the committed corpus plus the join bookkeeping, and each 1 MiB bound between the store and the browser turned that read into an unmapped 502 in turn.
       max_response_bytes: 4194304
@@ -808,8 +808,8 @@ rest:
             # The request-scoped profile, not the agent's own: its tools selection is the chat-LLM vocabulary a $tool transition dispatches, which the persistent agent must not register (GH-86).
             profile: request-profile.yaml
             machine: request-machine.yaml
-            # Contains one worst-case provider stall plus the fallback answer -- the Cohere client gives up at 60s and invoke_llm_fast is allowed 120s -- plus a revision's supplementary legs, each bounded by its own short limits: the re-grounding read (15s), the search proposal and the batched proposal embed (20s each), and one proposed-query read per proposal (15s each, at most three).
-            timeout: 290s
+            # Contains one worst-case provider stall plus the fallback answer -- the Cohere client gives up at 90s (GH-931) and invoke_llm_fast is allowed 120s -- plus a revision's supplementary legs, each bounded by its own short limits: the re-grounding read (15s), the search proposal and the batched proposal embed (20s each), and one proposed-query read per proposal (15s each, at most three).
+            timeout: 320s
             request:
               body:
                 message: $.message

@@ -24,8 +24,11 @@ const (
 	exporterPublishedRepository = "ghcr.io/mesh-intelligence/cohere-demo/exporter"
 	// exporterGhcrPath is the published repository's path on ghcr.io, as the
 	// ghcr.io remote repository serves it.
-	exporterGhcrPath       = "mesh-intelligence/cohere-demo/exporter"
-	exporterRuntimeSource  = "ghcr.io/mesh-intelligence/declarative-agents/agent-core"
+	exporterGhcrPath = "mesh-intelligence/cohere-demo/exporter"
+	// exporterRuntimeSource is the public runtime mirror (GH-934): building
+	// over it carries the /licenses layer a binary redistribution owes into
+	// the exporter, so both published images ship the notices.
+	exporterRuntimeSource  = runtimeMirrorRepository
 	exporterPublishBuilder = "cohere-demo-publish"
 )
 

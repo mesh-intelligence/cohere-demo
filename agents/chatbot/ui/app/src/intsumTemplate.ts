@@ -119,12 +119,16 @@ export const INTSUM_SECTIONS: TemplateSection[] = [
 ];
 
 // sectionForHeading resolves a markdown heading to the section that declares
-// it, matched case-insensitively on trimmed text. A heading no section declares
-// returns undefined, which the contract records as unmatched rather than
-// assigning to whichever section came last.
-export function sectionForHeading(heading: string): TemplateSection | undefined {
+// it, matched case-insensitively on trimmed text, in the sections the caller
+// is filling -- the runtime template where one is configured (GH-929). A
+// heading no section declares returns undefined, which the contract records as
+// unmatched rather than assigning to whichever section came last.
+export function sectionForHeading(
+  heading: string,
+  sections: TemplateSection[] = INTSUM_SECTIONS,
+): TemplateSection | undefined {
   const wanted = heading.trim().toLowerCase();
-  return INTSUM_SECTIONS.find((section) =>
+  return sections.find((section) =>
     (section.headings ?? []).some((candidate) => candidate.toLowerCase() === wanted),
   );
 }

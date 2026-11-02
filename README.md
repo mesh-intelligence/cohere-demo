@@ -70,13 +70,13 @@ Cohere for the model tier, because the DefTech constraints are architectural: Co
 
 The build needs Go and mage. The platform dependency — agent-core, the shared magefiles, and the catalog — comes from the `mesh-intelligence/declarative-agents` modules, which `go.mod` pins at one upstream commit and names in a comment above the require block.
 
-Those modules, the published agent-core image, and its charts are private. Every machine and CI runner tells Go to fetch the organization's modules directly rather than through the public proxy and checksum database:
+Those modules and declarative-agents' own packages are private; the images the chart runs are not. `mage runtime:mirror` publishes the pinned release as the public `ghcr.io/mesh-intelligence/cohere-demo/agent-core` — a binary redistribution carrying the dual-licence notices under `/licenses` — and `mage exporter:publish` builds the public exporter over it, so a cluster pulls both anonymously and no `imagePullSecret` is needed. Building still takes org access. Every machine and CI runner tells Go to fetch the organization's modules directly rather than through the public proxy and checksum database:
 
 ```bash
 go env -w GOPRIVATE=github.com/mesh-intelligence
 ```
 
-Git then needs a credential for github.com from a token that holds `contents:read` on `mesh-intelligence/declarative-agents`; CI also needs `read:packages` on the same token for the image. A namespace that runs the published `ghcr.io/mesh-intelligence/declarative-agents/agent-core` image needs an `imagePullSecret` built from that token. `mage deps:doctor` checks the first two and names the command or scope that fixes a gap; `mage deps:verify` checks that the three pins name one release and that every chart image under the published prefix carries that release's tag.
+Git then needs a credential for github.com from a token that holds `contents:read` on `mesh-intelligence/declarative-agents`. `mage deps:doctor` checks both and names the command or scope that fixes a gap; `mage deps:verify` checks that the three pins name one release and that every chart image — upstream-published and mirror alike — carries that release's tag.
 
 The corpus data is split the same way (srd017 R9.7): this repository tracks
 the synthetic tier's built chunks and every tier's provenance README, while
@@ -127,6 +127,68 @@ mage ui:bundle
 ```
 
 Both need `npm`, and both skip with a stated reason when it is absent rather than failing a machine that cannot answer the question. The SPA takes its design tokens and kit panels from `@mesh-intelligence/ui-kit`, published on GitHub Packages with each declarative-agents release, so the first install needs a token with `read:packages` logged in for the `@mesh-intelligence` scope; `agents/chatbot/ui/app/.npmrc` names the command.
+
+## Run it yourself (no org access)
+
+The published binaries are enough to run the investment-research case on your
+own cluster with your own Cohere key; building still takes org access (see
+above). The mesh is a half-dozen workloads, so it needs Kubernetes — kind or a
+GKE cluster — not a single container runtime. The release must be named
+`cohere-demo`: the out-of-release UI ConfigMaps in `deploy/ui-assets.yaml` are
+built for that name.
+
+```bash
+kind create cluster --name cohere-demo
+kubectl create namespace app-cohere-demo
+kubectl -n app-cohere-demo create secret generic cohere-api \
+  --from-literal=api-key="$COHERE_API_KEY"
+kubectl -n app-cohere-demo apply -f deploy/ui-assets.yaml
+
+helm pull oci://ghcr.io/mesh-intelligence/cohere-demo/charts/chatbot-mesh \
+  --version 0.1.0-v0.20261005.0 --untar
+
+cat > cohere-overlay.yaml <<'VALUES'
+chatbot:
+  embeddingModel: embed-v4.0
+ragUnits:
+  - name: rag0
+    description: US energy sector research corpus for 2024 -- reported issuer values, government energy analysis, macro releases, and internal analyst notes.
+    collection: corpus
+    embeddingModel: embed-v4.0
+    replicas: 1
+cohere:
+  enabled: true
+  existingSecret: cohere-api
+# The Cohere tier's provider expansions validate against the full word set,
+# which includes the export relay, so the exporter rides along (it pulls the
+# published image).
+exporter:
+  enabled: true
+corpusSeed:
+  enabled: true
+VALUES
+
+helm install cohere-demo \
+  oci://ghcr.io/mesh-intelligence/cohere-demo/charts/chatbot-mesh \
+  --version 0.1.0-v0.20261005.0 -n app-cohere-demo \
+  -f chatbot-mesh/ci/investment-research-values.yaml \
+  -f deploy/ui-assets-values.yaml \
+  -f cohere-overlay.yaml \
+  --wait --timeout 12m
+```
+
+The post-install seed job grounds the mesh from the seeder image's baked
+store — stored vectors, no embedding request — and restarts the rag-server so
+it rebinds the seeded collection. Then:
+
+```bash
+kubectl -n app-cohere-demo port-forward svc/cohere-demo-chatbot-mesh-chatbot 18080:18080
+```
+
+and open http://127.0.0.1:18080/ui/ — the interface carries the case's own
+access labels and memo form, bound by the values file. No step above needs a
+GitHub credential once the packages are public; the sources the images were
+compiled from are not published.
 
 ## Running the demo
 

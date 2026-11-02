@@ -19,7 +19,7 @@
 # base the mesh already runs:
 #   docker build -f images/exporter.Dockerfile \
 #     --build-arg RUNTIME_IMAGE=<agent-core> -t <repo>/exporter:<rev> .
-ARG RUNTIME_IMAGE=ghcr.io/mesh-intelligence/declarative-agents/agent-core:v0.20261005.0
+ARG RUNTIME_IMAGE=ghcr.io/mesh-intelligence/cohere-demo/agent-core:v0.20261005.0
 
 FROM ${RUNTIME_IMAGE}
 # The runtime image's ENV strips /sbin from PATH, so apk goes by full path.

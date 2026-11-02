@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  clearanceSelectLabel,
+  levelLabel,
+  readerSelectLabel,
+  reliabilityFloorLabel,
+  reliabilityFloorTitle,
+} from "./uiConfig";
+import {
   ADMIRALTY_RELIABILITY,
   CLEARANCE_LEVELS,
   DEFAULT_CLEARANCE,
@@ -114,7 +121,7 @@ function ClearanceSelector({
 }) {
   return (
     <label className="clearance-select" title="Retrieval is filtered to this level before the search runs">
-      analyst clearance
+      {clearanceSelectLabel()}
       <select
         value={value}
         disabled={disabled}
@@ -122,7 +129,7 @@ function ClearanceSelector({
       >
         {CLEARANCE_LEVELS.map((level) => (
           <option key={level} value={level}>
-            {level}
+            {levelLabel(level)}
           </option>
         ))}
       </select>
@@ -241,8 +248,8 @@ function FacetControls({
           clearance question, so the reader selector below carries that role
           (GH-378) -- the composed brief cites only sources at or below the
           reader's level, with withheld spans reported. */}
-      <label className="facet-floor" title="Retrieval admits only sources graded at or above this Admiralty reliability floor">
-        <span>source reliability (Admiralty)</span>
+      <label className="facet-floor" title={reliabilityFloorTitle()}>
+        <span>{reliabilityFloorLabel()}</span>
         <select
           value={analystFloor}
           onChange={(e) => onAnalystFloor(e.target.value)}
@@ -260,8 +267,8 @@ function FacetControls({
           what the analyst may retrieve and what the reader may be shown --
           so they sit adjacent with parallel labels (GH-456). */}
       {clearanceSlot}
-      <label className="facet-floor" title="Who this brief is being prepared for. The composed brief cites only sources at or below this clearance; spans above it are withheld and reported. The analyst's own clearance still governs retrieval.">
-        <span>reader clearance</span>
+      <label className="facet-floor" title="Who this brief is being prepared for. The composed brief cites only sources at or below this level; spans above it are withheld and reported. The requester's own level still governs retrieval.">
+        <span>{readerSelectLabel()}</span>
         <select
           value={readerClearance}
           onChange={(e) => onReaderClearance(e.target.value)}
@@ -270,7 +277,7 @@ function FacetControls({
           <option value="">no stated reader</option>
           {CLEARANCE_LEVELS.map((level) => (
             <option key={level} value={level}>
-              {level}
+              {levelLabel(level)}
             </option>
           ))}
         </select>

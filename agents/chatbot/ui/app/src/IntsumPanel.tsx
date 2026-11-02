@@ -16,6 +16,7 @@ import {
   type SpanCitation,
 } from "./citationMarks";
 import { conformanceDisplay, fillIntsumForm, type FilledSection, type TurnContext, admiraltyGradeIndex, citationGrade, classificationIndex, citationMarking, higherBanner } from "./intsumForm";
+import { formName, levelLabel } from "./uiConfig";
 
 // Why an empty section is empty, by where its content would have come from.
 // The two fail differently and the form says which happened (srd016 R2.3
@@ -40,7 +41,7 @@ function BannerSection({ section }: { section: FilledSection }) {
   }
   // The banner marks the document, not the reader: the level is the highest
   // among the composed sources and never the requester's own (R3.6).
-  return <div className="intsum-banner">{section.banner.toUpperCase()}</div>;
+  return <div className="intsum-banner">{levelLabel(section.banner).toUpperCase()}</div>;
 }
 
 function HeaderSection({ section }: { section: FilledSection }) {
@@ -344,7 +345,7 @@ export default function IntsumPanel({
   if (!answer) {
     return (
       <div className="intsum-empty">
-        No INTSUM yet. Send a tasking and the form fills from what the turn composed.
+        No {formName()} yet. Send a tasking and the form fills from what the turn composed.
       </div>
     );
   }
@@ -378,7 +379,7 @@ export default function IntsumPanel({
         >
           {legendLevels.map((level) => (
             <span key={level} className={`intsum-marking-chip intsum-marking-chip-${level}`}>
-              {level.toUpperCase()}
+              {levelLabel(level).toUpperCase()}
             </span>
           ))}
         </div>

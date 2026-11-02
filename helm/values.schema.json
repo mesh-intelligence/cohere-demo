@@ -160,7 +160,8 @@
     "controlPlane",
     "cohere",
     "osint",
-    "exporter"
+    "exporter",
+    "corpusSeed"
   ],
   "properties": {
     "agent-services": {
@@ -264,6 +265,59 @@
         "retrievalBreadth": {
           "type": "integer",
           "minimum": 1
+        },
+        "ui": {
+          "type": "object",
+          "description": "Interface vocabulary the SPA loads at start (GH-929): display labels per wire level, selector and reliability wording, the form name, and a report template in the intsum-template section schema. Rendered into the ui route's declared static_assets.config; empty keeps the compiled DefTech vocabulary.",
+          "additionalProperties": false,
+          "properties": {
+            "levelLabels": {
+              "type": "object",
+              "additionalProperties": {"type": "string"}
+            },
+            "clearanceSelectLabel": {"type": "string"},
+            "corpusLevelLabel": {"type": "string"},
+            "readerSelectLabel": {"type": "string"},
+            "reliabilityFloorLabel": {"type": "string"},
+            "reliabilityFloorTitle": {"type": "string"},
+            "formName": {"type": "string"},
+            "templateVersion": {"type": "string"},
+            "template": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "label", "order", "source", "required"],
+                "properties": {
+                  "id": {"type": "string"},
+                  "label": {"type": "string"},
+                  "order": {"type": "number"},
+                  "source": {"type": "string", "enum": ["composed_markdown", "derived"]},
+                  "required": {"type": "boolean"},
+                  "derivedFrom": {"type": "string"},
+                  "headings": {"type": "array", "items": {"type": "string"}},
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["id", "label"],
+                      "properties": {"id": {"type": "string"}, "label": {"type": "string"}}
+                    }
+                  },
+                  "columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["id", "label"],
+                      "properties": {"id": {"type": "string"}, "label": {"type": "string"}}
+                    }
+                  }
+                }
+              }
+            }
+          }
         },
         "report": {
           "type": "object",
@@ -1231,6 +1285,22 @@
               "pattern": "^[1-9][0-9]?$"
             }
           }
+        }
+      }
+    },
+    "corpusSeed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "image"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "$ref": "#/definitions/image"
         }
       }
     },

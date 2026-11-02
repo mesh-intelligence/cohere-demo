@@ -1,0 +1,110 @@
+{{/* Copyright (c) 2026 Mesh Intelligence Inc. */}}
+{{/* SPDX-License-Identifier: MIT-0 */}}
+{{- if .Values.corpusSeed.enabled }}
+{{- $fullname := include "chatbot-mesh.fullname" . -}}
+{{/*
+The corpus seed job (GH-937, the GH-928 decision): an installer without org
+access grounds the mesh from the published seeder image, which carries the
+compiled seed path and the publishable case store. It runs as a post-install
+and post-upgrade hook, after the units it writes to exist, and restarts each
+unit's rag-server through the API so the server rebinds the seeded collection
+-- the same sequence mage app:seed performs from a workstation. The units list
+below renders from the same ragUnits values that render the units themselves,
+so the seed and the topology cannot disagree.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-corpus-seed
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: corpus-seed
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-corpus-seed
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: corpus-seed
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  # The restart is one strategic-merge patch of the rag-server deployment's
+  # pod-template annotations; the wait reads the deployment's status back.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-corpus-seed
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: corpus-seed
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-corpus-seed
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-corpus-seed
+    namespace: {{ .Release.Namespace }}
+---
+{{- $units := list -}}
+{{- range $unit := .Values.ragUnits -}}
+{{- $units = append $units (dict
+      "name" $unit.name
+      "chromaURL" (printf "http://%s-%s-chroma:%v" $fullname $unit.name $.Values.chroma.port)
+      "collection" $unit.collection
+      "identity" $unit.embeddingModel
+      "deployment" (printf "%s-%s" $fullname $unit.name)) -}}
+{{- end }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-corpus-seed
+  labels:
+    {{- include "chatbot-mesh.labels" . | nindent 4 }}
+    app.kubernetes.io/component: corpus-seed
+  annotations:
+    mesh.cohere-demo/role: "Grounds the mesh: writes each unit's retrieval collection and the document collection from the baked publishable store, then restarts the rag-servers."
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "chatbot-mesh.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: corpus-seed
+    spec:
+      serviceAccountName: {{ $fullname }}-corpus-seed
+      restartPolicy: Never
+      containers:
+        - name: corpus-seed
+          image: "{{ .Values.corpusSeed.image.repository }}:{{ .Values.corpusSeed.image.tag }}"
+          imagePullPolicy: {{ .Values.corpusSeed.image.pullPolicy }}
+          # The compiled magefiles write a default configuration.yaml into the
+          # working directory at startup; the image root is read-only to the
+          # job's user, so the job runs from /tmp.
+          workingDir: /tmp
+          env:
+            - {name: SEED_UNITS, value: {{ toJson $units | quote }}}
+            - {name: SEED_RESTART, value: "true"}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+{{- end }}

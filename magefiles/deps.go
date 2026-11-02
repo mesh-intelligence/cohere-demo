@@ -29,9 +29,18 @@ const declarativeAgentsRepository = reusedeps.Repository
 
 // Verify holds this repository to one declarative-agents release: the three
 // pins name one commit, a release tag names that commit, and every chart
-// values file sets the published image's tag to it.
+// values file sets the published image's tag to it. The reused check covers
+// images under the declarative-agents prefix; the mirror check covers this
+// repository's own public images (GH-934).
 func (Deps) Verify() error {
-	return reusedeps.Verify()
+	if err := reusedeps.Verify(); err != nil {
+		return err
+	}
+	root, err := cohereApplicationRoot()
+	if err != nil {
+		return err
+	}
+	return verifyMirrorTags(root)
 }
 
 // Doctor reports whether this machine resolves the declarative-agents modules

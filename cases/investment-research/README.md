@@ -73,8 +73,13 @@ what every profile runs (srd018 R7.2):
 | Surface | What a reader sees | Why it stays |
 |---|---|---|
 | Wire values of the ordered access set | `clearance: secret` in store records, and an `X-Analyst-Clearance` header | Trusted profile configuration in the chatbot; rag-server enforces against it (srd018 R3.5) |
-| Interface selector | unclassified, restricted, confidential, secret, rather than the barrier labels | `CLEARANCE_LEVELS` is compiled into the bundle, which has no runtime configuration |
-| Interface form | The INTSUM form, its banner and sections, and Admiralty wording | `intsumTemplate.ts` is compiled in. A memo fills the composed sections whose headings it shares, so read the memo in the chat panel |
+
+Two surfaces this table used to carry moved to runtime configuration (GH-929):
+the selectors show this case's labels (Public, Internal, Restricted list,
+Wall-crossed) over the unchanged wire values, and the right panel renders the
+memo template instead of the INTSUM form — both bound by `chatbot.ui` in the
+values file, served to the SPA as the ui route's declared
+`static_assets.config` (srd029 R5.10).
 | Conformance names | Signals and check words such as `check_bluf_section` | Internal identifiers; a verdict's defects and version do name the memo |
 | Other model instructions | The summarization and tool-selection prompts mention a command-staff brief | Literals in `request-declarations.yaml` |
 | The `/osint` path | Reaches the approved defense domains | Out of scope; the tracer does not use it |

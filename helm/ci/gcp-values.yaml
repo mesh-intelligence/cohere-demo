@@ -14,7 +14,7 @@
 # document, so this file never carries a project id. The tags here are the
 # versions pulled.
 image:
-  repository: region-docker.pkg.dev/project/cohere-demo-ghcr/mesh-intelligence/declarative-agents/agent-core
+  repository: region-docker.pkg.dev/project/cohere-demo-ghcr/mesh-intelligence/cohere-demo/agent-core
   # gcp:deploy always overrides this fail-closed sentinel with the release tag
   # helm/values.yaml pins, so GKE runs the published release image (eng01:
   # never latest).

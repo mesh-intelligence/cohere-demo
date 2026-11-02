@@ -56,7 +56,7 @@ func renderGcpRelease(t *testing.T) (apprig.Resolved, string) {
 		RuntimeTag: tag, ExporterTag: exporterTag, Host: gcpTestHost,
 	}
 	overrides, err := gcpCohereOverrides(resolved, images,
-		[]externalUIAsset{{Component: "chatbot", ConfigMapName: "ui-chatbot", Checksum: strings.Repeat("a", 64)}}, nil)
+		[]externalUIAsset{{Component: "chatbot", ConfigMapName: "ui-chatbot", Checksum: strings.Repeat("a", 64)}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

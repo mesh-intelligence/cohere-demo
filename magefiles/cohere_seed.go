@@ -116,9 +116,20 @@ func chromaDropCollection(collection string) error {
 }
 
 // chromaCollectionsURL is the Chroma collections endpoint the seed writes
-// through, reached by the app:seed port-forward for a deployed unit and
-// directly for the local rig.
-const chromaCollectionsURL = "http://127.0.0.1:8000/api/v2/tenants/default_tenant/databases/default_database/collections"
+// through: the port-forward address for app:seed and the local rig, or the
+// unit's own in-cluster Service when corpus:seedCluster retargets it.
+var chromaCollectionsURL = chromaDefaultBaseURL + chromaCollectionsPath
+
+const (
+	chromaDefaultBaseURL  = "http://127.0.0.1:8000"
+	chromaCollectionsPath = "/api/v2/tenants/default_tenant/databases/default_database/collections"
+)
+
+// setChromaBaseURL points every collection write at one Chroma instance. The
+// seed paths are single-threaded, so retargeting per unit is safe.
+func setChromaBaseURL(base string) {
+	chromaCollectionsURL = strings.TrimSuffix(base, "/") + chromaCollectionsPath
+}
 
 // chromaCollectionAdd resolves a Chroma collection and adds the documents with
 // the vectors the caller embedded. It is the write half seedChromaCorpus2

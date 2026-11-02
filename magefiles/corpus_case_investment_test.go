@@ -494,8 +494,9 @@ func TestInvestmentCaseMemoValuesMatchTheSchema(t *testing.T) {
 	}
 }
 
-// The case overlay differs from the defense overlay only in the report and the
-// corpus description, so it cannot drift into a different deployment.
+// The case overlay differs from the defense overlay only in its binding -- the
+// report, the interface vocabulary (GH-929), and the corpus description -- so
+// it cannot drift into a different deployment.
 func TestInvestmentCaseValuesDifferFromKindOnlyInTheBinding(t *testing.T) {
 	load := func(name string) map[string]interface{} {
 		data, err := os.ReadFile(filepath.Join(findChartDir(t), "ci", name))
@@ -507,6 +508,7 @@ func TestInvestmentCaseValuesDifferFromKindOnlyInTheBinding(t *testing.T) {
 			t.Fatal(err)
 		}
 		delete(values["chatbot"].(map[string]interface{}), "report")
+		delete(values["chatbot"].(map[string]interface{}), "ui")
 		for _, unit := range values["ragUnits"].([]interface{}) {
 			delete(unit.(map[string]interface{}), "description")
 		}
@@ -678,5 +680,74 @@ func TestInvestmentCaseTracerAcceptsARefusal(t *testing.T) {
 	turn.Verdict.Verdict = "non_conformant"
 	if err := assertInvestmentTurn("leg", turn, sources, checks, levels); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The interface vocabulary binds the same memo the report binds (GH-929): every
+// wire level carries a case label, and the template's composed sections mirror
+// memo-schema.yaml, so the form and the conformance check cannot disagree about
+// what a memo is.
+func TestInvestmentCaseUIBindsTheMemoVocabulary(t *testing.T) {
+	var schema investmentMemoSchema
+	data, err := os.ReadFile(filepath.Join(investmentCaseDir(t), "memo-schema.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	var values struct {
+		Chatbot struct {
+			UI struct {
+				LevelLabels map[string]string `yaml:"levelLabels"`
+				FormName    string            `yaml:"formName"`
+				Template    []struct {
+					ID       string   `yaml:"id"`
+					Label    string   `yaml:"label"`
+					Source   string   `yaml:"source"`
+					Headings []string `yaml:"headings"`
+				} `yaml:"template"`
+			} `yaml:"ui"`
+		} `yaml:"chatbot"`
+	}
+	data, err = os.ReadFile(filepath.Join(findChartDir(t), "ci", investmentValuesFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &values); err != nil {
+		t.Fatal(err)
+	}
+	ui := values.Chatbot.UI
+	for _, level := range []string{"unclassified", "restricted", "confidential", "secret"} {
+		if ui.LevelLabels[level] == "" {
+			t.Errorf("levelLabels binds no label for wire level %q", level)
+		}
+	}
+	if ui.FormName == "" || strings.EqualFold(ui.FormName, "INTSUM") {
+		t.Errorf("formName %q, want the case's own form name", ui.FormName)
+	}
+	composed := map[string][]string{}
+	labels := map[string]string{}
+	for _, section := range ui.Template {
+		if section.Source == "composed_markdown" {
+			composed[section.ID] = section.Headings
+			labels[section.ID] = section.Label
+		}
+	}
+	for _, section := range schema.Sections {
+		headings, ok := composed[section.ID]
+		if !ok {
+			t.Errorf("the ui template carries no composed section %s", section.ID)
+			continue
+		}
+		if strings.Join(headings, "|") != strings.Join(section.Headings, "|") {
+			t.Errorf("section %s ui headings %v, want %v", section.ID, headings, section.Headings)
+		}
+		if labels[section.ID] != section.Label {
+			t.Errorf("section %s ui label %q, want %q", section.ID, labels[section.ID], section.Label)
+		}
+	}
+	if len(composed) != len(schema.Sections) {
+		t.Errorf("the ui template carries %d composed sections, the schema %d", len(composed), len(schema.Sections))
 	}
 }

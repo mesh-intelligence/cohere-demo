@@ -32,6 +32,80 @@ chatbot:
       summary: {headings: "Investment Thesis|Thesis|Summary", label: Investment Thesis}
       body: {headings: "Analysis|Sector Analysis", label: Analysis}
       gaps: {headings: "Risks and Gaps|Risks|Gaps", label: Risks and Gaps}
+  # The interface vocabulary (GH-929): the case's access labels over the
+  # declared wire values (srd018 R3.5 -- the wire stays unclassified..secret),
+  # research wording on the selectors, and the memo template in place of the
+  # INTSUM form. The template's composed sections mirror memo-schema.yaml's
+  # headings; the derived sections keep the banner, the source table, and the
+  # citation index, relabeled for this case.
+  ui:
+    levelLabels:
+      unclassified: Public
+      restricted: Internal
+      confidential: Restricted list
+      secret: Wall-crossed
+    clearanceSelectLabel: requester access
+    corpusLevelLabel: access
+    readerSelectLabel: reader access
+    reliabilityFloorLabel: source rating floor
+    reliabilityFloorTitle: Retrieval admits only sources rated at or above this floor on the case's A-F source scale
+    formName: memo
+    templateVersion: investment-committee-memo-markdown@1
+    template:
+      - id: classification-banner
+        label: Access marking
+        order: 0
+        source: derived
+        derivedFrom: composed_source_clearance
+        required: true
+      - id: header
+        label: Header
+        order: 1
+        source: derived
+        derivedFrom: turn_context
+        required: true
+        fields:
+          - {id: date_time_group, label: Date}
+          - {id: originator, label: Requester}
+          - {id: tasking, label: Question}
+      - id: summary
+        label: Investment Thesis
+        order: 2
+        source: composed_markdown
+        required: true
+        headings: [Investment Thesis, Thesis, Summary]
+      - id: body
+        label: Analysis
+        order: 3
+        source: composed_markdown
+        required: true
+        headings: [Analysis, Sector Analysis]
+      - id: source-evaluation
+        label: Source Ratings
+        order: 4
+        source: derived
+        derivedFrom: composed_source_admiralty
+        required: true
+        columns:
+          - {id: source, label: Source}
+          - {id: classification, label: Access}
+          - {id: reliability, label: Reliability}
+          - {id: credibility, label: Credibility}
+      - id: gaps
+        label: Risks and Gaps
+        order: 5
+        source: composed_markdown
+        required: true
+        headings: [Risks and Gaps, Risks, Gaps]
+      - id: citation-index
+        label: Citation Index
+        order: 6
+        source: derived
+        derivedFrom: response_citations
+        required: true
+        columns:
+          - {id: record, label: Record}
+          - {id: assertions, label: Assertions}
   resources:
     requests: {cpu: 50m, memory: 128Mi}
     limits: {cpu: 500m, memory: 512Mi}

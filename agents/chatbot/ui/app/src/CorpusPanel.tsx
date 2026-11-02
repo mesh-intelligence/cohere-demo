@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { CLEARANCE_LEVELS, DEFAULT_CLEARANCE, type ClearanceLevel } from "./api";
+import { corpusLevelLabel, levelLabel } from "./uiConfig";
 import {
   fetchCorpusEnvelopes,
   fetchDocumentVersions,
@@ -142,11 +143,11 @@ export default function CorpusPanel() {
     <div className="corpus-panel">
       <div className="corpus-controls">
         <label>
-          clearance{" "}
+          {corpusLevelLabel()}{" "}
           <select value={clearance} onChange={(e) => setClearance(e.target.value as ClearanceLevel)}>
             {CLEARANCE_LEVELS.map((level) => (
               <option key={level} value={level}>
-                {level}
+                {levelLabel(level)}
               </option>
             ))}
           </select>

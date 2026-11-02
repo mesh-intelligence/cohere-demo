@@ -68,9 +68,9 @@ rest:
   limits:
 {{- if .Values.cohere.enabled }}
     cohere_provider:
-      # 60s, far under the 200s request budget, so a stalled provider hands the turn back while the invoke_llm_fast fallback (max_time 120) still fits: 60 + 120 = 180 < 200 (GH-225).
-      timeout: 60s
-      read_timeout: 60s
+      # 90s, under the chat request budget, so a stalled provider hands the turn back while the invoke_llm_fast fallback (max_time 120) still fits: 90 + 120 + the revision legs' 100 = 310 < 320 (GH-225; GH-931 measured one long memo in six over the old 60s).
+      timeout: 90s
+      read_timeout: 90s
       max_request_bytes: 1048576
       max_response_bytes: 4194304
       redirect:
@@ -193,10 +193,10 @@ rest:
         ports:
           - {{ .Values.chatbot.ports.chat }}
     local_chat_requests:
-      # Matches the 290s chat endpoint bound (GH-225, GH-611): the listener's
-      # limits must not close a request its endpoint still allows.
-      timeout: 290s
-      read_timeout: 290s
+      # Matches the 320s chat endpoint bound (GH-225, GH-611, GH-931): the
+      # listener's limits must not close a request its endpoint still allows.
+      timeout: 320s
+      read_timeout: 320s
       max_request_bytes: 1048576
       # Sized by the largest response this listener serves: the envelope listing behind the facet vocabulary merges every unit's read of every document's full text, about 2 MB on the committed corpus plus the join bookkeeping, and each 1 MiB bound between the store and the browser turned that read into an unmapped 502 in turn.
       max_response_bytes: 4194304
@@ -909,10 +909,10 @@ rest:
             # The request-scoped profile, not the agent's own (GH-86).
             profile: request-profile.yaml
             machine: request-machine.yaml
-            # One provider stall (60s) plus the fallback answer (120s) plus a
-            # revision's bounded supplementary legs; the committed rest.yaml
-            # carries the full argument (GH-225, GH-604, GH-611).
-            timeout: 290s
+            # One provider stall (90s, GH-931) plus the fallback answer (120s)
+            # plus a revision's bounded supplementary legs; the committed
+            # rest.yaml carries the full argument (GH-225, GH-604, GH-611).
+            timeout: 320s
             request:
               body:
                 message: $.message
@@ -1246,6 +1246,15 @@ rest:
             root: "${CHATBOT_UI_ROOT:-agents/chatbot/ui/app/dist}"
             index: index.html
             spa: true
+{{- /* The deployment's interface vocabulary (GH-929): the runtime serves this
+       declared map as ui-config.json beneath the mount (srd029 R5.10) and the
+       SPA rebinds its displayed labels and report template from it. Unset, the
+       bundle's compiled DefTech vocabulary stands and this block renders
+       nothing, so the default render is unchanged. */}}
+{{- with .Values.chatbot.ui }}
+            config:
+{{ toYaml . | indent 14 }}
+{{- end }}
           request:
             path:
               path: {type: string}

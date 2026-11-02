@@ -40,10 +40,11 @@ var gcpPulledImages = []gcpPulledImage{
 	{Path: []string{"osint", "fixture", "image"}, Source: "library/busybox"},
 }
 
-// gcpRuntimeImageSource is agent-core's path on ghcr.io, pulled through the
-// ghcr.io remote repository at the release tag deps:verify pins in
-// helm/values.yaml, so GKE runs the published release artifact.
-const gcpRuntimeImageSource = "mesh-intelligence/declarative-agents/agent-core"
+// gcpRuntimeImageSource is the public runtime mirror's path on ghcr.io
+// (runtime:mirror, GH-934), pulled through the ghcr.io remote repository at
+// the release tag deps:verify pins in helm/values.yaml, so GKE runs the
+// published release artifact.
+const gcpRuntimeImageSource = "mesh-intelligence/cohere-demo/agent-core"
 
 // gcpCLIDonorSource is the applier's CLI donor on Docker Hub; the overlay
 // keeps its digest pin.
@@ -232,7 +233,11 @@ func prepareGcpCohere(
 	if err != nil {
 		return preparation, err
 	}
-	overrides, err := gcpCohereOverrides(resolved, images, assets, profileValues)
+	caseBinding, err := gcpCaseBinding(root, gcpOverlayEmbedIdentity(stage.chart))
+	if err != nil {
+		return preparation, err
+	}
+	overrides, err := gcpCohereOverrides(resolved, images, assets, profileValues, caseBinding)
 	if err != nil {
 		return preparation, err
 	}
@@ -254,7 +259,8 @@ func prepareGcpCohere(
 // collector on the application's bucket with no endpoint override, the
 // public host, and the out-of-release archives app:up names.
 func gcpCohereOverrides(
-	resolved apprig.Resolved, images gcpDeployImages, assets []externalUIAsset, profileValues map[string]any,
+	resolved apprig.Resolved, images gcpDeployImages, assets []externalUIAsset,
+	profileValues, caseBinding map[string]any,
 ) (string, error) {
 	runtime := map[string]any{
 		"repository": images.Registries.Ghcr + "/" + gcpRuntimeImageSource,
@@ -305,11 +311,32 @@ func gcpCohereOverrides(
 		component["uiArchiveChecksum"] = asset.Checksum
 	}
 	mergeApplicationValues(values, profileValues)
+	// The selected case's binding lands last (GH-932): its report, its
+	// interface vocabulary, and its units at the environment's embedding
+	// identity, over the defense defaults the overlay pins.
+	mergeApplicationValues(values, caseBinding)
 	data, err := yaml.Marshal(values)
 	if err != nil {
 		return "", fmt.Errorf("render GCP overrides: %w", err)
 	}
 	return string(data), nil
+}
+
+// gcpOverlayEmbedIdentity reads the embedding identity the environment overlay
+// declares for its units -- what the GKE corpus is seeded with.
+func gcpOverlayEmbedIdentity(chartDir string) string {
+	var overlay struct {
+		RagUnits []struct {
+			EmbeddingModel string `yaml:"embeddingModel"`
+		} `yaml:"ragUnits"`
+	}
+	if err := readIntegrationYAML(filepath.Join(chartDir, "ci", gcpValuesFile), "GCP overlay", &overlay); err != nil {
+		return ""
+	}
+	if len(overlay.RagUnits) == 0 {
+		return ""
+	}
+	return overlay.RagUnits[0].EmbeddingModel
 }
 
 // requireExporterPublished refuses a deploy whose exporter tag ghcr.io does

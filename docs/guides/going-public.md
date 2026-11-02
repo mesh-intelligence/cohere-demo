@@ -91,11 +91,34 @@ should not travel.
   repository only after a decision recorded in an issue.
 - **`mesh-intelligence/cohere-demo-data` is never made public** and never
   linked from public prose in a way that implies its content is available.
-- **The public repository can be read, not built, without org access.** Its Go
-  modules (`mesh-intelligence/declarative-agents`), runtime image, and npm kit are
-  private, which an anonymous `go mod download` confirmed on 2026-11-02 (exit 1).
-  With org access and no private data checkout, a clone builds and seeds the
-  synthetic tier alone.
+- **The public repository can be read and run, not built, without org access**
+  (the GH-928 decision, 2026-11-02: publish binaries, never source). The Go
+  modules (`mesh-intelligence/declarative-agents`), the npm kit, and the
+  declarative-agents source stay private; the compiled artifacts publish under
+  this repository's own GHCR namespace at demo-pinned tags. With org access and
+  no private data checkout, a clone builds and seeds the synthetic tier alone.
+
+## Published artifacts (GH-927)
+
+| Artifact | Where | Tag discipline |
+|---|---|---|
+| Runtime image | `ghcr.io/mesh-intelligence/cohere-demo/agent-core` | exactly the go.mod pin; `mage runtime:mirror` republishes at a pin bump, `deps:verify` holds every chart tag to it |
+| Exporter image | `ghcr.io/mesh-intelligence/cohere-demo/exporter` | pin + recipe digest; `mage exporter:publish` |
+| Seeder image | `ghcr.io/mesh-intelligence/cohere-demo/seeder` | pin + digest of recipe and baked case store; `mage seeder:publish` |
+| Chart | `oci://ghcr.io/mesh-intelligence/cohere-demo/charts/chatbot-mesh` | version `0.1.0-<pin>`; `mage helm:publish` also regenerates `deploy/ui-assets*.yaml` |
+
+The runtime mirror is a derived image FROM the pinned private release plus a
+`/licenses` layer (the dual licence and the Nokia-origin provenance list --
+BSD-3-Clause requires the notices with a binary redistribution), and the
+exporter and seeder build over or alongside it, so every published image
+carries the notices. declarative-agents' own packages never change visibility,
+and only demo-pinned tags are ever published. The upstream package retention
+deletes old release images (about ten kept); the mirror under this namespace is
+the demo's stable copy of its pin. The packaged chart ships the vendored
+agent-services templates -- readable YAML, approved 2026-11-02 -- and excludes
+the UI bundles, whose in-release weight is over Kubernetes' 1MiB object cap:
+`deploy/ui-assets.yaml` carries them as out-of-release ConfigMaps built for the
+release name `cohere-demo`.
 
 ## Dry-run record
 
@@ -117,3 +140,10 @@ keep-private tiers, because no check looked inside files. Check 6 was added, the
 reports moved to the private checkout, and public main was replaced with one clean
 commit. A commit replaced this way can stay reachable by SHA until GitHub collects
 it; deleting and recreating the repository is the complete purge.
+
+Pre-flight record, 2026-11-02 (GH-927, the runnable-from-binaries refresh):
+`mage corpus:overlap` 1,982 tracked files against 4,579 private files, 122 runs,
+0 unreviewed (the reviewed bundle runs re-keyed after the GH-929 rebuild); no
+keep-private store family and no data payload tracked; no credential values and
+no personal email in tracked files (the `ghcr_pat`/`api-key` strings the sweep
+surfaces are key NAMES in the runbook and terraform outputs).

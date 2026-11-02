@@ -6,17 +6,19 @@
 # allowlist, and monitor upstream. The chatbot program itself is source-count independent.
 
 # The rel06.0 mounted-profile runtime image, one image across every agent role.
-# The published image is private and tagged with the declarative-agents release
-# go.mod pins; mage deps:verify holds the tag to that release. demo:up and the
-# kind integrations build the image locally and override both fields.
+# The published image is the PUBLIC runtime mirror (runtime:mirror, GH-934): a
+# binary redistribution of the declarative-agents release go.mod pins, carrying
+# the dual-licence notices under /licenses, pullable anonymously. mage
+# deps:verify holds the tag to that release. demo:up and the kind integrations
+# build the image locally and override both fields.
 image:
-  repository: ghcr.io/mesh-intelligence/declarative-agents/agent-core
+  repository: ghcr.io/mesh-intelligence/cohere-demo/agent-core
   tag: v0.20261005.0
   pullPolicy: IfNotPresent
 
-# Pull secrets every agent-core pod names, for a namespace that pulls the
-# private published image: [{name: <secret>}], a docker-registry Secret built
-# from a token holding read:packages.
+# Pull secrets every agent-core pod names: [{name: <secret>}]. The published
+# images are public, so this stays empty unless a namespace pulls a private
+# override.
 imagePullSecrets: []
 
 # Pod security context for the agent services the agent-services library
@@ -59,6 +61,15 @@ chatbot:
       summary: {headings: "", label: ""}
       body: {headings: "", label: ""}
       gaps: {headings: "", label: ""}
+  # The interface vocabulary a deployment binds (GH-929). Empty keeps the
+  # bundle's compiled DefTech vocabulary -- clearance labels, Admiralty
+  # wording, the INTSUM template -- byte for byte. A case supplies display
+  # labels per wire level value (wire values never change, srd018 R3.5), the
+  # selector and reliability wording, the form's name, and a report template in
+  # the intsum-template.yaml section schema. The chart renders this map into
+  # the ui route's declared static_assets.config, which the runtime serves as
+  # ui-config.json beneath the mount (srd029 R5.10) and the SPA loads at start.
+  ui: {}
   # Optional immutable UI archive provisioned outside Helm release storage.
   # When set, the chatbot verifies and unpacks assets.tgz from this ConfigMap
   # instead of rendering the built SPA bundle into the release.
@@ -141,6 +152,18 @@ ragUnits:
     collection: corpus2
     embeddingModel: qwen3-embedding:8b
     replicas: 1
+
+# The corpus seed job (GH-937): off by default because mage app:seed does this
+# from a workstation on the kind and GKE paths. An installer without org access
+# enables it to ground the mesh from the published seeder image -- the compiled
+# seed path with the publishable case store baked in -- which writes every
+# unit's retrieval collection and the document collection from stored vectors
+# (no embedding provider is called) and restarts each rag-server so it rebinds
+# the seeded collection. The image tag is <pinned release>-<content digest>,
+# which seeder:publish derives and deps:verify holds to the pin.
+corpusSeed:
+  enabled: false
+  image: {repository: ghcr.io/mesh-intelligence/cohere-demo/seeder, tag: "v0.20261005.0-70fa85631b0b", pullPolicy: IfNotPresent}
 
 ragServer:
   ports:
@@ -376,12 +399,13 @@ validateProfiles: true
 # its only publisher: demo:up builds it locally over the runtime image and
 # overrides the reference for kind, and mage exporter:publish pushes the
 # multi-arch image a cluster pulls (R6.5), tagged <agent-core release>-<recipe
-# digest>. It sits outside the declarative-agents image prefix, whose tags
-# deps:verify holds to the upstream release.
+# digest>. The published image is public and built over the public runtime
+# mirror, so it carries the /licenses layer; deps:verify holds every image
+# under the mirror prefix to the pinned release.
 exporter:
   enabled: true
   replicas: 1
-  image: {repository: ghcr.io/mesh-intelligence/cohere-demo/exporter, tag: "0.1.0", pullPolicy: IfNotPresent}
+  image: {repository: ghcr.io/mesh-intelligence/cohere-demo/exporter, tag: "v0.20261005.0-c95ff46210ac", pullPolicy: IfNotPresent}
   ports:
     export: 18120
     control: 18121
@@ -394,7 +418,7 @@ applier:
   enabled: true
   # The applier runs the agent-core runtime image; helm and kubectl come from
   # cliDonor below (GH-2222), and the chart from chartArchiveConfigMap (GH-1368).
-  image: {repository: ghcr.io/mesh-intelligence/declarative-agents/agent-core, tag: v0.20261005.0, pullPolicy: IfNotPresent}
+  image: {repository: ghcr.io/mesh-intelligence/cohere-demo/agent-core, tag: v0.20261005.0, pullPolicy: IfNotPresent}
   # CLI donor (GH-2222): an init container copies this image's helm and kubectl
   # into a tools volume mounted read-only at /opt/tools and first on PATH. The pin
   # is the CLI version contract: helm 3.16.3 (the exec words use helm 3 flags) and

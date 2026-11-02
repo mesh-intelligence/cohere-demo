@@ -6,62 +6,64 @@
 # corpus:overlap fails on any run not listed. An entry names a fingerprint
 # rather than the text, and editing or moving a run makes it unreviewed again.
 #
-# Reviewed 2026-11-02 by reading every run. This records a judgment about
+# Reviewed 2026-11-02 by reading every run; re-keyed to the GH-929 rebuilt
+# bundle the same day (the fingerprints are content-based and unchanged, the
+# bundle filename moved with the rebuild). This records a judgment about
 # keeping these strings, and it is not legal advice.
 reviewed:
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 1ad8e553e0242e33
     words: 13
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 0ec09a9ffa709935
     words: 12
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 4bd0c2a65ef38904
     words: 11
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 97c0bb58d77ec152
     words: 11
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: b1ae19809e3a658e
     words: 10
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 158f250491bc7c1f
     words: 9
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 446ae8593e464330
     words: 9
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 535c77d3e954c2e1
     words: 9
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 601c04474899c71f
     words: 9
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 23f14057b8e0dafc
     words: 8
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 70c853065b30f16b
     words: 8
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: 7541dbbe92762ada
     words: 8
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: b6de201a25397227
     words: 8
     reason: "The evalCorpus.json projection of a generated tasking, bundled into the interface."
-  - file: agents/chatbot/ui/app/dist/assets/index-ONb0oHiY.js
+  - file: agents/chatbot/ui/app/dist/assets/index-DMJYI4FR.js
     fingerprint: bea31df5e8e1820f
     words: 8
     reason: "Unicode range in a bundled regular expression; false positive."

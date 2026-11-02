@@ -43,8 +43,8 @@ view_tags:
   - {tag: citations, label: Citations & reader filter}
   - {tag: reporting, label: Reporting & conformance}
 budget:
-  # Above the 290s chat endpoint bound, which contains a 60s provider stall plus the 120s fallback answer (GH-225) and a revision's bounded supplementary legs (GH-604, GH-611); the envelope rule needs every authority a word dispatches under strictly below this.
-  command_timeout: 5m
+  # Above the 320s chat endpoint bound, which contains a 90s provider stall (GH-931) plus the 120s fallback answer (GH-225) and a revision's bounded supplementary legs (GH-604, GH-611); the envelope rule needs every authority a word dispatches under strictly below this.
+  command_timeout: 6m
   # Fixed pipeline plus one iteration per declared source, with a revision's re-grounding (eleven words and one read per source, GH-604) and agentic search (five proposal words plus up to eleven per query pass; each pass's retrieval runs inside its own /search request, GH-611) on top.
   max_iterations: 240
 states:

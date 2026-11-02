@@ -36,6 +36,7 @@ var chatbotChartSourceFiles = []string{
 	"templates/applier.yaml",
 	"templates/chatbot.yaml",
 	"templates/collector.yaml",
+	"templates/corpus-seed.yaml",
 	"templates/provisioning-workflow-orchestrator.yaml",
 	"templates/creator.yaml",
 	"templates/dolt.yaml",
@@ -67,6 +68,13 @@ func (Helm) Package() error {
 }
 
 func packageHelmChart(chartDir, profilesRoot, destination string) error {
+	return packageChatbotChartVersion(chartDir, profilesRoot, destination, "0.1.0")
+}
+
+// packageChatbotChartVersion packages the staged chart at an explicit version
+// and returns nothing but the validated archive on disk: helm:package keeps
+// the source Chart.yaml's 0.1.0, helm:publish versions by the pinned release.
+func packageChatbotChartVersion(chartDir, profilesRoot, destination, version string) error {
 	if _, err := exec.LookPath("helm"); err != nil {
 		return fmt.Errorf("package chatbot-mesh chart: helm not found on PATH")
 	}
@@ -82,33 +90,43 @@ func packageHelmChart(chartDir, profilesRoot, destination string) error {
 	if err := validateStagedChatbotChart(staged); err != nil {
 		return err
 	}
-	expected, err := regularChartFiles(staged)
+	archive, err := packageStagedChatbotChart(staged, destination, version)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("helm:package: install the validated chart %s\n", archive)
+	return nil
+}
+
+// packageStagedChatbotChart packages one already staged and validated chart
+// directory at an explicit version and validates the archive.
+func packageStagedChatbotChart(staged, destination, version string) (string, error) {
+	expected, err := regularChartFiles(staged)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(destination, 0o755); err != nil {
-		return fmt.Errorf("create Helm package destination %s: %w", destination, err)
+		return "", fmt.Errorf("create Helm package destination %s: %w", destination, err)
 	}
 	if output, err := exec.Command(
-		"helm", "package", staged, "--destination", destination).CombinedOutput(); err != nil {
-		return fmt.Errorf("package staged chatbot-mesh chart: %w: %s",
+		"helm", "package", staged, "--version", version, "--destination", destination).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("package staged chatbot-mesh chart: %w: %s",
 			err, strings.TrimSpace(string(output)))
 	}
-	archive := filepath.Join(destination, "chatbot-mesh-0.1.0.tgz")
+	archive := filepath.Join(destination, "chatbot-mesh-"+version+".tgz")
 	if err := validateChatbotChartArchive(archive, expected); err != nil {
-		return err
+		return "", err
 	}
 	for _, args := range [][]string{
 		{"lint", archive},
 		{"template", "packaged", archive},
 	} {
 		if output, err := exec.Command("helm", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("helm %s: %w: %s",
+			return "", fmt.Errorf("helm %s: %w: %s",
 				strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 		}
 	}
-	fmt.Printf("helm:package: install the validated chart %s\n", archive)
-	return nil
+	return archive, nil
 }
 
 func stagePackageChart(chartDir, profilesRoot, catalogRoot string) (string, func(), error) {

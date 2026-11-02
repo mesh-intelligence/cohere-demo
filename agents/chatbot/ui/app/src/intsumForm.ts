@@ -12,12 +12,8 @@
 
 import type { Answer, ChunkMetadata, Citation, Conformance } from "./api";
 import { isExternalRecordID } from "./api";
-import {
-  INTSUM_SECTIONS,
-  INTSUM_TEMPLATE_VERSION,
-  sectionForHeading,
-  type TemplateSection,
-} from "./intsumTemplate";
+import { sectionForHeading, type TemplateSection } from "./intsumTemplate";
+import { levelLabel, templateSections, templateVersion } from "./uiConfig";
 
 // The ordered clearance set, lowest first. The same set api.ts declares for the
 // selector; the banner uses it to rank composed sources rather than to gate
@@ -119,14 +115,13 @@ export function fillIntsumForm(answer: Answer, context: TurnContext = {}): Intsu
     filled: true,
   }));
 
-  const sections = INTSUM_SECTIONS.map((section) =>
-    fillSection(section, answer, context, composed, metadata),
-  )
+  const sections = templateSections()
+    .map((section) => fillSection(section, answer, context, composed, metadata))
     .concat(extraSections)
     .sort((left, right) => left.order - right.order);
 
   return {
-    templateVersion: INTSUM_TEMPLATE_VERSION,
+    templateVersion: templateVersion(),
     sections,
     unmatchedHeadings: composed.unmatched,
   };
@@ -248,7 +243,7 @@ export function parseComposedSections(markdown: string): ComposedSections {
       continue;
     }
     const heading = match[1];
-    const section = sectionForHeading(heading);
+    const section = sectionForHeading(heading, templateSections());
     if (section === undefined && unknown && extraHeading !== undefined) {
       // A further undeclared heading inside an open extra block stays in the
       // block as the line the provider wrote, keeping the section whole.
@@ -358,7 +353,7 @@ export function sourceEvaluationRows(metadata: ComposedChunkMetadata[]): SourceE
   }
   for (const [source, row] of rows) {
     const level = marking.get(source);
-    row.classification = level ? level.toUpperCase() : "unmarked";
+    row.classification = level ? levelLabel(level).toUpperCase() : "unmarked";
   }
   return [...rows.values()];
 }
